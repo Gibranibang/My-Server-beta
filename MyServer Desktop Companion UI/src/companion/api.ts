@@ -51,6 +51,7 @@ export interface CompanionApi {
   resetLogDirectory(): Promise<{ success: boolean; logDirectory?: string; defaultDirectory?: string; isCustom?: boolean; error?: string }>
   checkForUpdate(): Promise<UpdateInfo>
   installUpdateFromZip(filePath?: string): Promise<{ success: boolean; cancelled?: boolean; restarting?: boolean; error?: string }>
+  downloadAndInstallUpdate?(downloadUrl?: string): Promise<{ success: boolean; installerLaunched?: boolean; message?: string; error?: string }>
 
   /** Number of pending Syncthing device requests. */
   getPendingSyncRequests(): Promise<number>
@@ -151,6 +152,12 @@ export interface CompanionApi {
 export interface UpdateInfo {
   upToDate: boolean
   version: string
+  currentVersion?: string
+  downloadUrl?: string
+  htmlUrl?: string
+  name?: string
+  body?: string
+  message?: string
 }
 
 const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
@@ -325,6 +332,10 @@ export function createMockApi(): CompanionApi {
     async installUpdateFromZip(filePath?: string) {
       await wait(1500)
       return { success: true, restarting: true }
+    },
+    async downloadAndInstallUpdate(downloadUrl?: string) {
+      await wait(1500)
+      return { success: true, installerLaunched: true, message: "Installer pembaruan berhasil diluncurkan." }
     },
     async getPendingSyncRequests() {
       return syncRequests

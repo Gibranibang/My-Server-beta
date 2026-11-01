@@ -2022,6 +2022,20 @@ export function createRealApi(): CompanionApi {
       return { success: false, error: "Layanan Core Service tidak merespons." }
     },
 
+    async downloadAndInstallUpdate(downloadUrl?: string): Promise<{ success: boolean; installerLaunched?: boolean; message?: string; error?: string }> {
+      try {
+        const api = await getPyApi()
+        if (api && api.download_and_install_update) {
+          const res = await api.download_and_install_update({ downloadUrl: downloadUrl || "" })
+          if (res) return res
+        }
+      } catch (err) {
+        console.error("[RealApi] downloadAndInstallUpdate error:", err)
+        throw new Error(err instanceof Error ? err.message : "Gagal mengunduh dan memasang pembaruan.")
+      }
+      return { success: false, error: "Metode pembaruan otomatis tidak tersedia." }
+    },
+
     async joinZeroTier(): Promise<void> {
 
       try {

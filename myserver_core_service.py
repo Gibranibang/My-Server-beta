@@ -27853,22 +27853,61 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
         if path == "/api/install_update_from_zip":
-
-
-
             fpath = (body.get("filePath") or "").strip()
-
-
-
             res = apply_zip_update(fpath if fpath else None)
-
-
-
             self._send_json(res)
-
-
-
             return
+
+        if path == "/api/download_and_install_update":
+            download_url = (body.get("downloadUrl") or "").strip()
+            if not download_url:
+                cfg = config_manager.load_or_create_config()
+                repo_slug = cfg.get("github_repo", "Gibranibang/My-Server-beta")
+                rel_url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
+                try:
+                    req = urllib.request.Request(rel_url, headers={"User-Agent": f"MyServer-Companion/{APP_VERSION_NUMBER}", "Accept": "application/vnd.github.v3+json"})
+                    with urllib.request.urlopen(req, timeout=8) as resp:
+                        r_data = json.loads(resp.read().decode())
+                        for asset in r_data.get("assets", []):
+                            aname = asset.get("name", "").lower()
+                            if aname.endswith("-setup.exe") or aname.endswith(".exe"):
+                                download_url = asset.get("browser_download_url", "")
+                                break
+                            if not download_url and aname.endswith(".zip"):
+                                download_url = asset.get("browser_download_url", "")
+                except Exception as ex:
+                    logger_manager.log_error(f"[Updater] Gagal memperoleh URL rilis: {ex}")
+
+            if not download_url:
+                self._send_json({"success": False, "error": "URL berkas rilis pembaruan tidak ditemukan."})
+                return
+
+            is_zip = download_url.lower().endswith(".zip")
+            suffix = ".zip" if is_zip else ".exe"
+            temp_file = os.path.join(os.environ.get("TEMP", os.path.expanduser("~")), f"MyServer_Update_{int(time.time())}{suffix}")
+
+            try:
+                logger_manager.log_info(f"[Updater] Mengunduh pembaruan dari: {download_url} -> {temp_file}")
+                req = urllib.request.Request(download_url, headers={"User-Agent": "MyServer-Updater/1.0"})
+                with urllib.request.urlopen(req, timeout=180) as resp, open(temp_file, "wb") as out_f:
+                    shutil.copyfileobj(resp, out_f)
+
+                logger_manager.log_info(f"[Updater] Unduhan selesai ({os.path.getsize(temp_file):,} bytes)")
+
+                if is_zip:
+                    res = apply_zip_update(temp_file)
+                    self._send_json(res)
+                    return
+                else:
+                    DETACHED_PROCESS = 0x00000008
+                    CREATE_NEW_PROCESS_GROUP = 0x00000200
+                    subprocess.Popen([temp_file], cwd=os.path.dirname(temp_file), creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                    self._send_json({"success": True, "installerLaunched": True, "message": "Installer pembaruan berhasil diluncurkan. Ikuti petunjuk instalasi untuk menyelesaikan pembaruan."})
+                    return
+            except Exception as e:
+                logger_manager.log_error(f"[Updater] Gagal mengunduh atau menjalankan pembaruan: {e}")
+                self._send_json({"success": False, "error": f"Gagal mengunduh atau mengeksekusi installer: {str(e)}"})
+                return
 
 
 

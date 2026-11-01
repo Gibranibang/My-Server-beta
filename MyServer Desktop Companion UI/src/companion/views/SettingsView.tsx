@@ -5,6 +5,7 @@ import {
   Check,
   ClipboardCopy,
   Download,
+  ExternalLink,
   FileText,
   Folder,
   FolderOpen,
@@ -92,6 +93,10 @@ export default function SettingsView() {
   const { settings, setSetting, resetSettings } = useCompanion()
   const { notify } = useNotice()
   const [updateState, runUpdate] = useAsyncAction(api.checkForUpdate)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState("")
   const [zipUpdateState, setZipUpdateState] = useState<"idle" | "busy" | "done">("idle")
   const [cacheBusy, setCacheBusy] = useState(false)
   const [copyLogBusy, setCopyLogBusy] = useState(false)
@@ -112,6 +117,61 @@ export default function SettingsView() {
   useEffect(() => {
     api.getServerDetails().then(setDetails).catch(() => {})
   }, [api])
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true)
+    try {
+      const info = await api.checkForUpdate()
+      setUpdateInfo(info)
+      if (info.upToDate) {
+        notify(
+          isId
+            ? `MyServer v${info.version} sudah menggunakan versi terbaru!`
+            : `MyServer v${info.version} is already up to date!`,
+          "neutral"
+        )
+      } else {
+        notify(
+          isId
+            ? `Pembaruan Tersedia: MyServer v${info.version}!`
+            : `Update Available: MyServer v${info.version}!`,
+          "info"
+        )
+      }
+    } catch (err) {
+      notify(errorText(err), "danger")
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+
+  const handleDownloadAndInstall = async () => {
+    if (!updateInfo) return
+    setInstallingUpdate(true)
+    setDownloadProgress(isId ? "Mengunduh pembaruan..." : "Downloading update...")
+    try {
+      if (typeof api.downloadAndInstallUpdate === "function") {
+        const res = await api.downloadAndInstallUpdate(updateInfo.downloadUrl)
+        if (res.success) {
+          notify(
+            res.message || (isId ? "Installer pembaruan berhasil diluncurkan!" : "Update installer launched!"),
+            "success"
+          )
+        } else {
+          notify(res.error || (isId ? "Gagal mengunduh pembaruan" : "Failed to download update"), "danger")
+        }
+      } else {
+        const targetUrl = updateInfo.downloadUrl || updateInfo.htmlUrl || "https://github.com/Gibranibang/My-Server-beta/releases/latest"
+        await api.openExternalBrowser(targetUrl)
+        notify(isId ? "Membuka link unduhan di peramban web..." : "Opening download link in browser...", "info")
+      }
+    } catch (err) {
+      notify(errorText(err), "danger")
+    } finally {
+      setInstallingUpdate(false)
+      setDownloadProgress("")
+    }
+  }
 
   const handleZipUpdate = async () => {
     setZipUpdateState("busy")
@@ -285,24 +345,16 @@ export default function SettingsView() {
           <div className="mt-3.5 grid w-full grid-cols-2 gap-2">
             <Button
               size="sm"
-              variant="secondary"
+              variant={updateInfo && !updateInfo.upToDate ? "primary" : "secondary"}
               icon={RefreshCw}
               block
-              state={updateState}
+              state={checkingUpdate ? "busy" : "idle"}
               busyLabel={t("checking_update")}
-              doneLabel={t("already_latest")}
-              onClick={() =>
-                runUpdate((r) =>
-                  notify(
-                    r.upToDate
-                      ? `MyServer v${r.version} [${activeChannel}] ${t("update_latest")}`
-                      : `${t("update_available")}${r.version}`,
-                    r.upToDate ? "neutral" : "info",
-                  ),
-                )
-              }
+              onClick={handleCheckUpdate}
             >
-              {t("check_update")}
+              {updateInfo && !updateInfo.upToDate
+                ? (isId ? `Pembaruan Ada (v${updateInfo.version})` : `Update Available (v${updateInfo.version})`)
+                : t("check_update")}
             </Button>
             <Button
               size="sm"
@@ -316,6 +368,57 @@ export default function SettingsView() {
               {t("install_zip")}
             </Button>
           </div>
+
+          {/* Update Available Card Banner */}
+          {updateInfo && !updateInfo.upToDate && (
+            <div className="mt-3 w-full rounded-tile border border-brand/30 bg-brand/5 p-3 text-left">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="size-4 text-brand shrink-0" />
+                    <span className="text-micro font-bold text-ink">
+                      {isId ? `Pembaruan Tersedia: v${updateInfo.version}` : `Update Available: v${updateInfo.version}`}
+                    </span>
+                    <span className="rounded-full bg-brand/10 px-1.5 py-0.5 text-[9px] font-bold text-brand">
+                      {isId ? "Baru" : "New"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-nano text-ink-subtle">
+                    {isId
+                      ? `Versi saat ini v${activeVersion} dapat diperbarui ke v${updateInfo.version}.`
+                      : `Current version v${activeVersion} can be updated to v${updateInfo.version}.`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons: Direct Install & Open in Browser */}
+              <div className="mt-2.5 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon={Download}
+                  state={installingUpdate ? "busy" : "idle"}
+                  busyLabel={downloadProgress || (isId ? "Mengunduh..." : "Downloading...")}
+                  onClick={handleDownloadAndInstall}
+                  className="h-7 text-micro px-2.5 font-semibold"
+                >
+                  {isId ? "Unduh & Pasang Sekarang" : "Download & Install Now"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={ExternalLink}
+                  onClick={() => {
+                    const targetUrl = updateInfo.htmlUrl || updateInfo.downloadUrl || "https://github.com/Gibranibang/My-Server-beta/releases/latest"
+                    api.openExternalBrowser(targetUrl)
+                  }}
+                  className="h-7 text-micro px-2.5"
+                >
+                  {isId ? "Buka di Browser" : "Open in Browser"}
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
 
         {/* ========================================================= */}

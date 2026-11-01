@@ -51,4 +51,11 @@ export const FRAMES: FrameMeta[] = [
     short: "Power",
     hint: "Shutdown asks for a second click. The magic packet wakes an offline server.",
   },
+  {
+    view: "server",
+    index: "07",
+    name: "Server Details & Network Routes",
+    short: "Server",
+    hint: "Manage connection routes, ZeroTier peer, and user account profiles.",
+  },
 ]

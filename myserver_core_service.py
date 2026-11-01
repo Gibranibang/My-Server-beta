@@ -20481,87 +20481,31 @@ def apply_zip_update(zip_file_path=None):
 
 
 
-    kill_gui_cmd = f"taskkill /PID {gui_pid} /F 2>nul" if gui_pid > 0 else ""
-
-
-
-
-
-
+    kill_gui_cmd = f"taskkill /PID {gui_pid} /F >nul 2>&1" if gui_pid > 0 else ""
 
     bat_content = f"""@echo off
-
-
-
-setlocal chcp 65001 >nul
-
-
-
-timeout /t 2 /nobreak >nul
-
-
-
+chcp 65001 >nul
+ping 127.0.0.1 -n 2 >nul
 {kill_gui_cmd}
-
-
-
-taskkill /PID {current_pid} /F /T 2>nul
-
-
-
-taskkill /F /IM MyServer-Beta.exe /IM MyServer.exe /IM myserver-core.exe /IM syncthing.exe /T 2>nul
-timeout /t 2 /nobreak >nul
-
-
-
-timeout /t 1 /nobreak >nul
-
-
-
+taskkill /F /IM MyServer-Beta.exe /IM MyServer.exe /IM syncthing.exe >nul 2>&1
+taskkill /PID {current_pid} /F >nul 2>&1
+taskkill /F /IM myserver-core.exe >nul 2>&1
+ping 127.0.0.1 -n 3 >nul
 set "APP_DIR={app_dir}"
-
-
-
 set "TEMP_DIR={source_copy_dir}"
-
-
-
 set "ROOT_TEMP_DIR={temp_extract_dir}"
-
-
-
 set "TARGET_EXE={new_exe_name}"
-
-
-
-xcopy "%TEMP_DIR%\\*" "%APP_DIR%\\" /E /Y /Q >nul 2>&1
-
-
-
-rmdir /s /q "%ROOT_TEMP_DIR%" 2>nul
-
-
-
+robocopy "%TEMP_DIR%" "%APP_DIR%" /E /R:3 /W:1 /XF config.json config.json.bak /NFL /NDL /NJH /NJS >nul 2>&1
+if errorlevel 8 (
+    powershell -NoProfile -Command "Start-Process robocopy -ArgumentList '\"%TEMP_DIR%\" \"%APP_DIR%\" /E /R:3 /W:1 /XF config.json config.json.bak /NFL /NDL /NJH /NJS' -Verb RunAs -Wait" >nul 2>&1
+)
 cd /d "%APP_DIR%"
-
-
-
 {autorun_cmd}
-
-
-
 start "" "%APP_DIR%\\{new_exe_name}"
-
-
-
-del "%~f0" 2>nul
-
-
-
+ping 127.0.0.1 -n 2 >nul
+rmdir /s /q "%ROOT_TEMP_DIR%" >nul 2>&1
+del "%~f0" >nul 2>&1
 exit
-
-
-
 """
 
 
@@ -20582,7 +20526,10 @@ exit
 
 
 
-        subprocess.Popen(["cmd.exe", "/c", temp_updater_bat], creationflags=0x08000000)
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_NO_WINDOW = 0x08000000
+        subprocess.Popen(["cmd.exe", "/c", temp_updater_bat], creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
 
 
 

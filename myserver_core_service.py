@@ -366,7 +366,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "3.12.0"
+APP_VERSION_NUMBER = "3.12.1"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -2532,9 +2532,9 @@ def is_zimaos_dashboard_target(target_url, cfg=None):
 
 
 
-        valid_dashboard_paths = ("", "/", "/login", "/index.html")
-
-        return t_path in valid_dashboard_paths
+        # Host dan port cocok dengan rute server aktif ZimaOS resmi milik pengguna
+        # Izinkan dashboard dan modul resmi ZimaOS (icewhale_files dsb), tolak domain luar
+        return True
 
     except Exception:
 
@@ -2873,13 +2873,8 @@ def generate_autologin_js(username, password, access_token="", refresh_token="")
 
 
                     if (btn) {{
-
-
-
                         btn.click();
-
-
-
+                        try {{ clearInterval(_autoLoginTimer); }} catch(e){{}}
                     }}
 
 
@@ -2900,35 +2895,18 @@ def generate_autologin_js(username, password, access_token="", refresh_token="")
 
 
 
+        let _autoLoginTicks = 0;
         const _autoLoginTimer = setInterval(function() {{
-
-
-
-            if (_autologin_attempts >= 3 || !document.querySelector('input[type="password"]')) {{
-
-
-
+            _autoLoginTicks++;
+            if (_autologin_attempts >= 3 || _autoLoginTicks > 30) {{
                 clearInterval(_autoLoginTimer);
-
-
-
                 return;
-
-
-
             }}
-
-
-
-            attemptAutoLogin();
-
-
-
-        }}, 1800);
-
-
-
-        setTimeout(attemptAutoLogin, 700);
+            if (document.querySelector('input[type="password"]')) {{
+                attemptAutoLogin();
+            }}
+        }}, 600);
+        setTimeout(attemptAutoLogin, 600);
 
 
 
@@ -2948,7 +2926,7 @@ def generate_autologin_js(username, password, access_token="", refresh_token="")
 
 
 
-def run_app_window(url, title=None, width=1150, height=750):
+def run_app_window(url, title=None, width=1150, height=750, target_server_id=None):
 
 
 
@@ -3692,7 +3670,7 @@ def probe_url_endpoint(target_url, timeout=1.2):
 
 
 
-def spawn_app_window(target_url, title=None, width=1150, height=750):
+def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=None):
 
 
 
@@ -20836,6 +20814,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+        
+        if path == "/api/get_log_directory":
+            self._send_json(logger_manager.get_log_status() if hasattr(logger_manager, "get_log_status") else {"logDirectory": "", "defaultDirectory": "", "isCustom": False})
+            return
+
         if path == "/api/ping":
 
 
@@ -21424,7 +21407,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                success, msg = spawn_app_window(target_url, win_title)
+                srv_id = srv.get("id") if srv else None
+                success, msg = spawn_app_window(target_url, win_title, server_id=srv_id)
 
 
 
@@ -27975,6 +27959,25 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "log": log_text})
             return
 
+        
+        if path == "/api/get_log_directory":
+            self._send_json(logger_manager.get_log_status() if hasattr(logger_manager, "get_log_status") else {"logDirectory": "", "defaultDirectory": "", "isCustom": False})
+            return
+
+        if path == "/api/choose_log_folder":
+            chosen = dialog_helper.prompt_choose_folder("Pilih Folder Penyimpanan Log MyServer") if hasattr(dialog_helper, "prompt_choose_folder") else None
+            if chosen:
+                res = logger_manager.set_configured_log_dir(chosen) if hasattr(logger_manager, "set_configured_log_dir") else {"success": False, "error": "LoggerManager not ready"}
+                self._send_json(res)
+            else:
+                self._send_json({"success": False, "cancelled": True})
+            return
+
+        if path == "/api/reset_log_directory":
+            res = logger_manager.reset_log_dir_to_default() if hasattr(logger_manager, "reset_log_dir_to_default") else {"success": False, "error": "LoggerManager not ready"}
+            self._send_json(res)
+            return
+
         if path == "/api/save_log_as":
             target_path = dialog_helper.prompt_save_log() if hasattr(dialog_helper, "prompt_save_log") else None
             if not target_path:
@@ -31630,6 +31633,7 @@ if __name__ == "__main__":
 
 
     parser.add_argument("--window", type=str, default="", help="Buka jendela aplikasi PyWebView untuk URL ini")
+    parser.add_argument("--server-id", type=str, default="", help="Target Server ID untuk profil dan kredensial")
 
 
 
@@ -31677,7 +31681,7 @@ if __name__ == "__main__":
 
 
 
-        run_app_window(args.window, args.title)
+        run_app_window(args.window, args.title, target_server_id=getattr(args, 'server_id', None) or None)
 
 
 

@@ -3,12 +3,14 @@
 Logger Manager Module for MyServer Desktop (Beta)
 Menyediakan sistem logging diagnostik terpusat dengan rotasi otomatis (5 MB per berkas).
 Mencatat seluruh aktivitas aplikasi, rute koneksi, proses SMB mounting,
-serta menangkap unhandled exception ke <Folder_Aplikasi>/logs/myserver.log.
+serta menangkap unhandled exception ke <Folder_Aplikasi>/logs/myserver.log
+atau folder kustom pilihan pengguna.
 """
 
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -27,6 +29,11 @@ def get_base_app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def get_default_log_dir():
+    """Mengembalikan direktori log default (<app_dir>/logs)."""
+    return os.path.join(get_base_app_dir(), "logs")
+
+
 def get_configured_log_dir():
     """Membaca folder log yang dikonfigurasi pengguna dari config.json."""
     base_dir = get_base_app_dir()
@@ -40,31 +47,42 @@ def get_configured_log_dir():
                     return custom_dir
         except Exception:
             pass
-    return os.path.join(base_dir, "logs")
+    return get_default_log_dir()
 
 
-def setup_application_logging(custom_dir=None):
+def setup_application_logging(custom_dir=None, force_reconfigure=False):
     """
     Menginisialisasi sistem pencatatan log aplikasi dengan file handler rotasi.
+    Mendukung rekonfigurasi dinamis ke folder baru tanpa restart aplikasi.
     """
     global _logger_instance, _log_file_path, _log_dir_path
 
     with _log_lock:
-        if _logger_instance is not None:
+        target_dir = custom_dir or get_configured_log_dir()
+        if _logger_instance is not None and not force_reconfigure and _log_dir_path == target_dir:
             return _logger_instance
 
-        log_dir = custom_dir or get_configured_log_dir()
         try:
-            os.makedirs(log_dir, exist_ok=True)
+            os.makedirs(target_dir, exist_ok=True)
         except Exception:
-            log_dir = os.path.join(os.environ.get("LOCALAPPDATA", get_base_app_dir()), "MyServer", "logs")
-            os.makedirs(log_dir, exist_ok=True)
+            target_dir = os.path.join(os.environ.get("LOCALAPPDATA", get_base_app_dir()), "MyServer", "logs")
+            os.makedirs(target_dir, exist_ok=True)
 
-        _log_dir_path = log_dir
-        _log_file_path = os.path.join(log_dir, "myserver.log")
+        _log_dir_path = target_dir
+        _log_file_path = os.path.join(target_dir, "myserver.log")
 
         logger = logging.getLogger("MyServer")
         logger.setLevel(logging.DEBUG)
+
+        # Tutup dan bersihkan handler lama jika force_reconfigure
+        if force_reconfigure and logger.handlers:
+            for old_h in list(logger.handlers):
+                try:
+                    old_h.flush()
+                    old_h.close()
+                except Exception:
+                    pass
+                logger.removeHandler(old_h)
 
         if not logger.handlers:
             try:
@@ -87,6 +105,77 @@ def setup_application_logging(custom_dir=None):
 
         _logger_instance = logger
         return logger
+
+
+def set_configured_log_dir(new_dir):
+    """
+    Mengubah folder penyimpanan file log secara permanen:
+    1. Menyimpan ke config.json
+    2. Menyalin log aktif saat ini ke folder baru agar riwayat tetap utuh
+    3. Mengalihkan handler logging ke folder baru secara langsung.
+    """
+    clean_dir = os.path.abspath(new_dir.strip()) if new_dir else ""
+    if not clean_dir or not os.path.exists(clean_dir):
+        return {"success": False, "error": f"Direktori '{clean_dir}' tidak ditemukan"}
+
+    base_dir = get_base_app_dir()
+    cfg_path = os.path.join(base_dir, "config.json")
+    try:
+        cfg = {}
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        cfg["log_directory"] = clean_dir
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return {"success": False, "error": f"Gagal menyimpan config: {e}"}
+
+    # Salin berkas log lama ke folder baru jika belum ada
+    old_log = get_log_file_path()
+    new_log = os.path.join(clean_dir, "myserver.log")
+    if os.path.exists(old_log) and os.path.abspath(old_log) != os.path.abspath(new_log):
+        try:
+            if not os.path.exists(new_log):
+                shutil.copy2(old_log, new_log)
+        except Exception:
+            pass
+
+    # Rekonfigurasi handler aktif
+    setup_application_logging(custom_dir=clean_dir, force_reconfigure=True)
+    log_info(f"[LoggerManager] Direktori log resmi dialihkan ke: {clean_dir}")
+    return {"success": True, "logDirectory": clean_dir}
+
+
+def reset_log_dir_to_default():
+    """Mengembalikan folder penyimpanan log ke bawaan (<app_dir>/logs)."""
+    base_dir = get_base_app_dir()
+    cfg_path = os.path.join(base_dir, "config.json")
+    try:
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            cfg.pop("log_directory", None)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return {"success": False, "error": f"Gagal menyimpan config: {e}"}
+
+    default_dir = get_default_log_dir()
+    setup_application_logging(custom_dir=default_dir, force_reconfigure=True)
+    log_info(f"[LoggerManager] Direktori log dikembalikan ke default: {default_dir}")
+    return {"success": True, "logDirectory": default_dir}
+
+
+def get_log_status():
+    """Mengembalikan status konfigurasi direktori log."""
+    cur_dir = os.path.abspath(get_log_dir_path())
+    def_dir = os.path.abspath(get_default_log_dir())
+    return {
+        "logDirectory": cur_dir,
+        "defaultDirectory": def_dir,
+        "isCustom": cur_dir.lower() != def_dir.lower()
+    }
 
 
 def get_logger(module_name="MyServer"):

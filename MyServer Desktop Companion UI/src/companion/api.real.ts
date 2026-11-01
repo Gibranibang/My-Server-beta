@@ -1129,6 +1129,45 @@ export function createRealApi(): CompanionApi {
       return { success: false }
     },
 
+    async getLogDirectory() {
+      try {
+        const api = await getPyApi()
+        if (api && api.get_log_directory) {
+          const res = await api.get_log_directory()
+          if (res) return res
+        }
+      } catch (err) {
+        console.error("[RealApi] Get log directory error:", err)
+      }
+      return { logDirectory: "", defaultDirectory: "", isCustom: false }
+    },
+
+    async chooseLogFolder() {
+      try {
+        const api = await getPyApi()
+        if (api && api.choose_log_folder) {
+          const res = await api.choose_log_folder()
+          return res || { success: false }
+        }
+      } catch (err) {
+        console.error("[RealApi] Choose log folder error:", err)
+      }
+      return { success: false, error: "Gagal memilih folder log" }
+    },
+
+    async resetLogDirectory() {
+      try {
+        const api = await getPyApi()
+        if (api && api.reset_log_directory) {
+          const res = await api.reset_log_directory()
+          return res || { success: false }
+        }
+      } catch (err) {
+        console.error("[RealApi] Reset log directory error:", err)
+      }
+      return { success: false, error: "Gagal me-reset folder log" }
+    },
+
 
 
     async getServerDetails() {

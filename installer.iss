@@ -8,7 +8,7 @@
 
 #define MyAppName "My-Server by algitha BETA"
 
-#define MyAppVersion "3.12.0"
+#define MyAppVersion "3.12.1"
 
 #define MyAppPublisher "Algitha Project"
 
@@ -42,7 +42,7 @@ AllowNoIcons=yes
 
 OutputDir=dist
 
-OutputBaseFilename=MyServer-v3.12.0-Beta-Setup
+OutputBaseFilename=MyServer-v3.12.1-Beta-Setup
 
 SetupIconFile=app_icon.ico
 

@@ -96,6 +96,12 @@ export default function SettingsView() {
   const [cacheBusy, setCacheBusy] = useState(false)
   const [copyLogBusy, setCopyLogBusy] = useState(false)
   const [saveLogBusy, setSaveLogBusy] = useState(false)
+  const [changeLogBusy, setChangeLogBusy] = useState(false)
+  const [logDirInfo, setLogDirInfo] = useState<{ logDirectory: string; defaultDirectory: string; isCustom: boolean }>({
+    logDirectory: "",
+    defaultDirectory: "",
+    isCustom: false,
+  })
   const [details, setDetails] = useState<ServerDetails | null>(null)
 
   const t = getTranslation(settings?.language)
@@ -166,12 +172,60 @@ export default function SettingsView() {
   const handleCleanCache = async () => {
     setCacheBusy(true)
     try {
-      await api.cleanBrowserCache()
+      if (typeof api.cleanBrowserCache === "function") {
+        await api.cleanBrowserCache()
+      } else {
+        await api.clearCache()
+      }
       notify(t("clean_cache_success"), "success")
     } catch (err) {
       notify(errorText(err), "danger")
     } finally {
       setCacheBusy(false)
+    }
+  }
+
+  const handleChangeLogFolder = async () => {
+    setChangeLogBusy(true)
+    try {
+      const res = await api.chooseLogFolder()
+      if (res.cancelled) {
+        // user cancelled
+      } else if (res.success && res.logDirectory) {
+        setLogDirInfo({
+          logDirectory: res.logDirectory,
+          defaultDirectory: res.defaultDirectory || logDirInfo.defaultDirectory,
+          isCustom: !!res.isCustom,
+        })
+        notify(`${t("change_log_folder_success")}${res.logDirectory}`, "success")
+      } else if (res.error) {
+        notify(res.error, "danger")
+      }
+    } catch (err) {
+      notify(errorText(err), "danger")
+    } finally {
+      setChangeLogBusy(false)
+    }
+  }
+
+  const handleResetLogFolder = async () => {
+    setChangeLogBusy(true)
+    try {
+      const res = await api.resetLogDirectory()
+      if (res.success && res.logDirectory) {
+        setLogDirInfo({
+          logDirectory: res.logDirectory,
+          defaultDirectory: res.defaultDirectory || res.logDirectory,
+          isCustom: false,
+        })
+        notify(t("reset_log_folder_success"), "success")
+      } else if (res.error) {
+        notify(res.error, "danger")
+      }
+    } catch (err) {
+      notify(errorText(err), "danger")
+    } finally {
+      setChangeLogBusy(false)
     }
   }
 
@@ -459,7 +513,7 @@ export default function SettingsView() {
           icon={FileText}
         >
           <div className="flex flex-col gap-2.5">
-            {/* Primary Log Action Buttons (Copy & Save - Poin 7) */}
+            {/* Primary Log Action Buttons (Copy & Change Directory) */}
             <div className="grid grid-cols-2 gap-2">
               <Button
                 size="sm"
@@ -476,15 +530,41 @@ export default function SettingsView() {
               <Button
                 size="sm"
                 variant="secondary"
-                icon={Download}
+                icon={FolderOpen}
                 block
-                state={saveLogBusy ? "busy" : "idle"}
-                busyLabel="Menyimpan..."
-                onClick={handleSaveLog}
-                title={t("save_log_desc")}
+                state={changeLogBusy ? "busy" : "idle"}
+                busyLabel="Mengubah..."
+                onClick={handleChangeLogFolder}
+                title={t("change_log_folder_desc")}
               >
-                {t("save_log_btn")}
+                {t("change_log_folder_btn")}
               </Button>
+            </div>
+
+            {/* Active Log Directory Badge & Reset Option */}
+            <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface p-2.5 text-micro">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-ink-subtle">{t("log_folder_active")}</span>
+                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${logDirInfo.isCustom ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400"}`}>
+                  {logDirInfo.isCustom ? t("log_folder_custom_badge") : t("log_folder_default_badge")}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate font-mono text-nano text-ink select-all" title={logDirInfo.logDirectory}>
+                  {logDirInfo.logDirectory || "Default App Folder"}
+                </span>
+                {logDirInfo.isCustom && (
+                  <button
+                    type="button"
+                    onClick={handleResetLogFolder}
+                    disabled={changeLogBusy}
+                    className="shrink-0 text-nano text-brand hover:underline font-medium"
+                    title={t("reset_log_folder_btn")}
+                  >
+                    {t("reset_log_folder_btn")}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Log Explorer & Notepad Links */}

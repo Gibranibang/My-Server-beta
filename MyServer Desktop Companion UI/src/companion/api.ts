@@ -45,6 +45,10 @@ export interface CompanionApi {
   restoreBackup(): Promise<{ rollbackFile: string }>
   /** Clear the WebView cache; resolves with the freed size in MB. */
   clearCache(): Promise<{ freedMb: number }>
+  cleanBrowserCache?(): Promise<{ freedMb: number }>
+  getLogDirectory(): Promise<{ logDirectory: string; defaultDirectory: string; isCustom: boolean }>
+  chooseLogFolder(): Promise<{ success: boolean; logDirectory?: string; defaultDirectory?: string; isCustom?: boolean; cancelled?: boolean; error?: string }>
+  resetLogDirectory(): Promise<{ success: boolean; logDirectory?: string; defaultDirectory?: string; isCustom?: boolean; error?: string }>
   checkForUpdate(): Promise<UpdateInfo>
   installUpdateFromZip(filePath?: string): Promise<{ success: boolean; cancelled?: boolean; restarting?: boolean; error?: string }>
 
@@ -301,6 +305,18 @@ export function createMockApi(): CompanionApi {
     async clearCache() {
       await wait(900)
       return { freedMb: 184 }
+    },
+    async cleanBrowserCache() {
+      return this.clearCache()
+    },
+    async getLogDirectory() {
+      return { logDirectory: "C:\\Users\\gibra\\.myserver\\logs", defaultDirectory: "C:\\Users\\gibra\\.myserver\\logs", isCustom: false }
+    },
+    async chooseLogFolder() {
+      return { success: true, logDirectory: "D:\\Logs", defaultDirectory: "C:\\Users\\gibra\\.myserver\\logs", isCustom: true }
+    },
+    async resetLogDirectory() {
+      return { success: true, logDirectory: "C:\\Users\\gibra\\.myserver\\logs", defaultDirectory: "C:\\Users\\gibra\\.myserver\\logs", isCustom: false }
     },
     async checkForUpdate() {
       await wait(1500)

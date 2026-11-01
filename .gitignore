@@ -1,0 +1,102 @@
+# ==============================================================================
+# MyServer Beta - Official Project .gitignore
+# Compliant with PROJECT_RULES.md (Zero Data Leak, Zero Binary Bloat)
+# ==============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec.bak
+*.bak
+
+# Build outputs & target binaries (Never commit compiled artifacts)
+build/
+dist/
+target/
+src-tauri/target/
+*.exe
+*.dll
+*.pyd
+*.obj
+*.pdb
+*.rlib
+*.rmeta
+
+# Archives & compressed packages
+*.zip
+*.tar.*
+*.7z
+*.gz
+
+# Binaries, tools & obsolete directories
+bin/
+tools/
+ui/mini_tray/
+
+# Local application data & user profiles (Private configs, credentials, logs)
+data/
+config.json*
+core.port
+logs/
+*.log
+*.tmp
+
+# Workspace & Sandbox isolation (PROJECT_RULES.md Pasal 4)
+sandbox/
+backup/
+archive/
+
+# Frontend node modules and build artifacts
+node_modules/
+MyServer Desktop Companion UI/node_modules/
+MyServer Desktop Companion UI/dist/
+MyServer Desktop Companion UI/.figma/
+pnpm-lock.yaml
+
+# Temporary scripts & maintenance files
+Run
+myserver_upd_*.bat
+myserver_dl_*
+UPLOAD_KE_GITHUB.bat
+buat_exe.bat
+build_installer.bat
+installer_gui.py
+mini_tray_manager.py
+zimaos_app.py
+PANDUAN_KEAMANAN_WINDOWS.txt
+1_Buka_Blokir_Windows_Unblock.bat
+2_Pasang_Sertifikat_Kepercayaan_Admin.bat
+DESIGN.md
+GEMINI.md
+MyServer-*.spec
+MyServer Desktop Companion UI/AGENTS.md
+MyServer Desktop Companion UI/CLAUDE.md
+MyServer Desktop Companion UI/INTEGRATION.md
+MyServer Desktop Companion UI/.mise.toml
+MyServer Desktop Companion UI/.gitattributes
+My-Server by algitha Icon.png
+app_icon_1024.png
+
+# Legacy test scratches
+tests/test_v*.py
+tests/test_m1*.py
+tests/test_empirical*.py
+tests/test_run_*.py
+
+# Certificates and keys
+*.pfx
+*.cer
+*.crt
+*.key
+*.pem
+
+# OS / Editor generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.vscode/
+.idea/
+*.swp
+.gemini/

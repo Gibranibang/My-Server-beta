@@ -1,0 +1,39 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "MyServer-Beta",
+  "version": "3.12.0",
+  "identifier": "com.algithaproject.myserver.companion.beta",
+  "build": {
+    "frontendDist": "../MyServer Desktop Companion UI/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "MyServer Companion",
+        "width": 370,
+        "height": 412,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
+  }
+}

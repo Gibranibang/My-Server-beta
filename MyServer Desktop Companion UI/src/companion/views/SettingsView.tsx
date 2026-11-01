@@ -1,0 +1,578 @@
+import { useId, useState, useEffect } from "react"
+import {
+  AppWindow,
+  Archive,
+  Check,
+  ClipboardCopy,
+  Download,
+  FileText,
+  Folder,
+  FolderOpen,
+  HardDrive,
+  Languages,
+  Lock,
+  Network,
+  PanelTopOpen,
+  RefreshCw,
+  Rocket,
+  RotateCcw,
+  ShieldCheck,
+  Sparkles,
+  type LucideIcon,
+} from "lucide-react"
+import { FooterStatus } from "../FlyoutShell"
+import { getCompanionApi } from "../api"
+import { errorText, useAsyncAction, useCompanion, useNotice } from "../store"
+import {
+  AccordionSection,
+  Button,
+  Card,
+  Chip,
+  Mono,
+  TextAction,
+  Toggle,
+  cx,
+} from "../ui"
+import type { Settings, ServerDetails } from "../types"
+import { ViewBody } from "./shared"
+import { APP_VERSION, APP_CHANNEL } from "../version"
+import { getTranslation, type I18N } from "../i18n"
+
+type TranslationKey = keyof (typeof I18N)["en"]
+
+function SettingToggleRow({
+  icon: Icon,
+  label,
+  caption,
+  settingKey,
+}: {
+  icon: LucideIcon
+  label: string
+  caption?: string
+  settingKey: keyof Settings
+}) {
+  const { settings, setSetting } = useCompanion()
+  const { notify } = useNotice()
+  const id = useId()
+  const on = Boolean(settings[settingKey])
+
+  return (
+    <div className="flex items-center gap-2.5 px-3 py-2 transition-colors duration-150 hover:bg-surface-sunken">
+      <Icon
+        className="size-4 shrink-0 text-ink-subtle"
+        strokeWidth={2}
+        aria-hidden
+      />
+      <label htmlFor={id} className="min-w-0 flex-1 cursor-pointer">
+        <span className="block text-label font-medium text-ink">
+          {label}
+        </span>
+        {caption && (
+          <span className="block text-micro text-ink-subtle">
+            {caption}
+          </span>
+        )}
+      </label>
+      <Toggle
+        id={id}
+        label={label}
+        checked={on}
+        onChange={(next) =>
+          void setSetting(settingKey, next).catch((e) =>
+            notify(errorText(e), "danger"),
+          )
+        }
+      />
+    </div>
+  )
+}
+
+export default function SettingsView() {
+  const api = getCompanionApi()
+  const { settings, setSetting, resetSettings } = useCompanion()
+  const { notify } = useNotice()
+  const [updateState, runUpdate] = useAsyncAction(api.checkForUpdate)
+  const [zipUpdateState, setZipUpdateState] = useState<"idle" | "busy" | "done">("idle")
+  const [cacheBusy, setCacheBusy] = useState(false)
+  const [copyLogBusy, setCopyLogBusy] = useState(false)
+  const [saveLogBusy, setSaveLogBusy] = useState(false)
+  const [details, setDetails] = useState<ServerDetails | null>(null)
+
+  const t = getTranslation(settings?.language)
+  const isId = settings?.language === "id"
+  const activeVersion = details?.appVersion || APP_VERSION
+  const activeChannel = details?.appChannel || APP_CHANNEL
+
+  useEffect(() => {
+    api.getServerDetails().then(setDetails).catch(() => {})
+  }, [api])
+
+  const handleZipUpdate = async () => {
+    setZipUpdateState("busy")
+    try {
+      const res = await api.installUpdateFromZip()
+      if (res.cancelled) {
+        notify(t("zip_update_cancelled"), "neutral")
+        setZipUpdateState("idle")
+        return
+      }
+      if (res.success) {
+        setZipUpdateState("done")
+        notify(t("zip_update_success"), "success")
+      } else {
+        setZipUpdateState("idle")
+        notify(res.error || t("zip_update_failed"), "danger")
+      }
+    } catch (err) {
+      setZipUpdateState("idle")
+      notify(errorText(err), "danger")
+    }
+  }
+
+  const handleCopyLog = async () => {
+    setCopyLogBusy(true)
+    try {
+      const res = await api.copyLogToClipboard()
+      if (res.success) {
+        notify(t("copy_log_success"), "success")
+      } else {
+        notify(t("copy_log_failed"), "danger")
+      }
+    } catch (err) {
+      notify(errorText(err), "danger")
+    } finally {
+      setCopyLogBusy(false)
+    }
+  }
+
+  const handleSaveLog = async () => {
+    setSaveLogBusy(true)
+    try {
+      const res = await api.saveLogToFile()
+      if (res.cancelled) {
+        notify(t("save_log_cancelled"), "neutral")
+      } else if (res.success && res.path) {
+        notify(`${t("save_log_success")}${res.path}`, "success")
+      } else {
+        notify(res.error || t("save_log_cancelled"), "danger")
+      }
+    } catch (err) {
+      notify(errorText(err), "danger")
+    } finally {
+      setSaveLogBusy(false)
+    }
+  }
+
+  const handleCleanCache = async () => {
+    setCacheBusy(true)
+    try {
+      await api.cleanBrowserCache()
+      notify(t("clean_cache_success"), "success")
+    } catch (err) {
+      notify(errorText(err), "danger")
+    } finally {
+      setCacheBusy(false)
+    }
+  }
+
+  const toggleLanguage = () => {
+    const nextLang = settings?.language === "id" ? "en" : "id"
+    void setSetting("language", nextLang).then(() => {
+      notify(
+        nextLang === "id"
+          ? "Bahasa diubah ke Bahasa Indonesia"
+          : "Language changed to English",
+        "success",
+      )
+    })
+  }
+
+  const isDpapiActive = details?.dpapiActive ?? settings.dpapiActive ?? true
+
+  return (
+    <>
+      <ViewBody className="space-y-3 pb-6">
+        {/* ========================================================= */}
+        {/* HERO HEADER: Official App Icon + Version Details (Poin 6) */}
+        {/* ========================================================= */}
+        <Card className="flex flex-col items-center justify-center p-4 text-center">
+          <div className="relative mb-2.5">
+            <img
+              src="/favicon.png"
+              alt="MyServer"
+              className="size-16 rounded-2xl shadow-control transition-transform duration-300 hover:scale-105 select-none"
+            />
+            <span
+              className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border-2 border-surface bg-brand text-brand-ink shadow-xs"
+              title="Official Companion"
+            >
+              <Check className="size-3" strokeWidth={3} />
+            </span>
+          </div>
+
+          <div className="flex flex-col items-center">
+            <h2 className="text-base font-bold tracking-tight text-ink">
+              MyServer Desktop
+            </h2>
+            <div className="mt-0.5 flex items-center gap-1.5 text-caption font-semibold">
+              <span className="text-ink">
+                v<Mono>{activeVersion}</Mono>
+              </span>
+              <span className="rounded-full bg-info-soft px-2 py-0.5 text-micro font-bold text-info-ink">
+                {activeChannel}
+              </span>
+            </div>
+            <p className="mt-0.5 text-micro text-ink-subtle">
+              {activeChannel} Channel · Windows x64 Architecture
+            </p>
+          </div>
+
+          {/* Action Update Buttons */}
+          <div className="mt-3.5 grid w-full grid-cols-2 gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={RefreshCw}
+              block
+              state={updateState}
+              busyLabel={t("checking_update")}
+              doneLabel={t("already_latest")}
+              onClick={() =>
+                runUpdate((r) =>
+                  notify(
+                    r.upToDate
+                      ? `MyServer v${r.version} [${activeChannel}] ${t("update_latest")}`
+                      : `${t("update_available")}${r.version}`,
+                    r.upToDate ? "neutral" : "info",
+                  ),
+                )
+              }
+            >
+              {t("check_update")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={Archive}
+              block
+              state={zipUpdateState}
+              busyLabel={t("installing_zip")}
+              onClick={handleZipUpdate}
+            >
+              {t("install_zip")}
+            </Button>
+          </div>
+        </Card>
+
+        {/* ========================================================= */}
+        {/* ACCORDION 1: Sistem & Startup (Poin 5)                    */}
+        {/* ========================================================= */}
+        <AccordionSection
+          title={t("sec_system_title")}
+          subtitle={t("sec_system_desc")}
+          icon={Rocket}
+          defaultOpen={true}
+        >
+          <div className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
+            <SettingToggleRow
+              icon={Rocket}
+              label={t("autostart_label")}
+              caption={t(settings.autostart ? "autostart_on" : "autostart_off")}
+              settingKey="autostart"
+            />
+            <SettingToggleRow
+              icon={AppWindow}
+              label={t("openDashboard_label")}
+              caption={t(settings.openDashboard ? "openDashboard_on" : "openDashboard_off")}
+              settingKey="openDashboard"
+            />
+            <SettingToggleRow
+              icon={PanelTopOpen}
+              label={t("autoOpenMiniTray_label")}
+              caption={t(settings.autoOpenMiniTray ? "autoOpenMiniTray_on" : "autoOpenMiniTray_off")}
+              settingKey="autoOpenMiniTray"
+            />
+          </div>
+        </AccordionSection>
+
+        {/* ========================================================= */}
+        {/* ACCORDION 2: Bahasa & Keamanan Vault (Poin 5)             */}
+        {/* ========================================================= */}
+        <AccordionSection
+          title={t("sec_lang_vault_title")}
+          subtitle={t("sec_lang_vault_desc")}
+          icon={Languages}
+          badge={
+            <Chip
+              tone={isDpapiActive ? "success" : "warning"}
+              size="sm"
+              icon={isDpapiActive ? ShieldCheck : Lock}
+            >
+              {isDpapiActive ? "DPAPI Vault" : "Vault Plain"}
+            </Chip>
+          }
+        >
+          <div className="flex flex-col gap-3">
+            {/* Language Selector */}
+            <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface p-2.5">
+              <span className="text-micro font-semibold text-ink">
+                {t("language_title")}
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void setSetting("language", "en")
+                    notify(t("lang_switched_en"), "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    (settings.language || "en") === "en"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <span>{t("lang_en")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void setSetting("language", "id")
+                    notify(t("lang_switched_id"), "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    settings?.language === "id"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <span>{t("lang_id")}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* DPAPI Security Info */}
+            <div className="flex items-center justify-between rounded-tile border border-line bg-surface p-2.5 text-micro">
+              <div className="flex items-center gap-2">
+                <ShieldCheck
+                  className={cx(
+                    "size-4 shrink-0",
+                    isDpapiActive ? "text-success" : "text-warning",
+                  )}
+                />
+                <div className="flex flex-col">
+                  <span className="font-semibold text-ink">
+                    Windows DPAPI Enkripsi Kredensial
+                  </span>
+                  <span className="text-ink-subtle">
+                    {isDpapiActive
+                      ? "Kunci token dan konfigurasi dilindungi Windows DPAPI hardware vault"
+                      : "DPAPI fallback mode standar"}
+                  </span>
+                </div>
+              </div>
+              <Chip tone={isDpapiActive ? "success" : "neutral"} size="sm">
+                {isDpapiActive ? t("dpapi_active") : t("dpapi_inactive")}
+              </Chip>
+            </div>
+          </div>
+        </AccordionSection>
+
+        {/* ========================================================= */}
+        {/* ACCORDION 3: Integrasi Storage & Jaringan (Poin 5)        */}
+        {/* ========================================================= */}
+        <AccordionSection
+          title={t("sec_storage_net_title")}
+          subtitle={t("sec_storage_net_desc")}
+          icon={HardDrive}
+        >
+          <div className="flex flex-col gap-2.5">
+            {/* File Manager Target Selection */}
+            <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface p-2.5">
+              <span className="text-micro font-semibold text-ink">
+                {t("fm_click_title")}
+              </span>
+              <span className="text-micro text-ink-subtle">
+                {t("fm_click_subtitle")}
+              </span>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void setSetting("fileManagerClickTarget", "explorer")
+                    notify(t("fm_target_set_explorer"), "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    (settings.fileManagerClickTarget || "explorer") === "explorer"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <HardDrive className="size-3.5" />
+                  <span>{t("fm_target_explorer")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void setSetting("fileManagerClickTarget", "zimaos")
+                    notify(t("fm_target_set_zimaos"), "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    settings.fileManagerClickTarget === "zimaos"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <Folder className="size-3.5" />
+                  <span>{t("fm_target_zimaos")}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Storage & Network Startup Toggles */}
+            <div className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
+              <SettingToggleRow
+                icon={HardDrive}
+                label={t("autoMountSmb_label")}
+                caption={t(settings.autoMountSmb ? "autoMountSmb_on" : "autoMountSmb_off")}
+                settingKey="autoMountSmb"
+              />
+              <SettingToggleRow
+                icon={Network}
+                label={t("autoZeroTier_label")}
+                caption={t(settings.autoZeroTier ? "autoZeroTier_on" : "autoZeroTier_off")}
+                settingKey="autoZeroTier"
+              />
+            </div>
+          </div>
+        </AccordionSection>
+
+        {/* ========================================================= */}
+        {/* ACCORDION 4: Diagnostik, Log & Pemeliharaan (Poin 7)     */}
+        {/* ========================================================= */}
+        <AccordionSection
+          title={t("sec_diag_logs_title")}
+          subtitle={t("sec_diag_logs_desc")}
+          icon={FileText}
+        >
+          <div className="flex flex-col gap-2.5">
+            {/* Primary Log Action Buttons (Copy & Save - Poin 7) */}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={ClipboardCopy}
+                block
+                state={copyLogBusy ? "busy" : "idle"}
+                busyLabel="Menyalin..."
+                onClick={handleCopyLog}
+                title={t("copy_log_desc")}
+              >
+                {t("copy_log_btn")}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={Download}
+                block
+                state={saveLogBusy ? "busy" : "idle"}
+                busyLabel="Menyimpan..."
+                onClick={handleSaveLog}
+                title={t("save_log_desc")}
+              >
+                {t("save_log_btn")}
+              </Button>
+            </div>
+
+            {/* Log Explorer & Notepad Links */}
+            <div className="flex flex-wrap items-center justify-between rounded-tile border border-line bg-surface p-2.5 text-micro">
+              <div className="flex items-center gap-3">
+                <TextAction
+                  icon={FileText}
+                  tone="neutral"
+                  onClick={() => {
+                    api.openLogFile()
+                    notify(t("opening_log_notepad"), "info")
+                  }}
+                >
+                  {t("open_log_file")}
+                </TextAction>
+                <span className="text-line-strong">|</span>
+                <TextAction
+                  icon={FolderOpen}
+                  tone="neutral"
+                  onClick={() => {
+                    api.openLogFolder()
+                    notify(t("opening_log_folder"), "info")
+                  }}
+                >
+                  {t("open_log_folder")}
+                </TextAction>
+              </div>
+            </div>
+
+            {/* Maintenance & Cache Cleanup */}
+            <div className="flex items-center justify-between rounded-tile border border-line bg-surface p-2.5">
+              <div className="flex items-center gap-2">
+                <Sparkles className="size-4 shrink-0 text-brand" />
+                <div className="flex flex-col">
+                  <span className="text-micro font-semibold text-ink">
+                    {t("clean_cache_btn")}
+                  </span>
+                  <span className="text-nano text-ink-subtle">
+                    {t("clean_cache_desc")}
+                  </span>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="soft"
+                state={cacheBusy ? "busy" : "idle"}
+                busyLabel="Membersihkan..."
+                onClick={handleCleanCache}
+                className="h-7 text-micro px-2.5"
+              >
+                {t("clean_cache_btn")}
+              </Button>
+            </div>
+          </div>
+        </AccordionSection>
+      </ViewBody>
+
+      <FooterStatus
+        title={t("client_status")}
+        chips={
+          <>
+            <Chip
+              className="cursor-pointer hover:border-brand transition"
+              onClick={toggleLanguage}
+            >
+              {t("lang_chip")}
+            </Chip>
+            <Chip
+              tone={isDpapiActive ? "success" : "danger"}
+              title={isDpapiActive ? t("dpapi_tooltip_active") : t("dpapi_tooltip_inactive")}
+            >
+              {isDpapiActive ? t("dpapi_active") : t("dpapi_inactive")}
+            </Chip>
+            <Chip
+              icon={RotateCcw}
+              onClick={() => {
+                resetSettings()
+                  .then(() =>
+                    notify(t("reset_success"), "neutral"),
+                  )
+                  .catch((e) => notify(errorText(e), "danger"))
+              }}
+            >
+              {t("reset_default")}
+            </Chip>
+          </>
+        }
+      />
+    </>
+  )
+}

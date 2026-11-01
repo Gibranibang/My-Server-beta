@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyServer Companion</title>
+    <script>
+      (function() {
+        function send(type, text) {
+          try {
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+              window.__TAURI_INTERNALS__.invoke('log_frontend', { msg: '[' + type + '] ' + text });
+            }
+          } catch(e) {}
+        }
+        send('INFO', 'index.html inline script loaded at ' + new Date().toISOString());
+        window.addEventListener('error', function(e) {
+          send('ERROR', (e.message || '') + ' at ' + (e.filename || '') + ':' + (e.lineno || ''));
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+          send('UNHANDLED', String(e.reason));
+        });
+        const origLog = console.log;
+        console.log = function(...args) {
+          send('LOG', args.join(' '));
+          origLog.apply(console, args);
+        };
+        const origWarn = console.warn;
+        console.warn = function(...args) {
+          send('WARN', args.join(' '));
+          origWarn.apply(console, args);
+        };
+        const origErr = console.error;
+        console.error = function(...args) {
+          send('ERROR', args.join(' '));
+          origErr.apply(console, args);
+        };
+      })();
+    </script>
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+    />
+  </head>
+  <body style="background: #0f172a; margin: 0; padding: 0;">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -6,24 +6,30 @@ import { setCompanionApi, createMockApi } from './companion/api'
 import { createRealApi } from './companion/api.real'
 import './index.css'
 
-const isNativeApp = typeof window !== 'undefined' && Boolean((window as any).pywebview)
-const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
-const forceReal = urlParams?.get('real') === '1'
-const forceCompanion = urlParams?.get('app') === '1'
+const isTauri = typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__)
+const isPywebview = typeof window !== 'undefined' && Boolean((window as any).pywebview)
+const isNativeApp = isTauri || isPywebview
 
-// Di browser (preview / Figma): gunakan Mock API agar SEMUA card, drive, app, dan rute terbuka 100% tanpa login
-if (isNativeApp || forceReal) {
+const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+const forceCanvas = urlParams?.get('canvas') === '1' || urlParams?.get('board') === '1'
+const forceMock = urlParams?.get('mock') === '1'
+
+// Di lingkungan native desktop (Tauri / pywebview) atau build produksi: selalu gunakan Real API
+if (isNativeApp || (!forceMock && import.meta.env.PROD)) {
   setCompanionApi(createRealApi())
 } else {
   setCompanionApi(createMockApi())
 }
 
 if (typeof window !== 'undefined') {
-  document.title = 'MyServer Companion - Figma Design Canvas'
+  document.title = 'MyServer Companion'
 }
+
+// Hanya render multi-frame Figma canvas board jika secara eksplisit dipanggil dengan ?canvas=1 di browser dev
+const renderCanvas = !isNativeApp && forceCanvas
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {isNativeApp && !forceCompanion ? <CompanionApp /> : <App />}
+    {renderCanvas ? <App /> : <CompanionApp />}
   </React.StrictMode>,
 )

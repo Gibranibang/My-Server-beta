@@ -1,0 +1,139 @@
+/* ==============================================================
+   FULL CRT RETRO ELECTRONICS SUITE: MyServer v4.0.6
+   ============================================================== */
+@keyframes crtSlowHum {
+  0% { transform: translateY(-30px); }
+  100% { transform: translateY(85px); }
+}
+.crt-hum-wrapper {
+  animation: crtSlowHum 7.5s linear infinite;
+}
+
+@keyframes tubeWarmth {
+  0%, 100% { opacity: 0.98; }
+  50% { opacity: 1.0; }
+  78% { opacity: 0.96; }
+}
+.crt-layer-vignette {
+  animation: tubeWarmth 0.25s infinite;
+}
+
+@keyframes crtBandFlash {
+  0%, 65%, 100% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+  68% {
+    opacity: 0.7;
+    transform: translateY(-12px);
+  }
+  70% {
+    opacity: 0.35;
+    transform: translateY(16px);
+  }
+  72% {
+    opacity: 0.6;
+    transform: translateY(-6px);
+  }
+  74%, 80% {
+    opacity: 0;
+  }
+  82% {
+    opacity: 0.5;
+    transform: translateY(10px);
+  }
+  85% {
+    opacity: 0;
+  }
+}
+
+@keyframes crtGlitchJitter {
+  0%, 65%, 100% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+  68% {
+    transform: translate(-2.2px, 0.6px);
+    opacity: 0.88;
+  }
+  70% {
+    transform: translate(2.6px, -0.6px);
+    opacity: 1;
+  }
+  72% {
+    transform: translate(-1.4px, 0.3px);
+    opacity: 0.92;
+  }
+  74% {
+    transform: translate(0.9px, -0.2px);
+    opacity: 1;
+  }
+  76% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+  82% {
+    transform: translate(-1.8px, -0.4px);
+    opacity: 0.90;
+  }
+  85% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+}
+
+.crt-glitch-content {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.card-container:hover .crt-glitch-content {
+  animation: crtGlitchJitter 2.0s infinite ease-in-out;
+  filter: drop-shadow(0 0 1px #4ade80);
+}
+.crt-tracking-band {
+  transform-box: fill-box;
+  pointer-events: none;
+}
+.card-container:hover .crt-tracking-band {
+  animation: crtBandFlash 2.0s infinite ease-in-out;
+}
+
+.card-container {
+  display: block;
+  width: 122px;
+  height: 110px;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.25));
+}
+.card-container:hover {
+  transform: translateY(-2px);
+  filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.40)) drop-shadow(0 0 8px rgba(113, 180, 72, 0.25));
+}
+.card-container:active {
+  transform: translateY(0);
+}
+
+.card-svg {
+  display: block;
+  overflow: visible; /* drop shadow Figma (filter0_d) meluas 8px ke kanan/bawah */
+  width: 122px;
+  height: 110px;
+}
+
+/* TOMBOL DOT 3 FILE MANAGER (AKTIF) */
+.btn-dot3-interactive.active {
+  transition: transform 0.15s ease;
+}
+.btn-dot3-interactive.active .dot3-pill {
+  transition: fill 0.15s ease, stroke 0.15s ease;
+}
+.btn-dot3-interactive.active:hover .dot3-pill {
+  fill: rgba(0, 0, 0, 0.12);
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 0.8px;
+}
+.btn-dot3-interactive.active:active .dot3-pill {
+  fill: rgba(0, 0, 0, 0.25);
+}

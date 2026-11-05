@@ -1,2 +1,2 @@
-export const APP_VERSION = "3.12.1"
+export const APP_VERSION = "4.0.6"
 export const APP_CHANNEL = "Beta"

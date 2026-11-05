@@ -101,11 +101,11 @@ function DriveCard({ drive, online, onOpen }: DriveCardProps & { onOpen: (letter
             size="sm"
           />
           <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-            <span className="shrink-0 text-label font-semibold text-ink">
+            <span className="shrink-0 text-caption font-semibold text-ink">
               Drive {drive.letter}:
             </span>
             <span
-              className="truncate text-label font-semibold text-ink-subtle"
+              className="truncate text-caption font-semibold text-ink-subtle"
               title={`Drive ${drive.letter}: [${drive.name}]`}
             >
               [{drive.name}]
@@ -268,6 +268,7 @@ export default function FilesView() {
       </ViewBody>
 
       <FooterStatus
+        showNoticePill={false}
         title={
           <>
             Host: <Mono className="font-semibold">{uncHost}</Mono>
@@ -275,14 +276,16 @@ export default function FilesView() {
         }
         chips={
           <>
-            <Chip tone={isOnline ? "success" : "neutral"}>
+            <Chip size="sm" tone={isOnline ? "success" : "neutral"} className="text-nano px-2 py-0.5">
               SMBv3 {isOnline ? "Active" : "Idle"}
             </Chip>
-            <Chip tone={online > 0 ? "info" : "neutral"}>
-              {online} {online === 1 ? "Drive" : "Drives"} Online
+            <Chip size="sm" tone={online > 0 ? "info" : "neutral"} className="text-nano px-2 py-0.5">
+              {online} {online === 1 ? "Drive" : "Drives"}
             </Chip>
             <Chip
+              size="sm"
               icon={FolderOpen}
+              className="text-nano px-2 py-0.5"
               onClick={() => {
                 api.openUnc()
                 notify(`Membuka root ${uncHost} di Explorer`, "info")

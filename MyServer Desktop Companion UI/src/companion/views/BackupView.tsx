@@ -86,10 +86,10 @@ function ActionRow({
     >
       <IconBadge icon={icon} tone={tone} size="sm" />
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5 text-label font-semibold text-ink">
-          {title}
+        <span className="flex items-center gap-1.5 text-caption font-semibold text-ink">
+          <span className="truncate">{title}</span>
           {tag && (
-            <Chip size="sm" tone="warning">
+            <Chip size="sm" tone="warning" className="shrink-0 text-nano py-0 px-1.5">
               {tag}
             </Chip>
           )}
@@ -1663,6 +1663,7 @@ export default function BackupView() {
       </ViewBody>
 
       <FooterStatus
+        showNoticePill={false}
         title={t("data_sync_footer", "Data Synchronization")}
         chips={
           <>

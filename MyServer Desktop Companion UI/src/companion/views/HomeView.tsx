@@ -25,7 +25,8 @@ import { ChipGlow, FooterStatus } from "../FlyoutShell"
 import { SERVER_IP, errorText, useCompanion, useNotice } from "../store"
 import { getCompanionApi } from "../api"
 import { Chip, Mono, cx } from "../ui"
-import Wordmark from "../Wordmark"
+import HeaderLogo from "../HeaderLogo"
+import SkeuoMatrixGrid from "../SkeuoMatrixGrid"
 import type { ServerDetails, ViewId } from "../types"
 import type { ViewProps } from "./shared"
 
@@ -219,18 +220,19 @@ export default function HomeView({ go }: ViewProps) {
 
   if (homeLoading || isInitialLoading) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-2 overflow-hidden">
+      <div className="flex flex-col items-center px-[16px] pt-0 pb-0 w-full overflow-hidden">
         {/* Cold-Start Header Skeleton */}
-        <div className="flex h-10 shrink-0 items-center justify-between pr-1 pl-1.5">
-          <div className="h-6 w-32 rounded bg-surface-sunken animate-pulse" />
-          <div className="h-4 w-12 rounded bg-surface-sunken animate-pulse" />
+        <div className="flex h-[33.59px] w-[252px] shrink-0 items-center justify-between pr-0.5">
+          <div className="h-6 w-28 rounded bg-surface-sunken animate-pulse" />
+          <div className="h-3 w-10 rounded bg-surface-sunken animate-pulse" />
         </div>
+        <div className="h-[10px] shrink-0" aria-hidden />
         {/* Cold-Start 4 Feature Cards Grid Skeleton */}
-        <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-3">
+        <div className="w-[252px] h-[225.5px] mx-auto grid grid-cols-2 gap-x-[8px] gap-y-[5.5px]">
           {[1, 2, 3, 4].map((i) => (
             <div
               key={i}
-              className="flex h-full flex-col justify-between rounded-card border border-line bg-surface p-3"
+              className="w-[122px] h-[110px] flex flex-col justify-between rounded-[8px] border border-line bg-surface p-2.5"
             >
               <div className="flex items-start justify-between">
                 <div className="size-8 rounded-lg bg-surface-sunken animate-pulse" />
@@ -243,20 +245,20 @@ export default function HomeView({ go }: ViewProps) {
             </div>
           ))}
         </div>
+        <div className="h-[9.18px] shrink-0" aria-hidden />
         {/* Cold-Start Footer Card Skeleton */}
         <FooterStatus
           title={<div className="h-5 w-28 rounded bg-surface-sunken animate-pulse" />}
           chips={
-            <>
-              <div className="h-6 w-16 rounded-full bg-surface-sunken animate-pulse" />
-              <div className="h-6 w-20 rounded-full bg-surface-sunken animate-pulse" />
-            </>
+            <div className="flex items-center gap-1">
+              <div className="h-5 w-12 rounded-full bg-surface-sunken animate-pulse" />
+              <div className="h-5 w-14 rounded-full bg-surface-sunken animate-pulse" />
+            </div>
           }
         />
       </div>
     )
   }
-
 
   const serverName = details?.serverName || t("server_default")
   const activeRouteObj = details?.routes?.find((r) => r.active)
@@ -264,92 +266,70 @@ export default function HomeView({ go }: ViewProps) {
 
   return (
     <>
-      <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-2">
-        <div className="flex h-10 shrink-0 items-center justify-between pr-1 pl-1.5">
-          <div className="flex items-center gap-3">
-            <Wordmark />
-            <Chip tone="info" size="sm">
-              BETA
-            </Chip>
-          </div>
-          <Mono className="text-micro text-ink-faint">v{details?.appVersion || APP_VERSION}</Mono>
-        </div>
-        <nav
-          aria-label="Fitur MyServer"
-          className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-3"
-        >
-          {FEATURES.map((feature) => {
-            const isFiles = feature.view === "files"
-            return (
-              <FeatureCard
-                key={feature.view}
-                {...feature}
-                onClick={() => {
-                  if (isFiles) {
-                    api.openFileManager()
-                    notify("Membuka Windows File Explorer...", "info")
-                  } else {
-                    go(feature.view)
-                  }
-                }}
-                extraAction={
-                  isFiles
-                    ? {
-                        label: "Menu",
-                        title: "Buka Menu File Manager (Kelola Disk & SMB)",
-                        onClick: () => go("files"),
-                      }
-                    : undefined
-                }
-              />
-            )
-          })}
-        </nav>
-      </div>
+      <div className="flex flex-col items-center px-[16px] pt-0 pb-0 w-full select-none">
+        {/* 1:1 Official Figma div.flex.svg Header Lockup with dynamic V{APP_VERSION} */}
+        <HeaderLogo />
+        <div className="h-[10px] shrink-0" aria-hidden />
+        <SkeuoMatrixGrid
+          go={go}
+          onOpenExplorer={() => {
+            api.openFileManager()
+            notify("Membuka Windows File Explorer...", "info")
+          }}
+          safeT={safeT}
+        />
+        <div className="h-[9.19px] shrink-0" aria-hidden />
 
-      <FooterStatus
+        <FooterStatus
         title={
-          <div className="flex items-center gap-2">
-            <span>{serverName}</span>
-            <ChevronRight className="size-4 text-ink-faint" />
+          <div className="flex items-center justify-between w-full">
+            <span className="truncate">{serverName}</span>
+            <ChevronRight className="size-3.5 text-[#7BC504] shrink-0 ml-1" />
           </div>
         }
         onClick={() => go("server")}
         chips={
           <>
-            <Chip
-              tone={isOnline ? "success" : "neutral"}
-              icon={currentRouteMeta.icon}
-              leading={isOnline && <ChipGlow />}
+            <button
+              type="button"
               onClick={() => {
                 setShowRouteMenu((prev) => !prev)
                 setShowAccountMenu(false)
               }}
-              className="cursor-pointer hover:border-info-line transition"
+              style={{
+                boxShadow: "0px 4px 6px 0px rgba(80,130,0,0.20), inset 4px 4px 8px 0px rgba(50,81,2,0.30)",
+              }}
+              className="h-[20.16px] shrink-0 justify-center rounded-full bg-white border border-[#DDD] px-[6.39px] flex items-center gap-[3.36px] cursor-pointer hover:bg-slate-50 transition outline-none relative select-none"
               title={t("switch_route_title", "Ganti Rute Akses")}
             >
-              <span className="flex items-center gap-1">
-                <span className="font-semibold">{currentRouteMeta.label}</span>
-                <ChevronDown className="size-3 text-ink-muted shrink-0" />
+              <Globe className="size-[10.07px] text-[#047857] shrink-0" strokeWidth={1.8} />
+              <span className="text-[8.4px] font-semibold text-[#047857] leading-[11.76px] whitespace-nowrap">
+                {currentRouteMeta.label}
               </span>
-            </Chip>
-            <Chip
-              tone="info"
-              icon={User}
+              <ChevronDown className="size-[10.07px] text-[#475569] shrink-0" strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 setShowAccountMenu((prev) => !prev)
                 setShowRouteMenu(false)
               }}
-              className="cursor-pointer hover:border-info-line transition"
+              style={{
+                boxShadow: "0px 4px 6px 0px rgba(0,52,101,0.15), inset 4px 4px 8px 0px rgba(3,38,138,0.30)",
+              }}
+              className="h-[20px] w-auto shrink-0 justify-center rounded-full bg-white border border-[#DDD] px-[6.39px] flex items-center gap-[3.36px] cursor-pointer hover:bg-slate-50 transition outline-none relative select-none"
+              title={t("switch_account_title", "Ganti Akun")}
             >
-              <span className="flex items-center gap-1">
-                <span>{details?.activeProfile || details?.profiles?.[0] || t("user_profile_default")}</span>
-                <ChevronDown className="size-3 text-info shrink-0" />
+              <User className="size-[10.07px] text-[#1D4ED8] shrink-0" strokeWidth={1.8} />
+              <span className="text-[8.4px] font-semibold text-[#1D4ED8] leading-[11.76px] whitespace-nowrap">
+                {details?.activeProfile || details?.profiles?.[0] || "–"}
               </span>
-            </Chip>
+              <ChevronDown className="size-[10.07px] text-[#2563EB] shrink-0" strokeWidth={1.8} />
+            </button>
           </>
         }
       />
+      </div>
 
       {/* QUICK ACCESS ROUTE SWITCHER MODAL */}
       {showRouteMenu && (

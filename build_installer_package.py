@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "3.12.1"
+VERSION = "4.0.6"
 
 APP_NAME = "My-Server by algitha BETA"
 
@@ -46,7 +46,15 @@ ISCC_PATH = r"C:\Users\gibra\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
 
 
 
-src_tauri_exe = os.path.join(BASE_BETA, r"sandbox\tauri_shell\src-tauri\target\release\MyServer-Beta.exe")
+cand1 = os.path.join(BASE_BETA, r"src-tauri\target\release\MyServer-Beta.exe")
+cand2 = os.path.join(BASE_BETA, r"sandbox\tauri_shell\src-tauri\target\release\MyServer-Beta.exe")
+if os.path.exists(cand1) and os.path.exists(cand2):
+    src_tauri_exe = cand1 if os.path.getmtime(cand1) >= os.path.getmtime(cand2) else cand2
+elif os.path.exists(cand1):
+    src_tauri_exe = cand1
+else:
+    src_tauri_exe = cand2
+print(f"[*] Menggunakan biner Companion: {src_tauri_exe}")
 
 src_core_exe = os.path.join(BASE_BETA, r"sandbox\dist\myserver-core.exe")
 
@@ -400,7 +408,7 @@ Source: "dist\\staging_payload\\*"; DestDir: "{{app}}"; Flags: ignoreversion rec
 
 ; Lindungi config.json agar tidak pernah tertimpa saat update / reinstall
 
-Source: "dist\\staging_payload\\config.json"; DestDir: "{{app}}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "dist\\staging_payload\\config.json"; DestDir: "{{app}}"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
 
 
 

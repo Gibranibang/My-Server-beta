@@ -111,7 +111,7 @@ export default function SettingsView() {
 
   const t = getTranslation(settings?.language)
   const isId = settings?.language === "id"
-  const activeVersion = details?.appVersion || APP_VERSION
+  const activeVersion = APP_VERSION
   const activeChannel = details?.appChannel || APP_CHANNEL
 
   useEffect(() => {
@@ -341,8 +341,48 @@ export default function SettingsView() {
             </p>
           </div>
 
-          {/* Action Update Buttons */}
-          <div className="mt-3.5 grid w-full grid-cols-2 gap-2">
+          {/* Theme Quick Selector */}
+          <div className="mt-3 flex w-full items-center justify-between rounded-control border border-line bg-surface-sunken px-3 py-1.5">
+            <div className="flex items-center gap-1.5 text-micro font-semibold text-ink">
+              <Sparkles className="size-3.5 text-brand" />
+              <span>{t("theme_label", "Tema Tampilan")}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  void setSetting("theme", "dark")
+                  notify(isId ? "Tema Gelap diaktifkan" : "Dark theme activated", "success")
+                }}
+                className={cx(
+                  "rounded-full px-2.5 py-0.5 text-nano font-semibold transition cursor-pointer border",
+                  settings?.theme !== "light"
+                    ? "bg-brand text-brand-ink border-transparent shadow-xs"
+                    : "bg-surface text-ink-subtle border-line hover:text-ink",
+                )}
+              >
+                Dark
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void setSetting("theme", "light")
+                  notify(isId ? "Tema Terang diaktifkan" : "Light theme activated", "success")
+                }}
+                className={cx(
+                  "rounded-full px-2.5 py-0.5 text-nano font-semibold transition cursor-pointer border",
+                  settings?.theme === "light"
+                    ? "bg-brand text-brand-ink border-transparent shadow-xs"
+                    : "bg-surface text-ink-subtle border-line hover:text-ink",
+                )}
+              >
+                Light
+              </button>
+            </div>
+          </div>
+
+          {/* Action Update Buttons - Tata Letak Bersih Bebas Tabrakan */}
+          <div className="mt-3 flex flex-col gap-2 w-full">
             <Button
               size="sm"
               variant={updateInfo && !updateInfo.upToDate ? "primary" : "secondary"}
@@ -505,6 +545,55 @@ export default function SettingsView() {
                   )}
                 >
                   <span>{t("lang_id")}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Theme Selector (Dark / Light) */}
+            <div className="flex items-center justify-between rounded-tile border border-line bg-surface p-2.5">
+              <div className="flex items-center gap-2">
+                <Sparkles className="size-4 text-brand shrink-0" />
+                <div className="flex flex-col">
+                  <span className="text-micro font-semibold text-ink">
+                    {t("theme_label", "Tema Tampilan")}
+                  </span>
+                  <span className="text-nano text-ink-subtle">
+                    {settings?.theme === "light"
+                      ? t("theme_light", "Light (Classic Silver)")
+                      : t("theme_dark", "Dark (Obsidian Console)")}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void setSetting("theme", "dark")
+                    notify(isId ? "Tema Gelap diaktifkan" : "Dark theme activated", "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    settings?.theme !== "light"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <span>Dark</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void setSetting("theme", "light")
+                    notify(isId ? "Tema Terang diaktifkan" : "Light theme activated", "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    settings?.theme === "light"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <span>Light</span>
                 </button>
               </div>
             </div>
@@ -726,23 +815,30 @@ export default function SettingsView() {
       </ViewBody>
 
       <FooterStatus
+        showNoticePill={false}
         title={t("client_status")}
         chips={
           <>
             <Chip
-              className="cursor-pointer hover:border-brand transition"
+              size="sm"
+              className="cursor-pointer hover:border-brand transition text-nano px-2 py-0.5"
               onClick={toggleLanguage}
             >
               {t("lang_chip")}
             </Chip>
             <Chip
+              size="sm"
+              className="text-nano px-2 py-0.5"
               tone={isDpapiActive ? "success" : "danger"}
               title={isDpapiActive ? t("dpapi_tooltip_active") : t("dpapi_tooltip_inactive")}
             >
               {isDpapiActive ? t("dpapi_active") : t("dpapi_inactive")}
             </Chip>
             <Chip
+              size="sm"
+              className="text-nano px-2 py-0.5"
               icon={RotateCcw}
+              title={t("reset_default")}
               onClick={() => {
                 resetSettings()
                   .then(() =>
@@ -751,7 +847,7 @@ export default function SettingsView() {
                   .catch((e) => notify(errorText(e), "danger"))
               }}
             >
-              {t("reset_default")}
+              Reset
             </Chip>
           </>
         }

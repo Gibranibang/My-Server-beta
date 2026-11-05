@@ -783,6 +783,7 @@ export default function ServerView({ go }: ViewProps) {
       </ViewBody>
 
       <FooterStatus
+        showNoticePill={false}
         title={t("comm_routes_status", "Jalur Komunikasi")}
         chips={
           <>

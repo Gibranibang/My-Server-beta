@@ -176,10 +176,11 @@ export default function AppsView() {
       notify(`URL untuk ${appName} belum tersedia.`, "warning")
       return
     }
-    void openUrl(targetUrl, `${appName} - [MyServer v${APP_VERSION} ${APP_CHANNEL}]`).catch((err: any) => {
-      notify(err?.message || `Gagal membuka ${appName}`, "danger")
+    void openUrl(targetUrl, `${appName} - [MyServer v${APP_VERSION} ${APP_CHANNEL}]`).catch((_err: any) => {
+      void openExternalBrowser(targetUrl)
+      notify(`Membuka ${appName} di peramban web...`, "info")
     })
-    notify(`Membuka jendela MyServer: ${appName}…`, "info")
+    notify(`Membuka ${appName}...`, "info")
   }
 
   useEffect(() => {
@@ -253,7 +254,7 @@ export default function AppsView() {
               className={cx(
                 "rounded-full px-2.5 py-0.5 font-medium transition cursor-pointer",
                 filter === "all"
-                  ? "bg-ink text-sheet font-semibold shadow-xs"
+                  ? "bg-ink text-surface font-semibold shadow-xs"
                   : "bg-surface text-ink-subtle hover:text-ink",
               )}
             >
@@ -324,7 +325,7 @@ export default function AppsView() {
                   placeholder={t("app_name_ph", "e.g. Jellyfin, Portainer, Nextcloud")}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-md border border-ink-subtle/20 bg-sheet px-2.5 py-1 text-micro text-ink placeholder:text-ink-faint focus:border-info-ink focus:outline-none"
+                  className="w-full rounded-md border border-ink-subtle/20 bg-surface-sunken px-2.5 py-1 text-micro text-ink placeholder:text-ink-faint focus:border-info-ink focus:outline-none"
                   autoFocus
                 />
               </div>
@@ -335,7 +336,7 @@ export default function AppsView() {
                   placeholder={t("app_url_ph", "e.g. http://<server-ip>:8096 or https://app.domain.com")}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  className="w-full rounded-md border border-ink-subtle/20 bg-sheet px-2.5 py-1 text-micro text-ink placeholder:text-ink-faint focus:border-info-ink focus:outline-none"
+                  className="w-full rounded-md border border-ink-subtle/20 bg-surface-sunken px-2.5 py-1 text-micro text-ink placeholder:text-ink-faint focus:border-info-ink focus:outline-none"
                 />
               </div>
               <div className="mt-1 flex items-center justify-end gap-2">
@@ -548,6 +549,7 @@ export default function AppsView() {
       </ViewBody>
 
       <FooterStatus
+        showNoticePill={false}
         title="ZimaOS Docker"
         chips={
           <>

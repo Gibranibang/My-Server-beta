@@ -66,6 +66,7 @@ export interface Settings {
   fileManagerClickTarget?: "explorer" | "zimaos"
   language?: "en" | "id"
   dpapiActive?: boolean
+  theme?: "dark" | "light"
 }
 
 export type ChecklistKey = "lan" | "bios" | "standby"
@@ -123,6 +124,7 @@ export interface ServerDetails {
   appChannel?: string
   fullVersion?: string
   dpapiActive?: boolean
+  theme?: "dark" | "light"
 }
 
 export interface WebApp {
@@ -230,4 +232,11 @@ export interface SyncthingConfigData {
     wan_port?: string
     wan_https?: boolean
   }
+}
+
+export interface NoticeHistoryItem {
+  id: number
+  text: string
+  tone: Tone
+  timeStr: string
 }

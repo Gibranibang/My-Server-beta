@@ -2,6 +2,16 @@ export type Language = "en" | "id"
 
 export const I18N = {
   en: {
+    // v4.0.0 Dark Mode & Notification Center
+    theme_label: "Appearance Theme",
+    theme_dark: "Dark (Obsidian Console)",
+    theme_light: "Light (Classic Silver)",
+    theme_desc: "Choose between dark hardware console or light silver theme",
+    notif_center_title: "Notification Log",
+    notif_center_sub: "Real-time companion and server activity history",
+    notif_clear_btn: "Clear History",
+    notif_empty: "No notifications logged in this session",
+    notif_ticker_idle: "Notifikasi...",
     // Navigation & TrayDock
     nav_home: "Home",
     nav_files: "Storage",
@@ -539,6 +549,16 @@ export const I18N = {
 
   },
   id: {
+    // v4.0.0 Dark Mode & Notification Center
+    theme_label: "Tema Tampilan",
+    theme_dark: "Gelap (Obsidian Console)",
+    theme_light: "Terang (Classic Silver)",
+    theme_desc: "Pilih antara tema konsol perangkat keras gelap atau perak terang",
+    notif_center_title: "Riwayat Notifikasi",
+    notif_center_sub: "Catatan aktivitas companion dan server berjalan",
+    notif_clear_btn: "Bersihkan Riwayat",
+    notif_empty: "Belum ada notifikasi pada sesi ini",
+    notif_ticker_idle: "Notifikasi...",
     // Navigation & TrayDock
     nav_home: "Beranda",
     nav_files: "Berkas",

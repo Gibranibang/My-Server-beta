@@ -1,5 +1,5 @@
 import type { Drive, Metrics, PowerState, Settings, ServerDetails, WebApp, SyncthingFullStatus, SyncthingFolderTask, SyncthingConfigData } from "./types"
-import { APP_VERSION } from "./version"
+import { APP_VERSION, APP_CHANNEL } from "./version"
 
 /**
  * The only boundary between the UI and the real server/OS.
@@ -189,7 +189,8 @@ export const DEFAULT_SETTINGS: Settings = {
   showTraffic: true,
   autoOpenMiniTray: true,
   fileManagerClickTarget: "explorer",
-  language: "en",
+  language: "id",
+  theme: "dark",
 }
 
 const MOCK_DRIVES: Drive[] = [
@@ -376,6 +377,8 @@ export function createMockApi(): CompanionApi {
         profiles: ["Admin", "Guest"],
         uptimeStr: "14h 22m",
         isAdmin: true,
+        appVersion: APP_VERSION,
+        appChannel: APP_CHANNEL,
       }
     },
     async switchRoute(routeId) {

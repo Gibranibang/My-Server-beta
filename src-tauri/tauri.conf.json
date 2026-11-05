@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "MyServer-Beta",
-  "version": "3.12.1",
+  "version": "4.0.6",
   "identifier": "com.algithaproject.myserver.companion.beta",
   "build": {
     "frontendDist": "../MyServer Desktop Companion UI/dist"

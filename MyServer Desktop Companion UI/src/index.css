@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Birthstone&family=Doto:wght@900&family=Montserrat:ital,wght@1,600&display=swap');
 @import 'tailwindcss';
+@import './companion/styles/crt-cards.css';
 
 /*
  * Figma-imported faces, declared exactly as returned by `figma fonts resolve`. Families contain a colon, so
@@ -15,10 +16,38 @@
 }
 
 @font-face {
+  font-family: 'Doto';
+  src: url('./fonts/Doto_ROND.woff2') format('woff2'),
+       url('./fonts/Doto-Black.woff2') format('woff2'),
+       url('./fonts/Doto-Black.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
   font-family: 'Doto:Black';
-  src: url('https://static.figma.com/font/Doto_ROND_wght__1') format('woff2');
+  src: url('./fonts/Doto_ROND.woff2') format('woff2'),
+       url('./fonts/Doto-Black.woff2') format('woff2'),
+       url('https://static.figma.com/font/Doto_ROND_wght__1') format('woff2');
   font-style: normal;
   font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Fredoka One';
+  src: url('./fonts/FredokaOne-Regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Fredoka_One:Regular';
+  src: url('./fonts/FredokaOne-Regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
   font-display: swap;
 }
 
@@ -28,13 +57,6 @@
   font-style: italic;
   font-weight: 600;
   font-display: swap;
-}
-
-:root {
-  --spacing-dock: 84px;
-  --spacing-flyout: 340px;
-  --spacing-companion: 490px;
-  --spacing-companion-w: 440px;
 }
 
 @theme {
@@ -74,69 +96,71 @@
   --color-canvas-muted: #94a3b8;
   --color-canvas-faint: #64748b;
 
-  /* Surfaces */
-  --color-surface: #ffffff;
-  --color-surface-sunken: #f8fafc;
-  --color-surface-muted: #f1f5f9;
-  --color-line: #e2e8f0;
-  --color-line-strong: #cbd5e1;
+  /* Dynamic Surfaces & Inks mapped to CSS Variables */
+  --color-surface: var(--color-surface);
+  --color-surface-sunken: var(--color-surface-sunken);
+  --color-surface-muted: var(--color-surface-muted);
+  --color-line: var(--color-line);
+  --color-line-strong: var(--color-line-strong);
 
-  /* Ink */
-  --color-ink: #1e293b;
-  --color-ink-soft: #334155;
-  --color-ink-muted: #475569;
-  --color-ink-subtle: #64748b;
-  --color-ink-faint: #94a3b8;
+  --color-ink: var(--color-ink);
+  --color-ink-soft: var(--color-ink-soft);
+  --color-ink-muted: var(--color-ink-muted);
+  --color-ink-subtle: var(--color-ink-subtle);
+  --color-ink-faint: var(--color-ink-faint);
 
   /* Brand + semantic */
   --color-brand: #65a30d;
+  --color-brand-ink: #ffffff;
   --color-success: #10b981;
   --color-success-strong: #059669;
   --color-success-bright: #34d399;
-  --color-success-soft: #ecfdf5;
-  --color-success-line: #a7f3d0;
-  --color-success-ink: #047857;
+  --color-success-soft: var(--color-success-soft);
+  --color-success-line: var(--color-success-line);
+  --color-success-ink: var(--color-success-ink);
+
   --color-danger: #ef4444;
   --color-danger-strong: #dc2626;
   --color-danger-bright: #f87171;
-  --color-danger-soft: #fef2f2;
-  --color-danger-line: #fecaca;
-  --color-danger-ink: #b91c1c;
+  --color-danger-soft: var(--color-danger-soft);
+  --color-danger-line: var(--color-danger-line);
+  --color-danger-ink: var(--color-danger-ink);
+
   --color-info: #2563eb;
-  --color-info-soft: #eff6ff;
-  --color-info-line: #bfdbfe;
-  --color-info-ink: #1d4ed8;
+  --color-info-soft: var(--color-info-soft);
+  --color-info-line: var(--color-info-line);
+  --color-info-ink: var(--color-info-ink);
+
   --color-warning: #f59e0b;
-  --color-warning-soft: #fffbeb;
-  --color-warning-line: #fde68a;
-  --color-warning-ink: #b45309;
+  --color-warning-soft: var(--color-warning-soft);
+  --color-warning-line: var(--color-warning-line);
+  --color-warning-ink: var(--color-warning-ink);
+
   --color-violet: #7c3aed;
   --color-violet-soft: #f5f3ff;
 
-  /* Geometry */
-  --spacing-dock: 84px;
-  --spacing-flyout: 340px;
-  --spacing-companion: 490px;
-  --spacing-companion-w: 440px;
+  /* Geometry - Exact Figma 83:292 */
+  --spacing-dock: 70px;
+  --spacing-flyout: 286.26px;
+  --spacing-companion: 412.25px;
+  --spacing-companion-w: 369.36px;
   --container-board: 1480px;
 
-  --radius-dock: 36px;
-  --radius-panel: 32px;
-  --radius-card: 20px;
-  --radius-tile: 16px;
-  --radius-control: 14px;
-  --radius-icon: 10px;
+  --radius-dock: 16px;
+  --radius-panel: 16px;
+  --radius-card: 12px;
+  --radius-tile: 10px;
+  --radius-control: 8px;
+  --radius-icon: 6px;
 
   /* Elevation */
   --shadow-panel:
     0 8px 24px rgb(15 23 42 / 0.06), 0 1px 2px rgb(15 23 42 / 0.04), 0 32px 64px -24px rgb(2 6 23 / 0.55);
-  --shadow-card:
-    inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px -12px rgb(15 23 42 / 0.12);
-  --shadow-card-hover:
-    inset 0 1px 0 rgb(255 255 255 / 0.9), 0 2px 4px rgb(15 23 42 / 0.05), 0 16px 32px -14px rgb(15 23 42 / 0.22);
-  --shadow-tile: inset 0 1px 0 rgb(255 255 255 / 1), 0 1px 2px rgb(15 23 42 / 0.04), 0 6px 12px -8px rgb(15 23 42 / 0.14);
+  --shadow-card: var(--shadow-card);
+  --shadow-card-hover: var(--shadow-card-hover);
+  --shadow-tile: var(--shadow-tile);
   --shadow-footer: 7px 3px 32px -3px rgb(113 180 72 / 0.25), 0 1px 2px rgb(15 23 42 / 0.04);
-  --shadow-control: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 2px rgb(15 23 42 / 0.06);
+  --shadow-control: var(--shadow-control);
   --shadow-success:
     inset 0 1px 0 rgb(255 255 255 / 0.28), inset 0 -1px 0 rgb(4 120 87 / 0.35), 0 8px 18px -8px rgb(16 185 129 / 0.7);
   --shadow-danger:
@@ -199,6 +223,84 @@
       opacity: 0;
     }
   }
+}
+
+/* Light Theme Variables */
+:root, [data-theme="light"] {
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f8fafc;
+  --color-surface-muted: #f1f5f9;
+  --color-line: #e2e8f0;
+  --color-line-strong: #cbd5e1;
+
+  --color-ink: #1e293b;
+  --color-ink-soft: #334155;
+  --color-ink-muted: #475569;
+  --color-ink-subtle: #64748b;
+  --color-ink-faint: #94a3b8;
+
+  --color-header-icon: #3C3C3C;
+  --color-header-icon-hover: rgba(0, 0, 0, 0.06);
+
+  --color-success-soft: #ecfdf5;
+  --color-success-line: #a7f3d0;
+  --color-success-ink: #047857;
+
+  --color-danger-soft: #fef2f2;
+  --color-danger-line: #fecaca;
+  --color-danger-ink: #b91c1c;
+
+  --color-info-soft: #eff6ff;
+  --color-info-line: #bfdbfe;
+  --color-info-ink: #1d4ed8;
+
+  --color-warning-soft: #fffbeb;
+  --color-warning-line: #fde68a;
+  --color-warning-ink: #b45309;
+
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px -12px rgb(15 23 42 / 0.12);
+  --shadow-card-hover: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 2px 4px rgb(15 23 42 / 0.05), 0 16px 32px -14px rgb(15 23 42 / 0.22);
+  --shadow-tile: inset 0 1px 0 rgb(255 255 255 / 1), 0 1px 2px rgb(15 23 42 / 0.04), 0 6px 12px -8px rgb(15 23 42 / 0.14);
+  --shadow-control: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 2px rgb(15 23 42 / 0.06);
+}
+
+/* Dark Theme Variables */
+[data-theme="dark"], :root[data-theme="dark"] {
+  --color-surface: #11140C;
+  --color-surface-sunken: #0D100B;
+  --color-surface-muted: #181D12;
+  --color-line: #262626;
+  --color-line-strong: #3A3A3A;
+
+  --color-ink: #F8FAFC;
+  --color-ink-soft: #E2E8F0;
+  --color-ink-muted: #94A3B8;
+  --color-ink-subtle: #64748B;
+  --color-ink-faint: #475569;
+
+  --color-header-icon: #FFFFFF;
+  --color-header-icon-hover: rgba(255, 255, 255, 0.12);
+
+  --color-success-soft: rgba(16, 185, 129, 0.16);
+  --color-success-line: rgba(16, 185, 129, 0.35);
+  --color-success-ink: #34d399;
+
+  --color-danger-soft: rgba(239, 68, 68, 0.16);
+  --color-danger-line: rgba(239, 68, 68, 0.35);
+  --color-danger-ink: #f87171;
+
+  --color-info-soft: rgba(37, 99, 235, 0.16);
+  --color-info-line: rgba(37, 99, 235, 0.35);
+  --color-info-ink: #60a5fa;
+
+  --color-warning-soft: rgba(245, 158, 11, 0.16);
+  --color-warning-line: rgba(245, 158, 11, 0.35);
+  --color-warning-ink: #fbbf24;
+
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 1px 3px 0 rgb(0 0 0 / 0.5);
+  --shadow-card-hover: inset 0 1px 0 rgb(255 255 255 / 0.14), 0 4px 8px -1px rgb(0 0 0 / 0.6);
+  --shadow-tile: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --shadow-control: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 1px 2px rgb(0 0 0 / 0.4);
 }
 
 @layer base {
@@ -264,7 +366,99 @@
   mask-image: radial-gradient(ellipse at 50% 20%, #000 25%, transparent 72%);
 }
 
-/* Small screens: scale the fixed-geometry companion instead of breaking its native proportions. */
+/* Fixed-geometry companion 370x412 native proportions */
 @utility companion-fit {
-  zoom: 0.84;
+  width: 370px;
+  height: 412px;
 }
+
+@utility lcd-led-text {
+  background: linear-gradient(180deg, #7BC504 0%, #FBEE75 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@utility metal-housing {
+  background: radial-gradient(ellipse at center, #E2E2E2 0%, #ABABAB 100%);
+  border: 1px solid #DDDDDD;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.16);
+}
+
+@utility lcd-recessed {
+  background: #1B1B1B;
+  border: 1px solid #000000;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  border-bottom-left-radius: 0px;
+  border-bottom-right-radius: 0px;
+  box-shadow: inset 4px 4px 6px 0px rgba(255, 255, 255, 0.25);
+}
+
+@utility tactile-pill-3d {
+  background: #FFFFFF;
+  border: 1px solid #DDDDDD;
+  border-radius: 9999px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15), inset 2px 2px 3px rgba(255, 255, 255, 0.85), inset -1px -1px 2px rgba(0, 0, 0, 0.15);
+}
+
+/* ==============================================================
+   v4.0.4 — Pill notifikasi footer: teks berjalan (marquee) & lonceng
+   Loop mulus: teks keluar penuh ke kiri, layar hitam jeda sejenak,
+   baru mengulang putaran ke-2, lalu transisi halus ke angka badge.
+   ============================================================== */
+@keyframes notif-pill-marquee {
+  0% {
+    transform: translateX(25px);
+    opacity: 0;
+  }
+  3% {
+    transform: translateX(25px);
+    opacity: 1;
+  }
+  75% {
+    transform: translateX(-100%);
+    opacity: 1;
+  }
+  80% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(25px);
+    opacity: 0;
+  }
+}
+.notif-pill-marquee {
+  animation-name: notif-pill-marquee;
+  animation-timing-function: linear;
+  will-change: transform, opacity;
+}
+
+@keyframes notif-bell-ring {
+  0%, 60%, 100% { transform: rotate(0deg); }
+  66% { transform: rotate(-14deg); }
+  72% { transform: rotate(12deg); }
+  78% { transform: rotate(-9deg); }
+  84% { transform: rotate(6deg); }
+  90% { transform: rotate(0deg); }
+}
+.notif-bell-ring {
+  transform-origin: 50% 20%;
+  animation: notif-bell-ring 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notif-pill-marquee,
+  .notif-bell-ring {
+    animation: none;
+  }
+}
+
+/* Card Badge Title in Doto Black (v4.0.2) */
+.card-title-text {
+  font-family: 'Doto', 'Doto:Black', monospace;
+  font-weight: 900;
+  font-variation-settings: 'ROND' 0;
+  dominant-baseline: central;
+}
+

@@ -4,7 +4,15 @@ import { CompanionStoreProvider } from "./companion/store"
 import type { ViewId } from "./companion/types"
 
 export default function CompanionApp() {
-  const [view, setView] = useState<ViewId>("home")
+  const [view, setView] = useState<ViewId>(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search).get("view") as ViewId
+      if (p && ["home", "files", "backup", "apps", "settings", "server", "power"].includes(p)) {
+        return p
+      }
+    }
+    return "home"
+  })
 
   useEffect(() => {
     const handleResetHome = () => setView("home")
@@ -23,7 +31,7 @@ export default function CompanionApp() {
 
   return (
     <CompanionStoreProvider>
-      <div className="flex h-full w-full items-center justify-center p-0 select-none overflow-hidden bg-transparent">
+      <div className="flex h-full w-full items-start justify-start p-0 select-none overflow-hidden bg-transparent">
         <Companion view={view} onViewChange={setView} />
       </div>
     </CompanionStoreProvider>

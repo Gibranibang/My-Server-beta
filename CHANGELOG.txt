@@ -1,4 +1,15 @@
 ===================================================
+[v4.0.6 - Beta] - 2026-11-05
+Catatan:
+1. Restorasi Menyeluruh Animasi CRT Suite (1:1 v4.0.0 Standard): Memulihkan seluruh efek elektronik CRT retro pada 4 kartu utama (Backup, File Manager, Apps, Options) mencakup Fine Scanlines Mesh, 60Hz Ground AC Hum Bar, Tube Warmth Flicker, dan V-Sync Tracking Line Flash.
+2. Eliminasi Screen Tearing File Manager Card: Memperbaiki nesting DOM pada FILES_SVG dengan memindahkan background monitor hitam (#1B1B1B) ke luar grup .crt-glitch-content, mengeliminasi robeknya layar saat di-hover sehingga hanya piksel matriks hijau yang bergetar secara presisi.
+3. Rekonstruksi V-Sync Tracking Band Flash: Mengembalikan elemen .crt-tracking-band ke spesifikasi asli (garis fosfor hijau #86efac 3px dengan opacity awal 0), memulihkan animasi kilatan tracking horizontal saat kartu di-hover.
+4. Isolasi Namespace Defs SVG (Zero ID Collision): Mengalokasikan ID defs unik per kartu (crt-scanlines-backup/files/apps/options, crt-vignette, crt-hum-grad) untuk mencegah tabrakan ID pada DOM HTML dan memastikan koordinat gradien akurat 100%.
+5. Transform-Box Fill-Box & Elevasi Natural: Menambahkan transform-box: fill-box pada kelompok glitch SVG dan mengembalikan bayangan skeuomorfik natural v4.0.0 (drop-shadow 10px 20px rgba(0,0,0,0.40)) saat hover.
+6. Sinkronisasi Versi Atomik v4.0.6: Memperbarui seluruh konstanta versi aplikasi (version.ts, core service, biner PE metadata, Inno Setup, dan Tauri manifest).
+===================================================
+
+===================================================
 [v3.12.0 - Beta] - 2026-11-01
 Catatan:
 1. GitHub Releases API Update Checker: Menghubungkan pemeriksaan versi otomatis aplikasi ke repositori resmi GitHub (Gibranibang/My-Server-beta) secara real-time dengan semantic versioning comparison.

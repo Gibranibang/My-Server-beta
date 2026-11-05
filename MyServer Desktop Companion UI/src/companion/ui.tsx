@@ -30,12 +30,11 @@ export function IconButton({
       title={label}
       onClick={onClick}
       className={cx(
-        "inline-flex size-7 items-center justify-center rounded-full text-ink-muted transition-colors duration-150 hover:bg-surface-muted hover:text-ink active:bg-line",
-        focusRing,
+        "inline-flex size-[23.51px] items-center justify-center rounded-full text-[var(--color-header-icon)] transition-colors duration-150 hover:bg-[var(--color-header-icon-hover)] active:opacity-75 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-header-icon)]/40",
         className,
       )}
     >
-      <Icon className="size-4" strokeWidth={2} aria-hidden />
+      <Icon className="size-[13.44px] shrink-0" strokeWidth={1.12} aria-hidden />
     </button>
   )
 }

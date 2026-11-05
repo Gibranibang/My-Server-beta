@@ -8,7 +8,7 @@
 
 #define MyAppName "My-Server by algitha BETA"
 
-#define MyAppVersion "3.12.1"
+#define MyAppVersion "4.0.6"
 
 #define MyAppPublisher "Algitha Project"
 
@@ -42,7 +42,7 @@ AllowNoIcons=yes
 
 OutputDir=dist
 
-OutputBaseFilename=MyServer-v3.12.1-Beta-Setup
+OutputBaseFilename=MyServer-v4.0.6-Beta-Setup
 
 SetupIconFile=app_icon.ico
 
@@ -90,7 +90,7 @@ Source: "dist\staging_payload\*"; DestDir: "{app}"; Flags: ignoreversion recurse
 
 ; Lindungi config.json agar tidak pernah tertimpa saat update / reinstall
 
-Source: "dist\staging_payload\config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "dist\staging_payload\config.json"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
 
 
 

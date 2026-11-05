@@ -366,7 +366,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "3.12.1"
+APP_VERSION_NUMBER = "4.0.6"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -21267,102 +21267,20 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
         if path in ("/api/open_dashboard", "/api/open_url", "/api/open_app_window"):
-
-
-
-
-
-
-
+            srv = None
+            cfg = config_manager.load_or_create_config()
+            srv = config_manager.get_active_server(cfg)
             target_url = (body.get("url") or body.get("arg") or "").strip()
-
-
-
-
-
-
-
             win_title = (body.get("title") or "").strip()
-
-
-
-
-
-
-
             if not target_url or target_url == "server" or "127.0.0.1" in target_url:
-
-
-
-
-
-
-
-                cfg = config_manager.load_or_create_config()
-
-
-
-
-
-
-
-                srv = config_manager.get_active_server(cfg)
-
-
-
-
-
-
-
                 target_url, _ = get_active_resolved_route(cfg)
-
-
-
-
-
-
-
                 if not win_title and srv:
-
-
-
-
-
-
-
                     win_title = f"{srv.get('name', 'MyServer')} Dashboard"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            elif not win_title:
+                win_title = "MyServer Web App"
             if target_url:
-
-
-
-
-
-
-
                 srv_id = srv.get("id") if srv else None
                 success, msg = spawn_app_window(target_url, win_title, server_id=srv_id)
-
-
-
-
-
-
-
                 self._send_json({"success": success, "message": msg, "url": target_url, "title": win_title})
 
 
@@ -27704,6 +27622,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                         cfg["language"] = lang_val
+                if "theme" in settings:
+                    theme_val = str(settings["theme"]).lower().strip()
+                    if theme_val in ("dark", "light"):
+                        cfg["theme"] = theme_val
 
 
 
@@ -31724,7 +31646,6 @@ if __name__ == "__main__":
 
 
     start_server(args.port, args.parent_pid)
-
 
 
 

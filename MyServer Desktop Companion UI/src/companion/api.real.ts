@@ -1,5 +1,5 @@
 import type { CompanionApi, UpdateInfo } from "./api"
-import { APP_VERSION } from "./version"
+import { APP_VERSION, APP_CHANNEL } from "./version"
 
 import { setServerIp, setServerUrl, setDefaultMac, DEFAULT_SETTINGS } from "./api"
 
@@ -869,26 +869,25 @@ export function createRealApi(): CompanionApi {
     },
 
     async openUrl(url: string, title?: string) {
-      // Zima Client v2.3.5 probeDashboard check: Verifikasi target sebelum membuka jendela
+      // Zima Client v2.3.5 probeDashboard check: Verifikasi target tanpa memblokir pembukaan
       try {
         const probe = await this.probeUrl(url)
         if (probe && probe.reachable === false) {
-          throw new Error(`Target tidak dapat dijangkau (${probe.error || 'Server/Port Offline'}).`)
+          console.warn(`[RealApi] Probe check: target port offline/closed (${probe.error || 'Offline'}), melanjutkan peluncuran jendela...`)
         }
       } catch (err: any) {
-        if (err.message && err.message.includes("tidak dapat dijangkau")) {
-          throw err
-        }
         console.warn('[RealApi] Probe check warning:', err)
       }
 
+      let launched = false
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
           await invoke('open_app_window', { url, title: title || '' })
+          launched = true
           return
         } catch (err) {
-          console.warn('[RealApi] Tauri open_app_window error:', err)
+          console.warn('[RealApi] Tauri open_app_window error, mencoba fallback core API:', err)
         }
       }
 
@@ -896,11 +895,21 @@ export function createRealApi(): CompanionApi {
         const api = await getPyApi()
         if (api && api.open_app_window) {
           await api.open_app_window({ url, title: title || '' })
+          launched = true
         } else if (api && api.open_url) {
           await api.open_url({ url, title: title || '' })
+          launched = true
         }
       } catch (err) {
-        console.warn('[RealApi] openUrl error:', err)
+        console.warn('[RealApi] Python API open_app_window error:', err)
+      }
+
+      if (!launched) {
+        try {
+          await this.openExternalBrowser(url)
+        } catch (browserErr) {
+          console.warn('[RealApi] Fallback browser error:', browserErr)
+        }
       }
     },
 
@@ -1184,6 +1193,8 @@ export function createRealApi(): CompanionApi {
             return {
               ...details,
               isAdmin: Boolean(details.isAdmin || currentMetrics.isAdmin),
+              appVersion: details.appVersion || APP_VERSION,
+              appChannel: details.appChannel || APP_CHANNEL,
             }
           }
 
@@ -1210,6 +1221,8 @@ export function createRealApi(): CompanionApi {
         uptimeStr: "–",
 
         isAdmin: false,
+        appVersion: APP_VERSION,
+        appChannel: APP_CHANNEL,
 
       }
 

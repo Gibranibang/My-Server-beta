@@ -1,10 +1,12 @@
-import { useState, Component, type ComponentType, type ErrorInfo, type ReactNode } from "react"
+import { useState, useEffect, Component, type ComponentType, type ErrorInfo, type ReactNode } from "react"
 import {
   ArrowLeft,
   ExternalLink,
   Minus,
+  Moon,
   PanelTopOpen,
   Power,
+  Sun,
   X,
 } from "lucide-react"
 import FlyoutShell, { FlyoutHeader, HeaderTitle } from "./FlyoutShell"
@@ -22,8 +24,6 @@ import SettingsView from "./views/SettingsView"
 import ServerView from "./views/ServerView"
 import type { ViewProps } from "./views/shared"
 import { getCompanionApi } from "./api"
-
-
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -169,11 +169,43 @@ function CompanionFrame({
   onViewChange: (view: ViewId) => void
 }) {
   const api = getCompanionApi()
-  const { settings } = useCompanion()
+  const { settings, setSetting } = useCompanion()
   const t = getTranslation(settings?.language)
+  const isId = settings?.language === "id"
+  const activeTheme = settings?.theme === "light" ? "light" : "dark"
   const [windowState, setWindowState] = useState<WindowState>("open")
   const { notify } = useNotice()
   const open = windowState === "open"
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", activeTheme)
+  }, [activeTheme])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const testNotif = params.get("testNotif")
+    if (testNotif) {
+      const timer = setTimeout(() => {
+        notify(decodeURIComponent(testNotif), "info")
+      }, 600)
+      return () => clearTimeout(timer)
+    }
+  }, [notify])
+
+  const toggleTheme = () => {
+    const next = activeTheme === "dark" ? "light" : "dark"
+    void setSetting("theme", next)
+    try {
+      localStorage.setItem("myserver_theme", next)
+      document.documentElement.setAttribute("data-theme", next)
+    } catch {}
+    notify(
+      next === "dark"
+        ? (isId ? "Tema Gelap diaktifkan" : "Dark theme activated")
+        : (isId ? "Tema Terang diaktifkan" : "Light theme activated"),
+      "neutral"
+    )
+  }
 
   const go = (next: ViewId) => {
     onViewChange(next)
@@ -182,6 +214,15 @@ function CompanionFrame({
 
   const windowControls = (
     <>
+      <IconButton
+        icon={activeTheme === "dark" ? Sun : Moon}
+        label={
+          activeTheme === "dark"
+            ? (isId ? "Ganti ke Tema Terang" : "Switch to Light Mode")
+            : (isId ? "Ganti ke Tema Gelap" : "Switch to Dark Mode")
+        }
+        onClick={toggleTheme}
+      />
       <IconButton
         icon={Minus}
         label={t("nav_minimize", "Minimize")}
@@ -255,7 +296,10 @@ function CompanionFrame({
   const View = VIEWS[view]
 
   return (
-    <div className="flex items-stretch gap-4 companion-fit rounded-2xl bg-surface overflow-hidden">
+    <div
+      data-theme={activeTheme}
+      className="flex items-start gap-[13.1px] companion-fit bg-[#0E100A] data-[theme=light]:bg-white rounded-[16px] overflow-hidden select-none border border-[#262626] data-[theme=light]:border-[#E2E8F0] shadow-2xl p-0"
+    >
       {open ? (
         <>
           <TrayDock powerActive={view === "power"} onNavigate={go} />

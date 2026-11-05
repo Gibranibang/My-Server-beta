@@ -17,6 +17,7 @@ import {
 } from "./api"
 import type {
   ChecklistKey,
+  NoticeHistoryItem,
   Drive,
   Metrics,
   TransitionState,
@@ -94,7 +95,20 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
   const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS)
   const [power, setPower] = useState<PowerState>("online")
   const [drives, setDrives] = useState<Drive[]>([])
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  const [settings, setSettings] = useState<Settings>(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search)
+      const qTheme = urlParams.get("theme")
+      if (qTheme === "dark" || qTheme === "light") {
+        return { ...DEFAULT_SETTINGS, theme: qTheme }
+      }
+      const cached = localStorage.getItem("myserver_theme")
+      if (cached === "dark" || cached === "light") {
+        return { ...DEFAULT_SETTINGS, theme: cached }
+      }
+    } catch {}
+    return DEFAULT_SETTINGS
+  })
   const [syncRequests, setSyncRequests] = useState(0)
   const [transitionState, setTransitionState] = useState<TransitionState>({ active: false, title: "" })
   const [isInitialLoading, setIsInitialLoading] = useState(true)
@@ -235,12 +249,81 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         setMonitoringLoading(false)
       }
     })
+    let prevPowerState: string | null = null
     const offPower = api.subscribePower((p) => {
       setPower(p)
       if (p === "offline" || p === "online") {
         setMonitoringLoading(false)
       }
+      if (prevPowerState !== null && p !== prevPowerState) {
+        if (p === "connecting") {
+          window.dispatchEvent(new CustomEvent("myserver:notify", {
+            detail: { text: "Menghubungkan ke server...", tone: "warning" }
+          }))
+        } else if (p === "online") {
+          window.dispatchEvent(new CustomEvent("myserver:notify", {
+            detail: { text: "Terhubung ke server", tone: "success" }
+          }))
+        } else if (p === "offline") {
+          window.dispatchEvent(new CustomEvent("myserver:notify", {
+            detail: { text: "Koneksi Terputus", tone: "danger" }
+          }))
+        }
+      }
+      prevPowerState = p
     })
+
+    // Monitoring notifikasi berkala: Syncthing milestones (25%, 50%, 90%, 100%) & perubahan rute
+    const lastMilestones = new Map<string, Set<number>>()
+    let prevActiveRouteId: string | null = null
+
+    const checkMilestonesAndRoutes = async () => {
+      try {
+        if (api.getSyncthingTasks) {
+          const tasks = await api.getSyncthingTasks()
+          if (Array.isArray(tasks)) {
+            for (const task of tasks) {
+              if (task.paused) continue
+              const comp = Math.round(task.completion || 0)
+              let triggered = lastMilestones.get(task.id)
+              if (!triggered) {
+                triggered = new Set<number>()
+                lastMilestones.set(task.id, triggered)
+              }
+              if (comp < 20) {
+                triggered.clear()
+              }
+              for (const m of [25, 50, 90, 100]) {
+                if (comp >= m && !triggered.has(m)) {
+                  triggered.add(m)
+                  const text = m === 100
+                    ? `Syncthing '${task.label || task.id}': 100% Selesai`
+                    : `Syncthing '${task.label || task.id}': ${m}%`
+                  window.dispatchEvent(new CustomEvent("myserver:notify", {
+                    detail: { text, tone: m === 100 ? "success" : "info" }
+                  }))
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+
+      try {
+        const details = await api.getServerDetails()
+        const activeRoute = details?.routes?.find((r: any) => r.active)
+        const currentId = activeRoute?.id || (activeRoute?.url ?? null)
+        if (prevActiveRouteId !== null && currentId && currentId !== prevActiveRouteId) {
+          const routeName = activeRoute?.name || activeRoute?.url || "Rute Baru"
+          window.dispatchEvent(new CustomEvent("myserver:notify", {
+            detail: { text: `Status Rute: Terhubung (${routeName})`, tone: "success" }
+          }))
+        }
+        if (currentId) prevActiveRouteId = currentId
+      } catch {}
+    }
+
+    const milestoneInterval = setInterval(checkMilestonesAndRoutes, 4000)
     void api.getPendingSyncRequests().then(setSyncRequests)
     const appsInterval = setInterval(() => {
       void refreshWebApps()
@@ -270,7 +353,24 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     Promise.allSettled([
       api.getServerDetails().then(syncDetailsAndMac),
       api.listDrives().then(setDrives),
-      api.loadSettings().then(setSettings),
+      api.loadSettings().then((loaded) => {
+        let effective = loaded
+        try {
+          const urlParams = new URLSearchParams(window.location.search)
+          const qTheme = urlParams.get("theme")
+          if (qTheme === "dark" || qTheme === "light") {
+            effective = { ...loaded, theme: qTheme as any }
+          } else {
+            const cached = localStorage.getItem("myserver_theme")
+            if (cached && (!loaded || !loaded.theme)) {
+              effective = { ...loaded, theme: cached as any }
+            } else if (loaded?.theme) {
+              localStorage.setItem("myserver_theme", loaded.theme)
+            }
+          }
+        } catch {}
+        setSettings(effective)
+      }),
       refreshWebApps(),
     ]).finally(() => {
       const elapsed = Date.now() - coldStartBegin
@@ -305,6 +405,7 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       offMetrics()
       offPower()
       clearInterval(appsInterval)
+      clearInterval(milestoneInterval)
       clearTimeout(monitoringFallbackTimer)
       window.removeEventListener("myserver:refresh", onStoreRefresh)
     }
@@ -326,6 +427,12 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       setSetting: async (key, v) => {
         const previous = settings
         const next = { ...settings, [key]: v }
+        if (key === "theme") {
+          try {
+            localStorage.setItem("myserver_theme", String(v))
+            document.documentElement.setAttribute("data-theme", String(v))
+          } catch {}
+        }
         setSettings(next)
         try {
           await api.saveSettings(next)
@@ -414,9 +521,9 @@ const POWER_STATUS: Record<PowerState, PowerStatus> = {
   offline: { tone: "neutral", label: "Offline" },
 }
 
-export function usePowerStatus() {
-  const { power } = useCompanion()
-  return POWER_STATUS[power]
+export function usePowerStatus(): PowerStatus {
+  const { power, isOnline } = useCompanion()
+  return POWER_STATUS[power] || (isOnline ? { tone: "success", label: "Online" } : { tone: "neutral", label: "Offline" })
 }
 
 /** Runs an API task: idle → busy → done → idle. Failures surface as a danger toast. */
@@ -468,22 +575,45 @@ interface Notice {
 const NoticeContext = createContext<{
   notice: Notice | null
   notify: (text: string, tone?: Tone) => void
+  noticeHistory: NoticeHistoryItem[]
+  clearNoticeHistory: () => void
 } | null>(null)
 
 /** Per-companion transient notices, so a toast appears only in the flyout that triggered it. */
 export function NoticeProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [noticeHistory, setNoticeHistory] = useState<NoticeHistoryItem[]>([])
   const timer = useRef<number | undefined>(undefined)
 
-  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const clearNoticeHistory = useCallback(() => {
+    setNoticeHistory([])
+  }, [])
 
   const notify = useCallback((text: string, tone: Tone = "success") => {
     window.clearTimeout(timer.current)
-    setNotice({ id: Date.now(), text, tone })
-    timer.current = window.setTimeout(() => setNotice(null), 2600)
+    const id = Date.now()
+    const d = new Date()
+    const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`
+    setNotice({ id, text, tone })
+    setNoticeHistory((prev) => [{ id, text, tone, timeStr }, ...prev.slice(0, 49)])
+    timer.current = window.setTimeout(() => setNotice(null), 3200)
   }, [])
 
-  const value = useMemo(() => ({ notice, notify }), [notice, notify])
+  useEffect(() => {
+    const handleCustomNotify = (e: Event) => {
+      const ce = e as CustomEvent<{ text: string; tone?: Tone }>
+      if (ce.detail?.text) {
+        notify(ce.detail.text, ce.detail.tone)
+      }
+    }
+    window.addEventListener("myserver:notify", handleCustomNotify)
+    return () => {
+      window.removeEventListener("myserver:notify", handleCustomNotify)
+      window.clearTimeout(timer.current)
+    }
+  }, [notify])
+
+  const value = useMemo(() => ({ notice, notify, noticeHistory, clearNoticeHistory }), [notice, notify, noticeHistory, clearNoticeHistory])
   return (
     <NoticeContext.Provider value={value}>{children}</NoticeContext.Provider>
   )

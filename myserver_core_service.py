@@ -27768,9 +27768,14 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     self._send_json(res)
                     return
                 else:
-                    DETACHED_PROCESS = 0x00000008
-                    CREATE_NEW_PROCESS_GROUP = 0x00000200
-                    subprocess.Popen([temp_file], cwd=os.path.dirname(temp_file), creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                    # Gunakan os.startfile agar installer berjalan mandiri di bawah Windows Shell (Explorer),
+                    # sehingga bebas dari pohon proses myserver-core dan tidak terimbas pematian proses.
+                    try:
+                        os.startfile(temp_file)
+                    except Exception:
+                        DETACHED_PROCESS = 0x00000008
+                        CREATE_NEW_PROCESS_GROUP = 0x00000200
+                        subprocess.Popen([temp_file], cwd=os.path.dirname(temp_file), creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
                     self._send_json({"success": True, "installerLaunched": True, "message": "Installer pembaruan berhasil diluncurkan. Ikuti petunjuk instalasi untuk menyelesaikan pembaruan."})
                     return
             except Exception as e:

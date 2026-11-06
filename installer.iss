@@ -124,7 +124,7 @@ procedure KillRunningAppProcesses();
 var
   ResultCode: Integer;
 begin
-  Exec(AddBackslash(ExpandConstant('{sys}')) + 'taskkill.exe', '/F /T /IM MyServer-Beta.exe /IM MyServer.exe /IM myserver-core.exe /IM syncthing.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(AddBackslash(ExpandConstant('{sys}')) + 'taskkill.exe', '/F /IM MyServer-Beta.exe /IM MyServer.exe /IM myserver-core.exe /IM syncthing.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1500);
 end;
 

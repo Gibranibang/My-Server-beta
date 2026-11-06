@@ -23453,22 +23453,12 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
             args = body.get("args") or []
-
-
-
-
-
-
-
-            name = (body.get("name") or (args[0] if len(args) > 0 else "") or body.get("arg") or "").strip()
-
-
-
-
-
-
-
-            url = (body.get("url") or (args[1] if len(args) > 1 else "") or "").strip()
+            if len(args) >= 2:
+                name = str(args[0]).strip()
+                url = str(args[1]).strip()
+            else:
+                name = (body.get("name") or (args[0] if len(args) > 0 else "") or body.get("arg") or "").strip()
+                url = (body.get("url") or (args[1] if len(args) > 1 else "") or "").strip()
 
 
 

@@ -105,7 +105,9 @@ async function getPyApi(): Promise<any> {
 
               args: args,
 
-              url: args[0],
+              name: args[0],
+
+              url: args.length > 1 ? args[1] : args[0],
 
               serverId: args[0],
 
@@ -1306,7 +1308,7 @@ export function createRealApi(): CompanionApi {
 
         if (api && api.add_web_app) {
 
-          const list = await api.add_web_app(name, url)
+          const list = await api.add_web_app({ name, url, args: [name, url] })
 
           if (Array.isArray(list)) return list
 

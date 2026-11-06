@@ -1,0 +1,388 @@
+"""
+EasyTier Manager Module for MyServer Desktop Companion (Beta)
+Pengontrol background daemon native EasyTier (easytier-core.exe) dan antarmuka
+telemetri CLI (easytier-cli.exe) berbasis P2P mesh multi-protokol (UDP, TCP, WSS).
+Mengadopsi standar embedded daemon Zima Client v2.3.5 untuk akses remote tanpa blokir firewall.
+"""
+
+import atexit
+import json
+import logging
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+logger = logging.getLogger("EasyTierManager")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] [EasyTierManager] %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+# Default public discovery/relay nodes (fallback jika tidak ada custom relay)
+DEFAULT_RELAY_PEERS = [
+    "wss://39.96.54.49:443/",
+    "wss://106.14.186.206:443/",
+    "tcp://public.easytier.top:11010"
+]
+
+DEFAULT_RPC_PORT = 15888
+
+
+def find_easytier_binaries():
+    """
+    Menemukan lokasi biner easytier-core.exe dan easytier-cli.exe
+    baik di lingkungan development maupun bundle distribusi PyInstaller / Inno Setup.
+    """
+    candidates = []
+
+    # 1. Lokasi PyInstaller temporary folder (_MEIPASS)
+    if hasattr(sys, "_MEIPASS"):
+        candidates.append(os.path.join(sys._MEIPASS, "resources", "deps", "easytier", "win32", "x64"))
+
+    # 2. Lokasi direktori executable (misal D:\Softwares\MyServer atau D:\Projek\MyServer\Beta\dist)
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    candidates.append(os.path.join(exe_dir, "resources", "deps", "easytier", "win32", "x64"))
+    candidates.append(os.path.join(exe_dir, "easytier"))
+
+    # 3. Lokasi direktori script saat ini (D:\Projek\MyServer\Beta)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(base_dir, "resources", "deps", "easytier", "win32", "x64"))
+    candidates.append(os.path.join(base_dir, "dist", "resources", "deps", "easytier", "win32", "x64"))
+
+    for c in candidates:
+        core_exe = os.path.join(c, "easytier-core.exe")
+        cli_exe = os.path.join(c, "easytier-cli.exe")
+        if os.path.exists(core_exe) and os.path.exists(cli_exe):
+            return {
+                "base_dir": c,
+                "core_path": core_exe,
+                "cli_path": cli_exe,
+                "wintun_path": os.path.join(c, "wintun.dll")
+            }
+
+    return None
+
+
+class EasyTierManager:
+    """Pengelola siklus hidup daemon EasyTier P2P Mesh."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._proc = None
+        self._network_name = None
+        self._network_secret = None
+        self._ipv4 = None
+        self._rpc_port = DEFAULT_RPC_PORT
+        self._start_time = None
+        self._binaries = find_easytier_binaries()
+
+    def is_available(self):
+        """Memeriksa apakah biner EasyTier tersedia di sistem."""
+        if not self._binaries:
+            self._binaries = find_easytier_binaries()
+        return self._binaries is not None
+
+    def get_binary_info(self):
+        """Mengembalikan path dan versi biner EasyTier."""
+        if not self.is_available():
+            return {"available": False, "version": None, "error": "Biner EasyTier tidak ditemukan."}
+
+        cli_path = self._binaries["cli_path"]
+        try:
+            res = subprocess.run(
+                [cli_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                creationflags=0x08000000 if os.name == "nt" else 0
+            )
+            version_str = res.stdout.strip()
+            return {
+                "available": True,
+                "version": version_str,
+                "core_path": self._binaries["core_path"],
+                "cli_path": cli_path
+            }
+        except Exception as e:
+            return {"available": True, "version": "unknown", "error": str(e)}
+
+    def is_running(self):
+        """Memeriksa apakah daemon EasyTier saat ini aktif."""
+        with self._lock:
+            if self._proc is not None:
+                poll = self._proc.poll()
+                if poll is None:
+                    return True
+                self._proc = None
+            return False
+
+    def start(self, network_name, network_secret, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT):
+        """
+        Meluncurkan daemon easytier-core.exe secara headless di background.
+        """
+        with self._lock:
+            if not self.is_available():
+                return False, "Biner EasyTier tidak ditemukan di resources/deps/easytier."
+
+            if self._proc is not None and self._proc.poll() is None:
+                # Sudah berjalan, jika konfigurasi sama, gunakan yang ada
+                if self._network_name == network_name and self._network_secret == network_secret:
+                    logger.info("EasyTier daemon sudah berjalan dengan konfigurasi yang sama.")
+                    return True, "Daemon sudah aktif."
+                else:
+                    logger.info("Konfigurasi berubah, me-restart EasyTier daemon...")
+                    self._stop_internal()
+
+            # Bersihkan proses yatim jika ada
+            self._kill_orphaned_daemon()
+
+            self._network_name = str(network_name).strip()
+            self._network_secret = str(network_secret).strip()
+            self._ipv4 = str(ipv4).strip() if ipv4 else None
+            self._rpc_port = int(rpc_port)
+
+            core_exe = self._binaries["core_path"]
+            working_dir = self._binaries["base_dir"]
+
+            cmd = [
+                core_exe,
+                "--network-name", self._network_name,
+                "--network-secret", self._network_secret,
+                "-r", f"127.0.0.1:{self._rpc_port}",
+                "--listeners", "wss://0.0.0.0:0", "tcp://0.0.0.0:0", "udp://0.0.0.0:0"
+            ]
+
+            if self._ipv4:
+                cmd.extend(["-i", self._ipv4])
+            else:
+                cmd.extend(["-d", "true"])  # DHCP auto-assign IP
+
+            # Tambahkan relay peers
+            relay_list = list(peers) if peers else DEFAULT_RELAY_PEERS
+            for p in relay_list:
+                clean_p = str(p).strip()
+                if clean_p:
+                    cmd.extend(["-p", clean_p])
+
+            logger.info("Meluncurkan EasyTier Core: %s (network=%s)", core_exe, self._network_name)
+
+            creationflags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+            try:
+                # Log ke file lokal agar tidak membanjiri stdout
+                log_dir = os.path.expandvars(r"%LOCALAPPDATA%\MyServer\logs")
+                os.makedirs(log_dir, exist_ok=True)
+                stdout_log = open(os.path.join(log_dir, "easytier.stdout.log"), "w", encoding="utf-8")
+                stderr_log = open(os.path.join(log_dir, "easytier.stderr.log"), "w", encoding="utf-8")
+
+                self._proc = subprocess.Popen(
+                    cmd,
+                    cwd=working_dir,
+                    stdout=stdout_log,
+                    stderr=stderr_log,
+                    creationflags=creationflags
+                )
+                self._start_time = time.time()
+                time.sleep(0.8)  # Tunggu socket init
+
+                if self._proc.poll() is not None:
+                    return False, f"EasyTier daemon gagal dijalankan (exit code: {self._proc.returncode})"
+
+                logger.info("EasyTier daemon berhasil aktif dengan PID: %d", self._proc.pid)
+                return True, f"EasyTier aktif (PID: {self._proc.pid})"
+            except Exception as e:
+                logger.error("Gagal meluncurkan EasyTier Core: %s", e)
+                return False, str(e)
+
+    def stop(self):
+        """Menghentikan daemon EasyTier dan membersihkan virtual interface."""
+        with self._lock:
+            return self._stop_internal()
+
+    def _stop_internal(self):
+        if self._proc is None:
+            self._kill_orphaned_daemon()
+            return True, "Daemon tidak sedang berjalan."
+
+        pid = self._proc.pid
+        logger.info("Menghentikan EasyTier daemon (PID: %d)...", pid)
+        try:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                logger.warning("EasyTier tidak keluar setelah 3s, melakukan force kill...")
+                self._proc.kill()
+                self._proc.wait(timeout=1.0)
+        except Exception as e:
+            logger.error("Error saat menghentikan daemon: %s", e)
+        finally:
+            self._proc = None
+            self._start_time = None
+
+        self._kill_orphaned_daemon()
+        return True, "EasyTier daemon berhasil dihentikan."
+
+    def _kill_orphaned_daemon(self):
+        """Membunuh proses easytier-core.exe yatim dari sesi sebelumnya jika ada."""
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "easytier-core.exe"],
+                    capture_output=True,
+                    timeout=2,
+                    creationflags=0x08000000
+                )
+            except Exception:
+                pass
+
+    def run_cli(self, args, timeout=3.5):
+        """
+        Menjalankan perintah easytier-cli dengan opsi format JSON.
+        Contoh: run_cli(["peer"]) atau run_cli(["route"])
+        """
+        if not self.is_available():
+            return None, "Biner easytier-cli tidak ditemukan."
+
+        cli_path = self._binaries["cli_path"]
+        cmd = [cli_path, "-p", f"127.0.0.1:{self._rpc_port}", "-o", "json"] + args
+
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                creationflags=0x08000000 if os.name == "nt" else 0
+            )
+            if res.returncode == 0:
+                raw_out = res.stdout.strip()
+                if not raw_out:
+                    return {}, None
+                try:
+                    return json.loads(raw_out), None
+                except json.JSONDecodeError:
+                    return {"raw": raw_out}, None
+            return None, res.stderr.strip() or f"CLI returned code {res.returncode}"
+        except subprocess.TimeoutExpired:
+            return None, "CLI query timeout."
+        except Exception as e:
+            return None, str(e)
+
+    def get_node_info(self):
+        """Mengambil data status node lokal."""
+        if not self.is_running():
+            return {
+                "running": False,
+                "network_name": self._network_name,
+                "virtual_ipv4": None,
+                "uptime": 0
+            }
+
+        data, err = self.run_cli(["node"])
+        uptime = int(time.time() - self._start_time) if self._start_time else 0
+        if data and isinstance(data, dict):
+            return {
+                "running": True,
+                "network_name": self._network_name,
+                "virtual_ipv4": data.get("ipv4") or self._ipv4,
+                "hostname": data.get("hostname", ""),
+                "node_id": data.get("node_id", ""),
+                "uptime": uptime,
+                "raw": data
+            }
+
+        return {
+            "running": True,
+            "network_name": self._network_name,
+            "virtual_ipv4": self._ipv4,
+            "uptime": uptime,
+            "error": err
+        }
+
+    def get_peers(self):
+        """Mengambil daftar peer aktif dari jaringan mesh."""
+        if not self.is_running():
+            return []
+
+        data, err = self.run_cli(["peer"])
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict) and "peers" in data:
+            return data["peers"]
+        return []
+
+    def get_routes(self):
+        """Mengambil tabel rute mesh EasyTier."""
+        if not self.is_running():
+            return []
+
+        data, err = self.run_cli(["route"])
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict) and "routes" in data:
+            return data["routes"]
+        return []
+
+    def get_summary(self):
+        """Mengambil ringkasan telemetri komprehensif untuk antarmuka UI."""
+        running = self.is_running()
+        if not running:
+            return {
+                "running": False,
+                "available": self.is_available(),
+                "network_name": self._network_name,
+                "virtual_ipv4": None,
+                "peers_count": 0,
+                "peers": []
+            }
+
+        peers = self.get_peers()
+        node_info = self.get_node_info()
+        return {
+            "running": True,
+            "available": True,
+            "network_name": self._network_name,
+            "virtual_ipv4": node_info.get("virtual_ipv4"),
+            "uptime": node_info.get("uptime", 0),
+            "peers_count": len(peers),
+            "peers": peers
+        }
+
+
+    def get_status_overview(self):
+        """Alias untuk get_summary() demi kompatibilitas penuh."""
+        return self.get_summary()
+
+    def start_easytier(self, network_name, network_secret, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT):
+        """Alias untuk start() dengan parameter fleksibel."""
+        return self.start(network_name=network_name, network_secret=network_secret, ipv4=ipv4, peers=peers, rpc_port=rpc_port)
+
+    def stop_easytier(self):
+        """Alias untuk stop() demi kompatibilitas penuh."""
+        return self.stop()
+
+    def get_full_status(self):
+        """Alias untuk get_summary() demi kompatibilitas penuh."""
+        return self.get_summary()
+
+
+# Global Singleton
+_easytier_instance = None
+_easytier_instance_lock = threading.Lock()
+
+
+def get_easytier_manager():
+    global _easytier_instance
+    with _easytier_instance_lock:
+        if _easytier_instance is None:
+            _easytier_instance = EasyTierManager()
+            atexit.register(_easytier_instance.stop)
+        return _easytier_instance
+
+
+easytier_instance = get_easytier_manager()

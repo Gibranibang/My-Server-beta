@@ -198,6 +198,11 @@ export interface CompanionApi {
 
   joinZeroTier(): Promise<void>
 
+  getEasyTierStatus?(): Promise<any>
+  startEasyTier?(payload: { network_name: string; network_secret: string; ipv4?: string; peers?: string[]; use_no_tun?: boolean; external_node?: string }): Promise<any>
+  stopEasyTier?(): Promise<any>
+  getRemoteStatus?(): Promise<any>
+
 
 
   /** Full Syncthing & Atomic Backup Operations */
@@ -866,6 +871,37 @@ export function createMockApi(): CompanionApi {
     async configCredentials(): Promise<void> {},
 
     async joinZeroTier(): Promise<void> {},
+
+    async getEasyTierStatus() {
+      return {
+        running: true,
+        version: "2.6.4-8428a89d",
+        network_name: "myserver-mesh",
+        virtual_ip: "10.144.144.12",
+        peer_id: 12345678,
+        peers_count: 2,
+        direct_peers: 1,
+        relay_peers: 1,
+        peers: [
+          { id: "1001", hostname: "Ubuntu-Server", ipv4: "10.144.144.1", cost: "Direct", lat_ms: "8ms", rx_bytes: "1.2 MB", tx_bytes: "450 KB", tunnel_proto: "udp", nat_type: "Cone" }
+        ],
+        routes: [],
+        error: null,
+      }
+    },
+    async startEasyTier(payload: any) {
+      return { success: true, message: "EasyTier mesh connected", status: { running: true, network_name: payload?.network_name || "myserver-mesh" } }
+    },
+    async stopEasyTier() {
+      return { success: true, message: "EasyTier disconnected", status: { running: false } }
+    },
+    async getRemoteStatus() {
+      return {
+        activeEngine: "easytier",
+        easytier: { running: true, network_name: "myserver-mesh", virtual_ip: "10.144.144.12" },
+        zerotier: { running: false, nodeId: "", version: "", networks: [] }
+      }
+    },
 
 
 

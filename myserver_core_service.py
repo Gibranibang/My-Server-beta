@@ -343,6 +343,10 @@ import wol_manager
 
 
 import zerotier_manager
+try:
+    import easytier_manager
+except ImportError:
+    easytier_manager = None
 
 
 
@@ -366,7 +370,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.1.1"
+APP_VERSION_NUMBER = "4.2.0"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -20616,6 +20620,165 @@ exit
 
 
 
+_latest_github_update_cache = None
+_last_update_balloon_time = 0.0
+
+def _trigger_windows_balloon(title: str, msg: str) -> None:
+    """Memicu notifikasi balon native Windows di system tray secara non-blocking."""
+    try:
+        import mini_tray_manager
+        mini_tray_manager.show_balloon(title, msg)
+        return
+    except Exception:
+        pass
+    if sys.platform != "win32":
+        return
+    try:
+        import base64
+        clean_title = title.replace('"', '`"')
+        clean_msg = msg.replace('"', '`"')
+        ps_script = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$notify = New-Object System.Windows.Forms.NotifyIcon
+$notify.Icon = [System.Drawing.SystemIcons]::Information
+$notify.BalloonTipIcon = "Info"
+$notify.BalloonTipTitle = "{clean_title}"
+$notify.BalloonTipText = "{clean_msg}"
+$notify.Visible = $true
+$notify.ShowBalloonTip(4000)
+Start-Sleep -Seconds 1
+$notify.Dispose()
+"""
+        encoded = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
+            creationflags=0x08000000
+        )
+    except Exception as e:
+        logger_manager.log_debug(f"[TrayBalloon] Gagal memicu notifikasi balon: {e}")
+
+
+def check_github_update_core() -> dict:
+    """Fungsi terpusat untuk memeriksa rilis terbaru dari repositori GitHub."""
+    global _latest_github_update_cache
+    cfg = config_manager.load_or_create_config()
+    repo_slug = cfg.get("github_repo", "Gibranibang/My-Server-beta")
+    url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
+    headers = {
+        "User-Agent": f"MyServer-Companion/{APP_VERSION_NUMBER}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            rel_data = json.loads(resp.read().decode("utf-8"))
+            tag = rel_data.get("tag_name", "").lstrip("v").strip()
+
+            def _parse_ver(v_str):
+                import re
+                parts = re.findall(r"\d+", v_str)
+                return tuple(map(int, parts)) if parts else (0, 0, 0)
+
+            remote_ver = _parse_ver(tag)
+            curr_ver = _parse_ver(APP_VERSION_NUMBER)
+
+            if remote_ver > curr_ver:
+                download_url = rel_data.get("html_url", "")
+                for asset in rel_data.get("assets", []):
+                    aname = asset.get("name", "").lower()
+                    if aname.endswith("-setup.exe") or aname.endswith(".exe") or aname.endswith(".zip"):
+                        download_url = asset.get("browser_download_url", download_url)
+                        break
+                res = {
+                    "upToDate": False,
+                    "version": tag,
+                    "currentVersion": APP_VERSION_NUMBER,
+                    "htmlUrl": rel_data.get("html_url", ""),
+                    "downloadUrl": download_url,
+                    "name": rel_data.get("name", f"MyServer v{tag}"),
+                    "body": rel_data.get("body", "")
+                }
+                _latest_github_update_cache = res
+                return res
+            else:
+                res = {
+                    "upToDate": True,
+                    "version": APP_VERSION_NUMBER,
+                    "currentVersion": APP_VERSION_NUMBER,
+                    "message": "Aplikasi sudah menggunakan versi terbaru."
+                }
+                _latest_github_update_cache = res
+                return res
+    except urllib.error.HTTPError as he:
+        if he.code == 404:
+            return {
+                "upToDate": True,
+                "version": APP_VERSION_NUMBER,
+                "currentVersion": APP_VERSION_NUMBER,
+                "message": "Aplikasi sudah menggunakan versi terbaru (Belum ada rilis baru di GitHub)."
+            }
+        return {
+            "upToDate": True,
+            "version": APP_VERSION_NUMBER,
+            "warning": f"HTTP {he.code}: {he.reason}"
+        }
+    except Exception as ex:
+        return {
+            "upToDate": True,
+            "version": APP_VERSION_NUMBER,
+            "warning": f"Gagal menghubungi GitHub: {str(ex)}"
+        }
+
+
+def auto_update_checker_loop():
+    """Worker background periodik: memeriksa update GitHub setiap 45 menit (2700 detik)."""
+    global _last_update_balloon_time
+    time.sleep(15)  # Tunggu 15 detik setelah boot
+    while True:
+        try:
+            cfg = config_manager.load_or_create_config()
+            auto_check = cfg.get("auto_check_update", True)
+            if auto_check:
+                info = check_github_update_core()
+                if info and not info.get("upToDate"):
+                    now = time.time()
+                    if now - _last_update_balloon_time > 2700:  # 1 notifikasi per siklus 45 menit jika update belum dipasang
+                        _last_update_balloon_time = now
+                        logger_manager.log_info(f"[AutoUpdateLoop] Update terdeteksi (v{info.get('version')}), memicu notifikasi Windows tray...")
+                        _trigger_windows_balloon(
+                            "Pembaruan Tersedia",
+                            "MyServer versi terbaru telah dirilis di GitHub."
+                        )
+        except Exception as e:
+            logger_manager.log_debug(f"[AutoUpdateLoop] Kesalahan: {e}")
+        time.sleep(2700)
+
+
+def auto_start_easytier_worker():
+    """Memulai koneksi EasyTier di background saat startup jika dikonfigurasi aktif."""
+    time.sleep(4)
+    try:
+        if easytier_manager:
+            cfg = config_manager.load_or_create_config()
+            et_cfg = cfg.get("easytier", {})
+            if et_cfg.get("enabled"):
+                net_name = et_cfg.get("network_name")
+                net_secret = et_cfg.get("network_secret")
+                ipv4 = et_cfg.get("ipv4")
+                peers = et_cfg.get("peers") or []
+                if net_name and net_secret:
+                    logger_manager.log_info(f"[EasyTier] Memulai koneksi otomatis startup: {net_name}")
+                    mgr = easytier_manager.get_easytier_manager()
+                    mgr.start_easytier(
+                        network_name=net_name,
+                        network_secret=net_secret,
+                        ipv4=ipv4,
+                        peers=peers
+                    )
+    except Exception as e:
+        logger_manager.log_debug(f"[EasyTierAutoStart] Error: {e}")
+
+
 class CoreApiHandler(BaseHTTPRequestHandler):
 
 
@@ -27810,7 +27973,99 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+        # --- Endpoints EasyTier & Remote Mesh Network ---
+        if path == "/api/easytier/status":
+            if easytier_manager:
+                mgr = easytier_manager.get_easytier_manager()
+                self._send_json(mgr.get_status_overview())
+            else:
+                self._send_json({"running": False, "error": "easytier_manager not available"})
+            return
+
+        if path == "/api/easytier/peers":
+            if easytier_manager:
+                mgr = easytier_manager.get_easytier_manager()
+                self._send_json({"peers": mgr.get_peers()})
+            else:
+                self._send_json({"peers": []})
+            return
+
+        if path == "/api/easytier/start":
+            if not easytier_manager:
+                self._send_json({"success": False, "message": "easytier_manager tidak tersedia"})
+                return
+            net_name = body.get("network_name") or body.get("networkName") or ""
+            net_secret = body.get("network_secret") or body.get("networkSecret") or ""
+            ipv4 = body.get("ipv4") or ""
+            peers = body.get("peers") or []
+            use_no_tun = bool(body.get("use_no_tun") or body.get("useNoTun", False))
+            ext_node = body.get("external_node") or body.get("externalNode") or ""
+
+            # Simpan ke config.json
+            cfg = config_manager.load_or_create_config()
+            if "easytier" not in cfg:
+                cfg["easytier"] = {}
+            cfg["easytier"]["network_name"] = net_name
+            cfg["easytier"]["network_secret"] = net_secret
+            cfg["easytier"]["ipv4"] = ipv4
+            cfg["easytier"]["enabled"] = True
+            config_manager.save_config(cfg)
+
+            mgr = easytier_manager.get_easytier_manager()
+            ok, msg = mgr.start_easytier(
+                network_name=net_name,
+                network_secret=net_secret,
+                ipv4=ipv4,
+                peers=peers,
+                use_no_tun=use_no_tun,
+                external_node=ext_node,
+            )
+            self._send_json({"success": ok, "message": msg, "status": mgr.get_status_overview()})
+            return
+
+        if path == "/api/easytier/stop":
+            if easytier_manager:
+                cfg = config_manager.load_or_create_config()
+                if "easytier" in cfg:
+                    cfg["easytier"]["enabled"] = False
+                    config_manager.save_config(cfg)
+                mgr = easytier_manager.get_easytier_manager()
+                ok, msg = mgr.stop_easytier()
+                self._send_json({"success": ok, "message": msg, "status": mgr.get_status_overview()})
+            else:
+                self._send_json({"success": False, "message": "easytier_manager tidak tersedia"})
+            return
+
+        if path in ("/api/remote/status", "/api/remote_status"):
+            et_status = easytier_manager.get_easytier_manager().get_status_overview() if easytier_manager else {"running": False}
+            zt_client = zerotier_manager.ZeroTierClient() if "zerotier_manager" in globals() else None
+            zt_node = zt_client.get_node_status() if zt_client else {"online": False}
+            zt_nets = zt_client.get_joined_networks() if (zt_client and zt_node.get("online")) else []
+
+            active_engine = "none"
+            if et_status.get("running"):
+                active_engine = "easytier"
+            elif zt_node.get("online") and len(zt_nets) > 0:
+                active_engine = "zerotier"
+
+            self._send_json({
+                "activeEngine": active_engine,
+                "easytier": et_status,
+                "zerotier": {
+                    "running": zt_node.get("online", False),
+                    "nodeId": zt_node.get("address", ""),
+                    "version": zt_node.get("version", ""),
+                    "networks": zt_nets,
+                }
+            })
+            return
+
         if path == "/api/check_for_update":
+            update_res = check_github_update_core()
+            self._send_json(update_res)
+            return
+
+        if False and path == "/api/check_for_update_legacy":
             cfg = config_manager.load_or_create_config()
             repo_slug = cfg.get("github_repo", "Gibranibang/My-Server-beta")
             url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
@@ -29735,9 +29990,36 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
             self._send_json({"success": ok, "message": msg})
+            return
 
+        if path == "/api/easytier_status":
+            if easytier_manager:
+                status = easytier_manager.easytier_instance.get_full_status()
+                self._send_json({"success": True, "data": status})
+            else:
+                self._send_json({"success": False, "error": "EasyTier module not loaded", "data": {"running": False}})
+            return
 
+        if path == "/api/easytier_start":
+            net_name = (body.get("network_name") or body.get("networkName") or "").strip()
+            net_secret = (body.get("network_secret") or body.get("networkSecret") or "").strip()
+            peers = body.get("peers") or []
+            if not net_name:
+                self._send_json({"success": False, "error": "network_name wajib diisi."})
+                return
+            if easytier_manager:
+                ok, msg = easytier_manager.easytier_instance.start(net_name, net_secret, peers=peers)
+                self._send_json({"success": ok, "message": msg})
+            else:
+                self._send_json({"success": False, "error": "EasyTier module not available."})
+            return
 
+        if path == "/api/easytier_stop":
+            if easytier_manager:
+                ok, msg = easytier_manager.easytier_instance.stop()
+                self._send_json({"success": ok, "message": msg})
+            else:
+                self._send_json({"success": False, "error": "EasyTier module not available."})
             return
 
 
@@ -31064,6 +31346,12 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
     t_route.start()
+
+    t_update = threading.Thread(target=auto_update_checker_loop, daemon=True)
+    t_update.start()
+
+    t_easytier = threading.Thread(target=auto_start_easytier_worker, daemon=True)
+    t_easytier.start()
 
 
 

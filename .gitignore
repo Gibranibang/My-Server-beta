@@ -100,3 +100,7 @@ $RECYCLE.BIN/
 .idea/
 *.swp
 .gemini/
+
+# Drivers & native resources
+*.sys
+resources/

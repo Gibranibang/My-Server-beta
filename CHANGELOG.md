@@ -1,5 +1,12 @@
 # Changelog MyServer Desktop
 
+## [v4.2.0 - Beta] - 2026-11-07
+
+- Integrasi EasyTier P2P Mesh sebagai Remote Engine Utama: Mengadopsi arsitektur embedded background daemon Zima Client v2.3.5 (easytier-core.exe & wintun.dll) untuk akses remote peer-to-peer tanpa batasan firewall, tanpa instalasi driver pihak ketiga di awal, dan mendukung multi-protokol (UDP, TCP, WebSocket Secure port 443).
+- Orkestrasi Failover Cerdas (Dual-Engine Remote): Menjadikan ZeroTier sebagai engine cadangan otomatis (auto-failover) saat EasyTier terputus atau saat server tujuan menggunakan ZeroTier network ID. Pengguna baru tidak lagi diwajibkan menginstal ZeroTier saat pertama kali menggunakan aplikasi.
+- Background Worker Auto-Update & Notifikasi Tray: Menambahkan worker background loop di Core Service yang memeriksa update GitHub setiap 45 menit, serta memicu notifikasi balon resmi Windows di pojok kanan bawah layar saat update rilis terdeteksi ketika jendela sedang tertutup.
+- Sinkronisasi Versi Atomik v4.2.0 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest.
+
 ## [v4.1.1 - Beta] - 2026-11-06
 
 - Perbaikan Form Web App (RPC Argument Swap Fix): Memperbaiki bug pada jembatan antarmuka Tauri RPC (api.real.ts) dan endpoint core service (/api/add_web_app) di mana nama aplikasi sebelumnya menimpa alamat URL (url: args[0]). Sekarang nama aplikasi dan URL tersimpan murni sesuai kolom input pengguna secara presisi 1:1 tanpa tertukar maupun terabaikan.

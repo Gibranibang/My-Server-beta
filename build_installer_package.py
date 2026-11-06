@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "4.1.1"
+VERSION = "4.2.0"
 
 APP_NAME = "My-Server by algitha BETA"
 
@@ -114,10 +114,30 @@ shutil.copy2(src_core_exe, os.path.join(STAGING_DIR, "myserver-core.exe"))
 
 shutil.copy2(src_core_exe, os.path.join(STAGING_DIR, "bin", "myserver-core.exe"))
 
+# Salin biner EasyTier P2P Mesh
+src_easytier_dir = os.path.join(BASE_BETA, "bin", "easytier")
+dst_easytier_dir = os.path.join(STAGING_DIR, "bin", "easytier")
+if os.path.exists(src_easytier_dir):
+    os.makedirs(dst_easytier_dir, exist_ok=True)
+    for et_file in ["easytier-core.exe", "easytier-cli.exe", "wintun.dll", "Packet.dll", "WinDivert64.sys"]:
+        et_src = os.path.join(src_easytier_dir, et_file)
+        if os.path.exists(et_src):
+            shutil.copy2(et_src, os.path.join(dst_easytier_dir, et_file))
+
+# Salin juga ke resources/deps/easytier/win32/x64 untuk keselarasan struktur ZimaNet
+src_res_et = os.path.join(BASE_BETA, "resources", "deps", "easytier", "win32", "x64")
+dst_res_et = os.path.join(STAGING_DIR, "resources", "deps", "easytier", "win32", "x64")
+if os.path.exists(src_res_et):
+    os.makedirs(dst_res_et, exist_ok=True)
+    for f_name in os.listdir(src_res_et):
+        s_file = os.path.join(src_res_et, f_name)
+        if os.path.isfile(s_file):
+            shutil.copy2(s_file, os.path.join(dst_res_et, f_name))
+
 # Tanda tangani seluruh biner di staging_payload dengan Authenticode
 sign_ps1 = os.path.join(BASE_BETA, "sign_app.ps1")
 if os.path.exists(sign_ps1):
-    for biner_rel in ["MyServer-Beta.exe", "myserver-core.exe", os.path.join("bin", "myserver-core.exe")]:
+    for biner_rel in ["MyServer-Beta.exe", "myserver-core.exe", os.path.join("bin", "myserver-core.exe"), os.path.join("bin", "easytier", "easytier-core.exe"), os.path.join("bin", "easytier", "easytier-cli.exe")]:
         target_bin = os.path.join(STAGING_DIR, biner_rel)
         if os.path.exists(target_bin):
             subprocess.run([

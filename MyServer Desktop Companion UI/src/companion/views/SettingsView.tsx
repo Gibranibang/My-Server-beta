@@ -118,6 +118,34 @@ export default function SettingsView() {
     isCustom: false,
   })
   const [details, setDetails] = useState<ServerDetails | null>(null)
+  const [easyTierStatus, setEasyTierStatus] = useState<any>(() => {
+    if (typeof window !== "undefined" && window.location.search.includes("mock_easytier=1")) {
+      return {
+        running: true,
+        version: "2.6.4-8428a89d",
+        network_name: "myserver-mesh",
+        virtual_ip: "10.144.144.12",
+        peer_id: 12345678,
+        peers_count: 2,
+        direct_peers: 1,
+        relay_peers: 1,
+        peers: [
+          { id: "1001", hostname: "Ubuntu-Server", ipv4: "10.144.144.1", cost: "Direct", lat_ms: "8ms", rx_bytes: "1.2 MB", tx_bytes: "450 KB", tunnel_proto: "udp", nat_type: "Cone" }
+        ],
+        routes: [],
+        error: null,
+      }
+    }
+    return null
+  })
+  const [etNetName, setEtNetName] = useState(() => {
+    if (typeof window !== "undefined" && window.location.search.includes("mock_easytier=1")) {
+      return "myserver-mesh"
+    }
+    return ""
+  })
+  const [etSecret, setEtSecret] = useState("")
+  const [etBusy, setEtBusy] = useState(false)
 
   const t = getTranslation(settings?.language)
   const isId = settings?.language === "id"
@@ -126,7 +154,56 @@ export default function SettingsView() {
 
   useEffect(() => {
     api.getServerDetails().then(setDetails).catch(() => {})
+    if (api.getEasyTierStatus) {
+      api.getEasyTierStatus().then((st: any) => {
+        if (st && st.running) {
+          setEasyTierStatus(st)
+          if (st.network_name) setEtNetName(st.network_name)
+        }
+      }).catch(() => {})
+    }
   }, [api])
+
+  const handleConnectEasyTier = async () => {
+    if (!etNetName.trim() || !etSecret.trim()) {
+      notify(isId ? "Network Name dan Secret wajib diisi!" : "Network Name and Secret are required!", "danger")
+      return
+    }
+    setEtBusy(true)
+    try {
+      if (api.startEasyTier) {
+        const res = await api.startEasyTier({
+          network_name: etNetName.trim(),
+          network_secret: etSecret.trim(),
+        })
+        if (res?.success) {
+          notify(isId ? "EasyTier P2P Mesh terhubung!" : "EasyTier P2P Mesh connected!", "success")
+          setEasyTierStatus(res.status)
+        } else {
+          notify(res?.message || (isId ? "Gagal terhubung" : "Connection failed"), "danger")
+        }
+      }
+    } catch (e: any) {
+      notify(e.message || "Error", "danger")
+    } finally {
+      setEtBusy(false)
+    }
+  }
+
+  const handleDisconnectEasyTier = async () => {
+    setEtBusy(true)
+    try {
+      if (api.stopEasyTier) {
+        const res = await api.stopEasyTier()
+        setEasyTierStatus(res?.status || { running: false })
+        notify(isId ? "EasyTier diputuskan" : "EasyTier disconnected", "neutral")
+      }
+    } catch (e: any) {
+      notify(e.message || "Error", "danger")
+    } finally {
+      setEtBusy(false)
+    }
+  }
 
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true)
@@ -727,6 +804,97 @@ export default function SettingsView() {
                   <span>{t("fm_target_zimaos")}</span>
                 </button>
               </div>
+            </div>
+
+            {/* EasyTier P2P Mesh Card */}
+            <div className="flex flex-col gap-2 rounded-tile border border-line bg-surface p-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Network className="size-4 text-brand" />
+                  <span className="text-micro font-semibold text-ink">
+                    {t("easytier_title")}
+                  </span>
+                </div>
+                {easyTierStatus?.running ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                    <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    {(easyTierStatus.direct_peers && easyTierStatus.direct_peers > 0) ? t("easytier_status_connected") : t("easytier_status_relay")}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center rounded-full border border-line bg-surface-sunken px-2 py-0.5 text-[10px] font-medium text-ink-subtle">
+                    {t("easytier_status_disconnected")}
+                  </span>
+                )}
+              </div>
+
+              <span className="text-micro text-ink-subtle leading-relaxed">
+                {t("easytier_desc")}
+              </span>
+
+              {easyTierStatus?.running ? (
+                <div className="flex flex-col gap-1.5 rounded-control bg-surface-sunken border border-line p-2 text-micro">
+                  <div className="flex justify-between items-center text-ink">
+                    <span className="text-ink-subtle">Network:</span>
+                    <span className="font-mono font-medium">{easyTierStatus.network_name || etNetName}</span>
+                  </div>
+                  {easyTierStatus.virtual_ip && (
+                    <div className="flex justify-between items-center text-ink">
+                      <span className="text-ink-subtle">Virtual IP:</span>
+                      <span className="font-mono font-medium">{easyTierStatus.virtual_ip}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center text-ink">
+                    <span className="text-ink-subtle">Peers:</span>
+                    <span className="font-medium">{easyTierStatus.peers_count || 0} node</span>
+                  </div>
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      disabled={etBusy}
+                      onClick={handleDisconnectEasyTier}
+                      className="w-full flex items-center justify-center gap-1.5 rounded-control border border-line bg-surface px-2.5 py-1.5 text-micro font-medium text-ink hover:bg-surface-elevated transition cursor-pointer disabled:opacity-50"
+                    >
+                      {t("easytier_btn_disconnect")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 pt-0.5">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-medium text-ink-subtle">
+                      {t("easytier_net_name_label")}
+                    </label>
+                    <input
+                      type="text"
+                      value={etNetName}
+                      onChange={(e) => setEtNetName(e.target.value)}
+                      placeholder={t("easytier_net_name_placeholder")}
+                      className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-micro text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-medium text-ink-subtle">
+                      {t("easytier_secret_label")}
+                    </label>
+                    <input
+                      type="password"
+                      value={etSecret}
+                      onChange={(e) => setEtSecret(e.target.value)}
+                      placeholder={t("easytier_secret_placeholder")}
+                      className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-micro text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={etBusy}
+                    onClick={handleConnectEasyTier}
+                    className="flex items-center justify-center gap-1.5 rounded-control bg-brand px-2.5 py-1.5 text-micro font-semibold text-brand-ink transition cursor-pointer hover:opacity-90 disabled:opacity-50"
+                  >
+                    {etBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <Network className="size-3.5" />}
+                    <span>{t("easytier_btn_connect")}</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Storage & Network Startup Toggles */}

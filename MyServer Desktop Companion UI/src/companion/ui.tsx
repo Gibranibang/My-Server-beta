@@ -43,7 +43,7 @@ export function IconButton({
 /* Button                                                              */
 /* ------------------------------------------------------------------ */
 
-type ButtonVariant = "primary" | "danger" | "secondary" | "soft" | "info"
+type ButtonVariant = "primary" | "danger" | "secondary" | "soft" | "info" | "ghost"
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
@@ -54,6 +54,7 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
     "border border-line bg-surface text-ink shadow-control hover:border-line-strong hover:bg-surface-sunken",
   soft: "bg-surface-muted text-ink-soft hover:bg-line",
   info: "border border-info-line/70 bg-info-soft text-info-ink hover:border-info-line hover:bg-info-line/40",
+  ghost: "text-ink-subtle hover:text-ink hover:bg-surface-muted/60 active:bg-surface-sunken",
 }
 
 const BUTTON_SIZES = {

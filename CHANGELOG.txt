@@ -1,3 +1,9 @@
+[v4.2.0 - Beta] - 2026-11-07
+1. Integrasi EasyTier P2P Mesh sebagai Remote Engine Utama: Mengadopsi arsitektur embedded daemon Zima Client v2.3.5 (easytier-core.exe & wintun.dll) untuk koneksi remote P2P multi-protokol tanpa blokir firewall dan tanpa wajib install ZeroTier di awal.
+2. Orkestrasi Failover Cerdas ke ZeroTier: Menjadikan ZeroTier sebagai engine cadangan otomatis saat EasyTier terkendala.
+3. Background Worker Auto-Update (45 Menit) & Notifikasi Tray: Loop periodik pemeriksaan rilis GitHub setiap 45 menit dan notifikasi balon Windows di pojok kanan bawah saat update tersedia ketika jendela tertutup.
+4. Sinkronisasi Versi Atomik v4.2.0 Beta: Menyelaraskan seluruh konstanta versi aplikasi.
+
 [v4.1.1 - Beta] - 2026-11-06
 1. Perbaikan Form Web App (RPC Argument Swap Fix): Memperbaiki bug pada jembatan antarmuka Tauri RPC (api.real.ts) dan endpoint core service (/api/add_web_app) di mana nama aplikasi sebelumnya menimpa alamat URL (url: args[0]). Sekarang nama aplikasi dan URL tersimpan murni sesuai kolom input pengguna secara presisi 1:1 tanpa tertukar maupun terabaikan.
 2. Sinkronisasi Versi Atomik v4.1.1 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest.

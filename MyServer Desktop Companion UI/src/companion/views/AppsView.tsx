@@ -335,7 +335,7 @@ export default function AppsView() {
                 <label className="block text-nano font-semibold text-ink-subtle mb-1">{t("app_url_label", "Web App URL / Domain")}</label>
                 <input
                   type="text"
-                  placeholder={t("app_url_ph", "e.g. http://<server-ip>:8096 or https://app.domain.com")}
+                  placeholder={t("app_url_ph", "e.g. http://192.168.1.100:8096")}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   className="w-full rounded-md border border-ink-subtle/20 bg-surface-sunken px-2.5 py-1 text-micro text-ink placeholder:text-ink-faint focus:border-info-ink focus:outline-none"

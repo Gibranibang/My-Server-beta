@@ -2067,6 +2067,56 @@ export function createRealApi(): CompanionApi {
 
     },
 
+
+    async getEasyTierStatus() {
+      try {
+        const api = await getPyApi()
+        if (api && api.call_core_api) {
+          return await api.call_core_api('easytier/status', {})
+        }
+      } catch (err) {
+        console.warn('[RealApi] getEasyTierStatus error:', err)
+      }
+      return { running: false, error: 'Unavailable' }
+    },
+
+    async startEasyTier(payload: any) {
+      try {
+        const api = await getPyApi()
+        if (api && api.call_core_api) {
+          return await api.call_core_api('easytier/start', payload || {})
+        }
+      } catch (err) {
+        console.error('[RealApi] startEasyTier error:', err)
+        throw err
+      }
+      return { success: false, message: 'Core API unavailable' }
+    },
+
+    async stopEasyTier() {
+      try {
+        const api = await getPyApi()
+        if (api && api.call_core_api) {
+          return await api.call_core_api('easytier/stop', {})
+        }
+      } catch (err) {
+        console.error('[RealApi] stopEasyTier error:', err)
+        throw err
+      }
+      return { success: false, message: 'Core API unavailable' }
+    },
+
+    async getRemoteStatus() {
+      try {
+        const api = await getPyApi()
+        if (api && api.call_core_api) {
+          return await api.call_core_api('remote/status', {})
+        }
+      } catch (err) {
+        console.warn('[RealApi] getRemoteStatus error:', err)
+      }
+      return { activeEngine: 'none', easytier: { running: false }, zerotier: { running: false } }
+    },
   }
 
 }

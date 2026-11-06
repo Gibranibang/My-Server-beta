@@ -18,7 +18,10 @@ fn remove_lock_files_recursive(dir: &std::path::Path) -> std::io::Result<()> {
             let path = entry.path();
             if path.is_dir() {
                 let _ = remove_lock_files_recursive(&path);
-            } else if path.file_name().map_or(false, |name| name == "LOCK") {
+            } else if path.file_name().map_or(false, |name| {
+                let s = name.to_string_lossy().to_lowercase();
+                s == "lock" || s == "lockfile" || s.ends_with(".lock")
+            }) {
                 let _ = std::fs::remove_file(&path);
             }
         }

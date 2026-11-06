@@ -1,5 +1,16 @@
 # Changelog MyServer Desktop
 
+## [v4.0.12 - Beta] - 2026-11-06
+
+- Overhaul Marquee Notifikasi Footer: Memperbaiki animasi ticker marquee pada pill notifikasi bawah, teks bergerak halus masuk dari sisi kanan luar kontainer (translateX 25px) meluncur ke kiri (-100%) dengan durasi proporsional (~30-32px/s) tanpa terpotong di tengah layar, dan mengeliminasi bug snap-back kemunculan teks ke-3 dengan fill-mode forwards.
+- Status Badge Counter Notifikasi Kosong: Menampilkan tanda strip ("-") yang clean pada LCD pill notifikasi saat jumlah riwayat notifikasi 0 (menggantikan teks "Aman" / "Idle" yang membingungkan).
+- Perbaikan Tombol Tutup Modal Notifikasi (Mojibake Fix): Mengganti karakter simbol rusak dengan ikon native Lucide <X /> yang tajam dan presisi.
+- Guard Universal Notifikasi Cold-Start: Mencegah spam notifikasi kemunculan milestone syncthing lama (25%, 50%, 90%, 100%) dan handshake koneksi awal secara retroaktif saat aplikasi baru dinyalakan/booting.
+- Persistensi Riwayat Notifikasi (localStorage): Menyimpan riwayat notifikasi di local storage (myserver_notice_history) sehingga aksi "Bersihkan" menghapus tuntas riwayat secara permanen dan mereset counter ke "-".
+- Kerapian Header Menu Apps: Menghapus badge pill jumlah kontainer (20) di sebelah teks "LAYANAN & KONTAINER" pada AppsView.tsx sehingga judul tidak lagi mengalami text-truncation ("LAYANAN & KONTA...").
+- Desinkronisasi Seed Organik Kartu CRT: Menambahkan variabel seed CSS slot dinamis pada 4 kartu utama (Backup, File Manager, Apps, Options) untuk mendesinkronisasi frekuensi AC hum line, tube warmth flicker, dan glitch jitter, menghasilkan visual retro yang natural tanpa merubah bentuk, padding, maupun dimensi kartu (122x110px).
+- Sinkronisasi Versi Atomik v4.0.12: Memperbarui seluruh konstanta versi aplikasi (version.ts, core service, biner PE metadata, Inno Setup, dan Tauri manifest).
+
 ## [v4.0.11 - Beta] - 2026-11-06
 
 - Penyelarasan Skeleton Loading Footer Card Home View: Merekonstruksi kartu status server bagian bawah pada kondisi cold-start loading agar selaras 100% dengan skeleton card lainnya (menggunakan container `border border-line bg-surface`, bayangan `shadow-card`, dan placeholder `bg-surface-sunken animate-pulse`). Mengeliminasi background putih/krem `#F6F6F6` yang bertabrakan dengan dark mode, serta menghapus elemen statis (LCD teks 'Offline' dan tombol notifikasi aktif) selama fase loading.

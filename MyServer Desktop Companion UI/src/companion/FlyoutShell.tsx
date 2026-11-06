@@ -1,5 +1,5 @@
 import { useState, useEffect, Component, type ErrorInfo, type ReactNode } from "react"
-import { AlertTriangle, ChevronRight, CircleCheck, Info, RefreshCw, TriangleAlert, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ChevronRight, CircleCheck, Info, RefreshCw, TriangleAlert, X, type LucideIcon } from "lucide-react"
 import { assets } from "./assets"
 import { useCompanion, useNotice, usePowerStatus } from "./store"
 import { StatusDot, cx } from "./ui"
@@ -215,6 +215,10 @@ export class ViewErrorBoundary extends Component<ErrorBoundaryProps, ErrorBounda
  * unread tetap konsisten ketika FooterStatus di-mount ulang saat berpindah menu.
  */
 let lastSeenNoticeId = 0
+try {
+  const savedSeen = localStorage.getItem("myserver_last_seen_notice_id")
+  if (savedSeen) lastSeenNoticeId = Number(savedSeen) || 0
+} catch {}
 const completedNoticeIds = new Set<number>()
 
 /** Teks pill notifikasi: statis saat idle/count, berjalan (marquee) ketika ada notifikasi baru. */
@@ -222,24 +226,20 @@ function NoticeMarquee({
   text,
   noticeId,
   count,
-  idleText,
 }: {
   text: string
   noticeId?: number
   count: number
-  idleText: string
 }) {
   const [activeCycleId, setActiveCycleId] = useState<number | undefined>(noticeId)
   const isAlreadySeen = noticeId ? completedNoticeIds.has(noticeId) : false
   const [isMarqueeDone, setIsMarqueeDone] = useState(isAlreadySeen)
-  const [isTransitioning, setIsTransitioning] = useState(false)
 
   useEffect(() => {
     if (noticeId && noticeId !== activeCycleId) {
       setActiveCycleId(noticeId)
       const seen = completedNoticeIds.has(noticeId)
       setIsMarqueeDone(seen)
-      setIsTransitioning(false)
     }
   }, [noticeId, activeCycleId])
 
@@ -250,38 +250,33 @@ function NoticeMarquee({
     if (noticeId) {
       completedNoticeIds.add(noticeId)
     }
-    setIsTransitioning(true)
-    setTimeout(() => {
-      setIsMarqueeDone(true)
-      setIsTransitioning(false)
-    }, 250)
+    // Langsung selesaikan marquee agar berpindah ke angka badge tanpa snap-back ke tengah
+    setIsMarqueeDone(true)
   }
 
-  // Setelah 2 putaran teks berjalan (atau jika tidak ada teks baru), tampilkan jumlah notifikasi yang tersedia (atau idleText jika 0)
+  // Setelah 2 putaran teks berjalan (atau jika tidak ada teks baru), tampilkan jumlah notifikasi yang tersedia (atau '-' jika 0)
   if (isMarqueeDone || !text) {
     return (
       <span
         className={cx(
-          "font-['Doto'] font-black text-[8px] leading-none text-center w-full block transition-all duration-300 ease-out transform",
-          isTransitioning ? "opacity-0 scale-75" : "opacity-100 scale-100",
+          "font-['Doto'] font-black text-[8px] leading-none text-center w-full block transition-opacity duration-200 select-none",
           textCls
         )}
-        title={count > 0 ? `${count} notifikasi aktif` : idleText}
+        title={count > 0 ? `${count} notifikasi aktif` : "Tidak ada notifikasi baru"}
       >
-        {count > 0 ? count : idleText}
+        {count > 0 ? count : "-"}
       </span>
     )
   }
 
-  // Teks berjalan bergerak tepat 2x putaran (animation-iteration-count: 2)
-  // Loop mulus: teks keluar penuh ke kiri, aperture hitam jeda sejenak, baru mengulang, lalu transisi ke angka badge.
-  const duration = Math.max(2.4, (text.length * 5.5 + 25) / 30)
+  // Kecepatan stabil ~30-32 px/detik berdasarkan total jarak tempuh riil (25px aperture + lebar teks)
+  const approxWidth = Math.max(30, text.length * 6)
+  const duration = Math.max(2.6, (25 + approxWidth) / 32)
   return (
     <span
       key={`${activeCycleId}-${text}`}
       className={cx(
-        "inline-block notif-pill-marquee transition-opacity duration-200",
-        isTransitioning ? "opacity-0" : "opacity-100",
+        "inline-block notif-pill-marquee select-none",
         textCls
       )}
       style={{ animationDuration: `${duration}s`, animationIterationCount: 2 }}
@@ -369,10 +364,12 @@ export function FooterStatus({
   const [seenId, setSeenId] = useState(lastSeenNoticeId)
   const latest = historyList[0]
   const hasUnread = Boolean(latest) && latest!.id !== seenId
-  const idleText = settings?.language === "id" ? "Aman" : "Idle"
-
+  
   const openNotifications = () => {
     lastSeenNoticeId = latest?.id ?? 0
+    try {
+      localStorage.setItem("myserver_last_seen_notice_id", String(lastSeenNoticeId))
+    } catch {}
     setSeenId(lastSeenNoticeId)
     setShowNotifModal(true)
   }
@@ -460,13 +457,12 @@ export function FooterStatus({
                 </svg>
               </span>
               {/* Layar teks aperture 25 × 13px: 1:1 Figma 142:4571 (left 35.5px, top 12.5px / center) */}
-              <span className="absolute left-[35.5px] -translate-x-1/2 top-1/2 -translate-y-1/2 h-[13px] w-[25px] overflow-hidden flex items-center justify-center">
+              <span className="absolute left-[35.5px] -translate-x-1/2 top-1/2 -translate-y-1/2 h-[13px] w-[25px] overflow-hidden flex items-center justify-start">
                 <NoticeMarquee
                   text={hasUnread ? (latest?.text ?? "") : ""}
                   noticeId={hasUnread ? latest?.id : undefined}
                   count={historyList.length}
-                  idleText={idleText}
-                />
+                  />
               </span>
             </div>
           )}
@@ -504,9 +500,10 @@ export function FooterStatus({
                 <button
                   type="button"
                   onClick={() => setShowNotifModal(false)}
+                  aria-label="Tutup Riwayat Notifikasi"
                   className="rounded p-0.5 text-slate-400 hover:text-white transition cursor-pointer"
                 >
-                  âœ•
+                  <X className="size-3.5" />
                 </button>
               </div>
             </div>

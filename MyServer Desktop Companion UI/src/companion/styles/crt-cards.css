@@ -6,7 +6,8 @@
   100% { transform: translateY(85px); }
 }
 .crt-hum-wrapper {
-  animation: crtSlowHum 7.5s linear infinite;
+  animation: crtSlowHum var(--crt-hum-dur, 7.5s) linear infinite;
+  animation-delay: var(--crt-hum-delay, 0s);
 }
 
 @keyframes tubeWarmth {
@@ -15,7 +16,7 @@
   78% { opacity: 0.96; }
 }
 .crt-layer-vignette {
-  animation: tubeWarmth 0.25s infinite;
+  animation: tubeWarmth var(--crt-warmth-dur, 0.25s) infinite;
 }
 
 @keyframes crtBandFlash {
@@ -87,7 +88,8 @@
   transform-origin: center;
 }
 .card-container:hover .crt-glitch-content {
-  animation: crtGlitchJitter 2.0s infinite ease-in-out;
+  animation: crtGlitchJitter var(--crt-jitter-dur, 2.0s) infinite ease-in-out;
+  animation-delay: var(--crt-jitter-delay, 0s);
   filter: drop-shadow(0 0 1px #4ade80);
 }
 .crt-tracking-band {
@@ -95,7 +97,8 @@
   pointer-events: none;
 }
 .card-container:hover .crt-tracking-band {
-  animation: crtBandFlash 2.0s infinite ease-in-out;
+  animation: crtBandFlash var(--crt-jitter-dur, 2.0s) infinite ease-in-out;
+  animation-delay: var(--crt-jitter-delay, 0s);
 }
 
 .card-container {
@@ -136,4 +139,36 @@
 }
 .btn-dot3-interactive.active:active .dot3-pill {
   fill: rgba(0, 0, 0, 0.25);
+}
+
+/* ==============================================================
+   Slot-specific Organic Seeds (Zero Layout Mutation)
+   ============================================================== */
+[data-crt-slot="backup"] {
+  --crt-hum-delay: -1.7s;
+  --crt-hum-dur: 7.4s;
+  --crt-warmth-dur: 0.23s;
+  --crt-jitter-dur: 1.95s;
+  --crt-jitter-delay: 0s;
+}
+[data-crt-slot="files"] {
+  --crt-hum-delay: -4.3s;
+  --crt-hum-dur: 7.8s;
+  --crt-warmth-dur: 0.27s;
+  --crt-jitter-dur: 2.15s;
+  --crt-jitter-delay: -0.4s;
+}
+[data-crt-slot="apps"] {
+  --crt-hum-delay: -6.1s;
+  --crt-hum-dur: 7.2s;
+  --crt-warmth-dur: 0.24s;
+  --crt-jitter-dur: 2.05s;
+  --crt-jitter-delay: -0.8s;
+}
+[data-crt-slot="options"] {
+  --crt-hum-delay: -3.2s;
+  --crt-hum-dur: 7.6s;
+  --crt-warmth-dur: 0.26s;
+  --crt-jitter-dur: 1.88s;
+  --crt-jitter-delay: -0.2s;
 }

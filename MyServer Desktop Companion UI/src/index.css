@@ -411,16 +411,20 @@
     transform: translateX(25px);
     opacity: 0;
   }
-  3% {
+  2% {
     transform: translateX(25px);
     opacity: 1;
   }
-  75% {
+  90% {
     transform: translateX(-100%);
     opacity: 1;
   }
-  80% {
+  94% {
     transform: translateX(-100%);
+    opacity: 0;
+  }
+  95% {
+    transform: translateX(25px);
     opacity: 0;
   }
   100% {
@@ -431,6 +435,7 @@
 .notif-pill-marquee {
   animation-name: notif-pill-marquee;
   animation-timing-function: linear;
+  animation-fill-mode: forwards;
   will-change: transform, opacity;
 }
 

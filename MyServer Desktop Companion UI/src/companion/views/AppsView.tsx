@@ -234,9 +234,6 @@ export default function AppsView() {
             <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
               {t("apps_section_title", "Layanan & Kontainer")}
             </span>
-            <span className="rounded-full bg-surface-sunken border border-line px-1.5 py-0.2 text-[9px] font-mono font-bold text-ink-muted shrink-0">
-              {safeWebApps.length}
-            </span>
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <button

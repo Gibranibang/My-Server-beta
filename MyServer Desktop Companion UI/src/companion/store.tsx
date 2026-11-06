@@ -249,32 +249,37 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         setMonitoringLoading(false)
       }
     })
+    let isInitialBoot = true
     let prevPowerState: string | null = null
     const offPower = api.subscribePower((p) => {
       setPower(p)
       if (p === "offline" || p === "online") {
         setMonitoringLoading(false)
       }
-      if (prevPowerState !== null && p !== prevPowerState) {
-        if (p === "connecting") {
+      if (!isInitialBoot && prevPowerState !== null && p !== prevPowerState) {
+        if (p === "connecting" && prevPowerState === "offline") {
           window.dispatchEvent(new CustomEvent("myserver:notify", {
             detail: { text: "Menghubungkan ke server...", tone: "warning" }
           }))
-        } else if (p === "online") {
+        } else if (p === "online" && prevPowerState === "offline") {
           window.dispatchEvent(new CustomEvent("myserver:notify", {
-            detail: { text: "Terhubung ke server", tone: "success" }
+            detail: { text: "Terhubung kembali ke server", tone: "success" }
           }))
-        } else if (p === "offline") {
+        } else if (p === "offline" && prevPowerState === "online") {
           window.dispatchEvent(new CustomEvent("myserver:notify", {
             detail: { text: "Koneksi Terputus", tone: "danger" }
           }))
         }
+      }
+      if (p === "online" || p === "offline") {
+        isInitialBoot = false
       }
       prevPowerState = p
     })
 
     // Monitoring notifikasi berkala: Syncthing milestones (25%, 50%, 90%, 100%) & perubahan rute
     const lastMilestones = new Map<string, Set<number>>()
+    let isInitialSyncthingCheck = true
     let prevActiveRouteId: string | null = null
 
     const checkMilestonesAndRoutes = async () => {
@@ -282,6 +287,20 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         if (api.getSyncthingTasks) {
           const tasks = await api.getSyncthingTasks()
           if (Array.isArray(tasks)) {
+            // Pada inisialisasi awal saat start: catat milestone yang sudah ada tanpa kirim notifikasi retroaktif
+            if (isInitialSyncthingCheck) {
+              for (const task of tasks) {
+                const comp = Math.round(task.completion || 0)
+                const triggered = new Set<number>()
+                for (const m of [25, 50, 90, 100]) {
+                  if (comp >= m) triggered.add(m)
+                }
+                lastMilestones.set(task.id, triggered)
+              }
+              isInitialSyncthingCheck = false
+              return
+            }
+
             for (const task of tasks) {
               if (task.paused) continue
               const comp = Math.round(task.completion || 0)
@@ -588,11 +607,24 @@ const NoticeContext = createContext<{
 /** Per-companion transient notices, so a toast appears only in the flyout that triggered it. */
 export function NoticeProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<Notice | null>(null)
-  const [noticeHistory, setNoticeHistory] = useState<NoticeHistoryItem[]>([])
+  const [noticeHistory, setNoticeHistory] = useState<NoticeHistoryItem[]>(() => {
+    try {
+      const raw = localStorage.getItem("myserver_notice_history")
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) return parsed
+      }
+    } catch {}
+    return []
+  })
   const timer = useRef<number | undefined>(undefined)
 
   const clearNoticeHistory = useCallback(() => {
     setNoticeHistory([])
+    try {
+      localStorage.removeItem("myserver_notice_history")
+      localStorage.setItem("myserver_last_seen_notice_id", String(Date.now()))
+    } catch {}
   }, [])
 
   const notify = useCallback((text: string, tone: Tone = "success") => {
@@ -601,7 +633,13 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
     const d = new Date()
     const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`
     setNotice({ id, text, tone })
-    setNoticeHistory((prev) => [{ id, text, tone, timeStr }, ...prev.slice(0, 49)])
+    setNoticeHistory((prev) => {
+      const next = [{ id, text, tone, timeStr }, ...prev.slice(0, 49)]
+      try {
+        localStorage.setItem("myserver_notice_history", JSON.stringify(next))
+      } catch {}
+      return next
+    })
     timer.current = window.setTimeout(() => setNotice(null), 3200)
   }, [])
 

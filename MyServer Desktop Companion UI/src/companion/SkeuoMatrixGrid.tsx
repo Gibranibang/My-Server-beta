@@ -3456,6 +3456,7 @@ export default function SkeuoMatrixGrid({
     >
       {/* Slot 1 (Baris 1 - Kiri): BACKUP */}
       <div
+        data-crt-slot="backup"
         className="card-container w-[122px] h-[110px] select-none relative cursor-pointer overflow-visible"
         role="button"
         tabIndex={0}
@@ -3479,6 +3480,7 @@ export default function SkeuoMatrixGrid({
 
       {/* Slot 2 (Baris 1 - Kanan): FILE MANAGER */}
       <div
+        data-crt-slot="files"
         className="card-container w-[122px] h-[110px] select-none relative cursor-pointer overflow-visible"
         role="button"
         tabIndex={0}
@@ -3495,6 +3497,7 @@ export default function SkeuoMatrixGrid({
 
       {/* Slot 3 (Baris 2 - Kiri): APPS */}
       <div
+        data-crt-slot="apps"
         className="card-container w-[122px] h-[110px] select-none relative cursor-pointer overflow-visible"
         role="button"
         tabIndex={0}
@@ -3518,6 +3521,7 @@ export default function SkeuoMatrixGrid({
 
       {/* Slot 4 (Baris 2 - Kanan): OPTIONS */}
       <div
+        data-crt-slot="options"
         className="card-container w-[122px] h-[110px] select-none relative cursor-pointer overflow-visible"
         role="button"
         tabIndex={0}

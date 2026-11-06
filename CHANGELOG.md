@@ -1,5 +1,15 @@
 # Changelog MyServer Desktop
 
+## [v4.0.11 - Beta] - 2026-11-06
+
+- Penyelarasan Skeleton Loading Footer Card Home View: Merekonstruksi kartu status server bagian bawah pada kondisi cold-start loading agar selaras 100% dengan skeleton card lainnya (menggunakan container `border border-line bg-surface`, bayangan `shadow-card`, dan placeholder `bg-surface-sunken animate-pulse`). Mengeliminasi background putih/krem `#F6F6F6` yang bertabrakan dengan dark mode, serta menghapus elemen statis (LCD teks 'Offline' dan tombol notifikasi aktif) selama fase loading.
+
+## [v4.0.10 - Beta] - 2026-11-06
+
+- Rekonstruksi Tombol Daya & Footer Subsistem Daya (Figma 1:1): Mengganti tombol Reboot dan Shutdown dengan pill ramping h-[26px] px-2 text-[10.5px] anti-overflow (mengeliminasi teks terpotong pada Bahasa Indonesia), serta menstandarisasi Footer Subsistem Daya dengan TrayChip resmi Figma dan showNoticePill={false} (pb-[10px] mt-[9.19px]) mengadopsi kerapian menu Apps (Gambar 2).
+- Penyelarasan Skala Card WoL & Checklist Mengadopsi v3.12.1 Beta: Mengoptimalkan field input MAC (h-[30px] text-[10.5px]), tombol Deteksi via ARP (h-[22px] px-2 text-[9.5px]), tombol Kirim Magic Packet (h-[30px] text-[11px] font-semibold), dan checklist hardware (size-3.5 icons, text-[11px] labels, text-[9.5px] descriptions) agar pas elegan dalam satu tampilan tanpa scroll berlebih.
+- Diferensiasi Warna Telemetri Layar Monitoring NET (Gambar 5): Menambahkan palet warna Biru Elektrik (#38BDF8) pada LED dot matrix 6x3 dan font readout Doto saat Speed Up (Upload) aktif atau dominan, membedakannya secara tegas dan instan dari Speed Down (Download) yang berwarna Hijau Retro (#7BC504), dengan tetap mempertahankan 100% dimensi casing metalik dan estetika skeuomorfik.
+
 ## [v4.0.6 - Beta] - 2026-11-05
 
 - Restorasi Menyeluruh Animasi CRT Suite (1:1 v4.0.0 Standard): Memulihkan seluruh efek elektronik CRT retro pada 4 kartu utama (Backup, File Manager, Apps, Options) mencakup Fine Scanlines Mesh, 60Hz Ground AC Hum Bar, Tube Warmth Flicker, dan V-Sync Tracking Line Flash.

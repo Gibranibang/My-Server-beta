@@ -246,16 +246,22 @@ export default function HomeView({ go }: ViewProps) {
           ))}
         </div>
         <div className="h-[9.18px] shrink-0" aria-hidden />
-        {/* Cold-Start Footer Card Skeleton */}
-        <FooterStatus
-          title={<div className="h-5 w-28 rounded bg-surface-sunken animate-pulse" />}
-          chips={
-            <div className="flex items-center gap-1">
-              <div className="h-5 w-12 rounded-full bg-surface-sunken animate-pulse" />
-              <div className="h-5 w-14 rounded-full bg-surface-sunken animate-pulse" />
+        {/* Cold-Start Footer Card Skeleton — Selaras dengan skeleton card lain (border-line, bg-surface, bg-surface-sunken) */}
+        <div className="w-[252px] h-[70px] mx-auto rounded-[10px] border border-line bg-surface px-[7px] pt-[6.5px] pb-[6px] flex flex-col justify-between shrink-0 select-none shadow-card">
+          {/* Row 1: Server Name LCD & Status Pill */}
+          <div className="flex items-center justify-between w-full h-[21px] shrink-0">
+            <div className="h-[20px] w-[171px] rounded-[4px] bg-surface-sunken animate-pulse" />
+            <div className="h-[20px] w-[55px] rounded-[4px] bg-surface-sunken animate-pulse" />
+          </div>
+          {/* Row 2: Route / Account Chips & Notification Pill */}
+          <div className="flex items-center justify-between w-full h-[24px] shrink-0">
+            <div className="flex items-center gap-[6px]">
+              <div className="h-[20px] w-[64px] rounded-full bg-surface-sunken animate-pulse" />
+              <div className="h-[20px] w-[68px] rounded-full bg-surface-sunken animate-pulse" />
             </div>
-          }
-        />
+            <div className="h-[24px] w-[56px] rounded-full bg-surface-sunken animate-pulse" />
+          </div>
+        </div>
       </div>
     )
   }

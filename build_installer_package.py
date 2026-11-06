@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "4.0.6"
+VERSION = "4.0.11"
 
 APP_NAME = "My-Server by algitha BETA"
 
@@ -408,7 +408,7 @@ Source: "dist\\staging_payload\\*"; DestDir: "{{app}}"; Flags: ignoreversion rec
 
 ; Lindungi config.json agar tidak pernah tertimpa saat update / reinstall
 
-Source: "dist\\staging_payload\\config.json"; DestDir: "{{app}}"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
+Source: "dist\\staging_payload\\config.json"; DestDir: "{{app}}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 
 

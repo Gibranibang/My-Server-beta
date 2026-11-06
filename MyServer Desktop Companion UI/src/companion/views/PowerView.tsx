@@ -1,7 +1,7 @@
 import { getTranslation } from "../i18n"
 import { useEffect, useState } from "react"
 import { Circle, CircleCheck, Power, Radar, RotateCw, ShieldAlert, Zap, AlertTriangle } from "lucide-react"
-import { FooterStatus } from "../FlyoutShell"
+import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { getCompanionApi } from "../api"
 import {
   SERVER_IP,
@@ -193,27 +193,33 @@ export default function PowerView() {
                 {t("admin_only_badge", "Admin Only")}
               </span>
             </div>
-            <p className="text-micro text-ink-subtle leading-relaxed">
+            <p className="text-[10px] text-ink-subtle leading-normal">
               {t("admin_power_locked_desc", `Tombol Reboot & Shutdown hanya dapat dikendalikan oleh Administrator. Profil saat ini (${activeUser}) adalah akun pengguna standar.`)}
             </p>
-            <div className="grid grid-cols-2 gap-2 pt-1 opacity-50 cursor-not-allowed">
-              <Button variant="secondary" icon={RotateCw} block disabled size="sm">
-                {t("reboot_locked", "Reboot (Terkunci)")}
-              </Button>
-              <Button variant="danger" icon={Power} block disabled size="sm">
-                {t("shutdown_locked", "Shutdown (Terkunci)")}
-              </Button>
+            <div className="grid grid-cols-2 gap-1.5 pt-1 opacity-75 cursor-not-allowed">
+              <button
+                type="button"
+                disabled
+                className="h-[26px] px-1.5 flex items-center justify-center gap-1 rounded-full bg-surface-muted border border-line text-ink-soft text-[9px] font-medium tracking-tight transition cursor-not-allowed select-none"
+              >
+                <RotateCw className="size-3 shrink-0 stroke-[2]" aria-hidden />
+                <span className="whitespace-nowrap">{t("reboot_locked", "Reboot (Terkunci)")}</span>
+              </button>
+              <button
+                type="button"
+                disabled
+                className="h-[26px] px-1.5 flex items-center justify-center gap-1 rounded-full bg-danger-soft/40 border border-danger/30 text-danger-ink text-[9px] font-medium tracking-tight transition cursor-not-allowed select-none"
+              >
+                <Power className="size-3 shrink-0 stroke-[2]" aria-hidden />
+                <span className="whitespace-nowrap">{t("shutdown_locked", "Shutdown (Terkunci)")}</span>
+              </button>
             </div>
           </Card>
         ) : (
-          <div className="flex flex-col gap-2">
-            <Button
-              variant="secondary"
-              icon={RotateCw}
-              block
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
               disabled={power === "offline" || power === "waking"}
-              state={power === "rebooting" ? "busy" : "idle"}
-              busyLabel={t("rebooting_busy", "Memulai ulang server…")}
               onClick={() => {
                 if (!isOnline) return
                 reboot()
@@ -222,23 +228,29 @@ export default function PowerView() {
                   )
                   .catch((e) => notify(errorText(e), "danger"))
               }}
+              className="h-[28px] px-2 flex items-center justify-center gap-1.5 rounded-full bg-surface-muted hover:bg-line text-ink-soft text-[11px] font-medium transition cursor-pointer select-none disabled:opacity-45 disabled:pointer-events-none"
             >
-              {t("reboot_server_btn", "Muat Ulang Server (Reboot)")}
-            </Button>
-            <Button
-              variant="danger"
-              icon={Power}
-              block
+              <RotateCw className="size-3.5 shrink-0 stroke-[2]" aria-hidden />
+              <span className="truncate">{t("reboot_server_btn", "Muat Ulang Server")}</span>
+            </button>
+            <button
+              type="button"
               disabled={!isOnline}
               onClick={onShutdown}
-              className={cx(confirming && "ring-4 ring-danger/25")}
+              className={cx(
+                "h-[28px] px-2 flex items-center justify-center gap-1.5 rounded-full bg-danger/15 hover:bg-danger/25 text-danger-ink border border-danger/30 text-[11px] font-semibold transition cursor-pointer select-none disabled:opacity-45 disabled:pointer-events-none",
+                confirming && "ring-4 ring-danger/25"
+              )}
             >
-              {confirming
-                ? t("confirm_click_again", "Klik lagi untuk konfirmasi")
-                : power === "offline"
-                  ? t("server_offline_status", "Server Mati")
-                  : t("shutdown_server_btn", "Matikan Server (Shutdown)")}
-            </Button>
+              <Power className="size-3.5 shrink-0 stroke-[2]" aria-hidden />
+              <span className="truncate">
+                {confirming
+                  ? t("confirm_click_again", "Konfirmasi")
+                  : power === "offline"
+                    ? t("server_offline_status", "Server Mati")
+                    : t("shutdown_server_btn", "Matikan Server")}
+              </span>
+            </button>
           </div>
         )}
 
@@ -264,7 +276,7 @@ export default function PowerView() {
 
           <div
             className={cx(
-              "flex h-9.5 items-center gap-2 rounded-control border bg-surface-sunken pr-1 pl-3 shadow-track transition-[border-color,box-shadow] focus-within:ring-2 focus-within:ring-info/15",
+              "flex h-[30px] items-center gap-1.5 rounded-lg border bg-surface-sunken pr-1 pl-2.5 shadow-track transition-[border-color,box-shadow] focus-within:ring-2 focus-within:ring-info/15",
               macValid
                 ? "border-line focus-within:border-info/50"
                 : "border-warning",
@@ -290,16 +302,11 @@ export default function PowerView() {
               spellCheck={false}
               autoComplete="off"
               placeholder={t("mac_placeholder", "Masukkan MAC atau klik Deteksi ARP")}
-              className="min-w-0 flex-1 bg-transparent font-mono text-caption font-semibold tracking-[0.02em] text-ink outline-none placeholder:text-ink-faint"
+              className="min-w-0 flex-1 bg-transparent font-mono text-[10.5px] font-semibold tracking-[0.02em] text-ink outline-none placeholder:text-ink-faint"
             />
-            <Button
-              size="sm"
-              variant="info"
-              icon={Radar}
-              className="px-2.5"
-              state={arpState}
-              busyLabel={t("scanning_busy", "Memindai…")}
-              doneLabel={t("detected_done", "Terdeteksi")}
+            <button
+              type="button"
+              disabled={arpState === "busy"}
               onClick={() =>
                 runArp((found) => {
                   const clean = formatMac(found || "")
@@ -313,29 +320,34 @@ export default function PowerView() {
                   }
                 })
               }
+              className="h-[22px] px-2 flex items-center gap-1 rounded-full bg-info/10 hover:bg-info/20 text-info text-[9.5px] font-semibold transition cursor-pointer select-none"
             >
-              {t("detect_arp_btn", "Deteksi via ARP")}
-            </Button>
+              <Radar className="size-3 shrink-0" />
+              <span>{arpState === "busy" ? t("scanning_busy", "Memindai…") : t("detect_arp_btn", "Deteksi via ARP")}</span>
+            </button>
           </div>
 
-          <Button
-            variant="primary"
-            icon={Zap}
-            block
-            disabled={!macValid || power === "rebooting"}
-            state={power === "waking" ? "busy" : wolState}
-            busyLabel={
-              power === "waking" ? t("waking_busy", "Menunggu server bangun…") : t("sending_packet_busy", "Mengirim paket…")
-            }
-            doneLabel={t("packet_sent_done", "Paket terkirim")}
+          <button
+            type="button"
+            disabled={!macValid || power === "rebooting" || wolState === "busy"}
             onClick={onWake}
+            className="h-[30px] w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold transition shadow-xs cursor-pointer select-none disabled:opacity-50 disabled:pointer-events-none"
           >
-            {t("send_wol_btn", "Kirim Magic Packet (WoL)")}
-          </Button>
+            <Zap className="size-3.5 shrink-0" />
+            <span>
+              {power === "waking"
+                ? t("waking_busy", "Menunggu server bangun…")
+                : wolState === "busy"
+                  ? t("sending_packet_busy", "Mengirim paket…")
+                  : wolState === "done"
+                    ? t("packet_sent_done", "Paket terkirim")
+                    : t("send_wol_btn", "Kirim Magic Packet (WoL)")}
+            </span>
+          </button>
 
           <ul
             aria-label={t("hw_requirements_label", "Persyaratan perangkat keras")}
-            className="flex flex-col gap-2"
+            className="flex flex-col gap-1.5 border-t border-line/60 pt-2"
           >
             {checklistItems.map((item) => {
               const checked = item.checked
@@ -347,21 +359,21 @@ export default function PowerView() {
                     role="checkbox"
                     aria-checked={checked}
                     onClick={() => handleToggleCheck(item.key)}
-                    className="flex w-full items-start gap-2.5 rounded-control p-1 text-left transition hover:bg-surface-sunken/40 outline-none focus-visible:ring-2 focus-visible:ring-info/45 cursor-pointer"
+                    className="flex w-full items-start gap-2 rounded-md p-1 text-left transition hover:bg-surface-sunken/40 outline-none focus-visible:ring-2 focus-visible:ring-info/45 cursor-pointer"
                   >
                     <Icon
                       className={cx(
-                        "size-4 mt-0.5 shrink-0",
+                        "size-3.5 mt-0.5 shrink-0",
                         checked ? "text-success" : (item.isAuto ? "text-warning" : "text-ink-faint")
                       )}
                       strokeWidth={2.2}
                       aria-hidden
                     />
                     <div className="flex flex-col min-w-0">
-                      <span className={cx("text-caption font-medium", !checked && "text-ink-subtle")}>
+                      <span className={cx("text-[11px] font-medium leading-tight", !checked && "text-ink-subtle")}>
                         {item.label}
                       </span>
-                      <span className={cx("text-micro", checked ? "text-ink-muted" : (item.isAuto ? "text-warning-ink font-semibold" : "text-ink-faint"))}>
+                      <span className={cx("text-[9.5px] leading-tight", checked ? "text-ink-muted" : (item.isAuto ? "text-warning-ink font-semibold" : "text-ink-faint"))}>
                         {item.desc}
                       </span>
                     </div>
@@ -372,8 +384,8 @@ export default function PowerView() {
           </ul>
 
           {!isLanReady && (
-            <div className="flex items-start gap-2 rounded-control border border-warning-line/60 bg-warning-soft/20 p-2 text-micro text-warning-ink leading-relaxed">
-              <AlertTriangle className="size-3.5 text-warning shrink-0 mt-0.5" />
+            <div className="flex items-start gap-1.5 rounded-lg border border-warning-line/60 bg-warning-soft/20 p-1.5 text-[9.5px] text-warning-ink leading-tight">
+              <AlertTriangle className="size-3 text-warning shrink-0 mt-0.5" />
               <span>{t("wol_wan_warning", "Rute saat ini adalah WAN/Domain. Paket Wake-on-LAN hanya dapat menjangkau server saat laptop berada di jaringan LAN lokal yang sama.")}</span>
             </div>
           )}
@@ -381,18 +393,19 @@ export default function PowerView() {
       </ViewBody>
 
       <FooterStatus
-        title={t("power_subsystem_title", "Power Subsystem")}
+        showNoticePill={false}
+        title={t("power_subsystem_title", "Subsistem Daya")}
         chips={
           <>
-            <Chip>
-              <span>
-                {t("port_label", "Port")}: <Mono>9</Mono> UDP
-              </span>
-            </Chip>
-            <Chip>{t("target_broadcast", "Target: Broadcast")}</Chip>
-            <Chip tone={ready ? "success" : "warning"}>
-              {t("status_label", "Status")}: {ready ? t("status_ready", "Ready") : (!isLanReady ? t("wol_status_need_lan", "Need LAN") : t("status_check", "Check"))}
-            </Chip>
+            <TrayChip>
+              {t("port_label", "Port")}: 9 UDP
+            </TrayChip>
+            <TrayChip>
+              {t("target_broadcast", "Target: Broadcast")}
+            </TrayChip>
+            <TrayChip tone={ready ? "success" : "warning"}>
+              {t("status_label", "Status")}: {ready ? t("status_ready", "Siap") : (!isLanReady ? t("wol_status_need_lan", "Perlu LAN") : t("status_check", "Periksa"))}
+            </TrayChip>
           </>
         }
       />

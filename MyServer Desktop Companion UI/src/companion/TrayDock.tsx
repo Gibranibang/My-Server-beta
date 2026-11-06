@@ -50,6 +50,10 @@ function MetricTile({
             <stop offset="0%" stopColor="#7BC504" />
             <stop offset="100%" stopColor="#FBEE75" />
           </linearGradient>
+          <linearGradient id="telemetry-readout-grad-blue" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#38BDF8" />
+            <stop offset="100%" stopColor="#93C5FD" />
+          </linearGradient>
           <radialGradient
             id={fillId}
             cx="0"
@@ -133,8 +137,17 @@ const LED_ON = "#7BC504"
 const LED_OFF = "#263016"
 const LED_ALERT = "#EF4444"
 
+const LED_BLUE_ON = "#38BDF8"
+const LED_BLUE_OFF = "#13253A"
+
 /** Angka persentase / kecepatan — font "Doto" (Figma: y = 10.67..16.88). */
 function Readout({ children, tone }: { children: ReactNode; tone?: Tone }) {
+  const fill =
+    tone === "danger"
+      ? LED_ALERT
+      : tone === "info"
+        ? "url(#telemetry-readout-grad-blue)"
+        : "url(#telemetry-readout-grad)"
   return (
     <text
       x="25"
@@ -145,7 +158,7 @@ function Readout({ children, tone }: { children: ReactNode; tone?: Tone }) {
       fontWeight={900}
       fontSize="9.5"
       letterSpacing="-0.2px"
-      fill={tone === "danger" ? LED_ALERT : "url(#telemetry-readout-grad)"}
+      fill={fill}
     >
       {children}
     </text>
@@ -168,7 +181,8 @@ interface DotMatrixProps {
 }
 
 function DotMatrix({ levels, tone }: DotMatrixProps) {
-  const on = tone === "danger" ? LED_ALERT : LED_ON
+  const on = tone === "danger" ? LED_ALERT : tone === "info" ? LED_BLUE_ON : LED_ON
+  const off = tone === "info" ? LED_BLUE_OFF : LED_OFF
   return (
     <>
       {Array.from({ length: DOT_COLS }, (_, col) => {
@@ -182,7 +196,7 @@ function DotMatrix({ levels, tone }: DotMatrixProps) {
               cx={DOT_X0 + col * DOT_COL_STEP}
               cy={DOT_Y0 + row * DOT_ROW_STEP}
               r={DOT_R}
-              fill={lit ? on : LED_OFF}
+              fill={lit ? on : off}
               style={{ transition: "fill 200ms" }}
             />
           )
@@ -269,7 +283,7 @@ function NetMeter({
 
   return (
     <>
-      <Readout>{live ? formatMinimalSpeed(activeBps) : "–"}</Readout>
+      <Readout tone={live ? dotTone : "neutral"}>{live ? formatMinimalSpeed(activeBps) : "–"}</Readout>
       <DotMatrix levels={levels} tone={live ? dotTone : "neutral"} />
     </>
   )

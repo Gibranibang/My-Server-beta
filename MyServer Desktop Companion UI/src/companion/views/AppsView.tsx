@@ -18,7 +18,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react"
-import { FooterStatus } from "../FlyoutShell"
+import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { SERVER_IP, SERVER_URL, useCompanion, useNotice } from "../store"
 import { Button, Card, Chip, IconBadge, Mono, StatusDot, cx } from "../ui"
 import { ViewBody } from "./shared"
@@ -230,18 +230,23 @@ export default function AppsView() {
       <ViewBody>
         {/* Header Bar */}
         <div className="flex items-center justify-between pl-1">
-          <span className="text-nano font-bold tracking-[0.12em] text-ink-subtle uppercase">
-            Layanan & Kontainer · {safeWebApps.length}
-          </span>
-          <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              variant={isAdding ? "ghost" : "info"}
-              icon={isAdding ? X : Plus}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
+              {t("apps_section_title", "Layanan & Kontainer")}
+            </span>
+            <span className="rounded-full bg-surface-sunken border border-line px-1.5 py-0.2 text-[9px] font-mono font-bold text-ink-muted shrink-0">
+              {safeWebApps.length}
+            </span>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
               onClick={() => setIsAdding(!isAdding)}
+              className="h-[23px] px-2.5 flex items-center gap-1 rounded-full bg-info-ink/15 hover:bg-info-ink/25 text-info-ink text-[10.5px] font-semibold transition cursor-pointer select-none"
             >
-              {isAdding ? "Tutup" : "Tambah App"}
-            </Button>
+              {isAdding ? <X className="size-3" /> : <Plus className="size-3" />}
+              <span>{isAdding ? t("close_btn", "Tutup") : t("add_app_btn", "Tambah App")}</span>
+            </button>
           </div>
         </div>
 
@@ -399,11 +404,11 @@ export default function AppsView() {
 
               return (
                 <li key={app.id}>
-                  <Card className="group relative flex flex-col justify-between px-3 pt-3 pb-2.5 min-h-[120px]">
+                  <Card className="group relative flex flex-col justify-between p-2.5 min-h-[112px]">
                     <div>
-                      <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start justify-between gap-1.5">
                         {hasCustomIcon ? (
-                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface/80 p-1 border border-ink-subtle/15">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface/80 p-0.5 border border-ink-subtle/15 shrink-0">
                             <img
                               src={app.icon}
                               alt={app.name}
@@ -414,12 +419,14 @@ export default function AppsView() {
                             />
                           </div>
                         ) : (
-                          <IconBadge icon={fallback.icon} tone={fallback.tone} />
+                          <div className="shrink-0 scale-90 origin-top-left">
+                            <IconBadge icon={fallback.icon} tone={fallback.tone} size="sm" />
+                          </div>
                         )}
 
                         <span
                           className={cx(
-                            "inline-flex items-center gap-1.5 text-nano font-semibold",
+                            "inline-flex items-center gap-1 text-[9px] font-semibold shrink-0 pt-0.5",
                             isRunning
                               ? "text-success-ink"
                               : isExited
@@ -435,14 +442,14 @@ export default function AppsView() {
                         </span>
                       </div>
 
-                      <div className="mt-2 truncate text-body font-semibold text-ink" title={app.name}>
+                      <div className="mt-1.5 truncate text-[12px] font-semibold leading-tight text-ink" title={app.name}>
                         {app.name}
                       </div>
 
-                      <div className="truncate text-micro text-ink-subtle mt-0.5">
+                      <div className="truncate text-[9.5px] text-ink-subtle mt-0.5">
                         {app.port ? (
                           <>
-                            Port <Mono className="text-ink-muted">{app.port}</Mono>
+                            Port <Mono className="text-ink-muted font-medium">{app.port}</Mono>
                           </>
                         ) : (
                           <span className="truncate opacity-80" title={app.url}>
@@ -456,7 +463,7 @@ export default function AppsView() {
                     {menuOpenId === app.id ? (
                       <div
                         ref={menuRef}
-                        className="mt-2.5 flex flex-col gap-1 rounded-xl border border-ink-subtle/20 bg-surface/90 p-1.5 shadow-sm animate-in fade-in duration-150"
+                        className="mt-2 flex flex-col gap-1 rounded-xl border border-ink-subtle/20 bg-surface/90 p-1.5 shadow-sm animate-in fade-in duration-150"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-between px-1.5 py-0.5 border-b border-ink-subtle/10 mb-0.5">
@@ -512,32 +519,31 @@ export default function AppsView() {
                         )}
                       </div>
                     ) : (
-                      <div className="mt-3 flex items-center gap-1">
-                        <Button
-                          size="sm"
-                          variant="soft"
-                          icon={ExternalLink}
-                          className="flex-1 min-w-0 font-medium"
+                      <div className="mt-2.5 flex items-center gap-1">
+                        <button
+                          type="button"
                           disabled={isDeleting}
                           aria-label={`Buka jendela ${app.name}`}
                           title="Buka di jendela mandiri MyServer"
                           onClick={() => handleOpen(app.url, app.name)}
+                          className="flex-1 h-[23px] rounded-md px-2 flex items-center justify-center gap-1 bg-surface-sunken hover:bg-line border border-line text-[10.5px] font-semibold text-ink transition cursor-pointer select-none active:scale-[0.98]"
                         >
-                          <span className="truncate">Buka</span>
-                        </Button>
+                          <ExternalLink className="size-3 text-ink-muted shrink-0" />
+                          <span className="truncate">{t("open_btn", "Buka")}</span>
+                        </button>
 
-                        <Button
-                          size="sm"
-                          variant="soft"
-                          icon={MoreVertical}
+                        <button
+                          type="button"
                           aria-label={`Opsi lainnya untuk ${app.name}`}
                           title="Opsi lainnya"
-                          className="px-2 shrink-0 text-ink-subtle hover:text-ink"
                           onClick={(e) => {
                             e.stopPropagation()
                             setMenuOpenId(app.id)
                           }}
-                        />
+                          className="size-[23px] shrink-0 rounded-md flex items-center justify-center bg-surface-sunken hover:bg-line border border-line text-ink-subtle hover:text-ink transition cursor-pointer"
+                        >
+                          <MoreVertical className="size-3" />
+                        </button>
                       </div>
                     )}
                   </Card>
@@ -553,12 +559,12 @@ export default function AppsView() {
         title="ZimaOS Docker"
         chips={
           <>
-            <Chip tone={activeCount > 0 ? "success" : "neutral"} icon={Boxes}>
+            <TrayChip tone={activeCount > 0 ? "success" : "neutral"} icon={Boxes}>
               {activeCount} {t("filter_active", "Aktif")} / {safeWebApps.length} {t("total_label", "Total")}
-            </Chip>
-            <Chip tone={isOnline ? "success" : "neutral"}>
+            </TrayChip>
+            <TrayChip tone={isOnline ? "success" : "neutral"}>
               Engine: {isOnline ? "Online" : "Offline"}
-            </Chip>
+            </TrayChip>
           </>
         }
       />

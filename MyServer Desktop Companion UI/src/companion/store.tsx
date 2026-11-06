@@ -358,6 +358,7 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         try {
           const urlParams = new URLSearchParams(window.location.search)
           const qTheme = urlParams.get("theme")
+          const qLang = urlParams.get("lang")
           if (qTheme === "dark" || qTheme === "light") {
             effective = { ...loaded, theme: qTheme as any }
           } else {
@@ -368,6 +369,9 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
               localStorage.setItem("myserver_theme", loaded.theme)
             }
           }
+          if (qLang === "id" || qLang === "en") {
+            effective = { ...effective, language: qLang as any }
+          }
         } catch {}
         setSettings(effective)
       }),
@@ -376,6 +380,8 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       const elapsed = Date.now() - coldStartBegin
       const remaining = Math.max(0, 650 - elapsed)
       setTimeout(() => {
+        const isForcedSkeleton = typeof window !== "undefined" && window.location.search.includes("skeleton=1")
+        if (isForcedSkeleton) return
         setHomeLoading(false)
         setIsInitialLoading(false)
       }, remaining)

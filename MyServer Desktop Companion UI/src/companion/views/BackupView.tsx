@@ -37,7 +37,7 @@ import {
   Network,
   type LucideIcon,
 } from "lucide-react"
-import { FooterStatus } from "../FlyoutShell"
+import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { getCompanionApi } from "../api"
 import { errorText, useAsyncAction, useCompanion, useNotice } from "../store"
 import type { SyncthingFolderTask, SyncthingFullStatus, ServerItem, Tone } from "../types"
@@ -1667,19 +1667,19 @@ export default function BackupView() {
         title={t("data_sync_footer", "Data Synchronization")}
         chips={
           <>
-            <Chip tone={daemon?.running ? "success" : "neutral"}>
+            <TrayChip tone={daemon?.running ? "success" : "neutral"}>
               <span>
                 Daemon: <Mono>{daemon?.running ? "8384" : "Off"}</Mono>
               </span>
-            </Chip>
-            <Chip tone={isPaired ? "success" : "warning"}>
+            </TrayChip>
+            <TrayChip tone={isPaired ? "success" : "warning"}>
               {isPaired ? "Pair: Ready" : "Unpaired"}
-            </Chip>
-            <Chip tone={isOnline ? "success" : "neutral"}>
+            </TrayChip>
+            <TrayChip tone={isOnline ? "success" : "neutral"}>
               <span>
                 Sync: <Mono>{isSyncActive ? `${syncPct}%` : "100%"}</Mono>
               </span>
-            </Chip>
+            </TrayChip>
           </>
         }
       />

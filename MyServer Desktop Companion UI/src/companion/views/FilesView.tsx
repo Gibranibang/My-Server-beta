@@ -1,7 +1,7 @@
 import { getTranslation } from "../i18n"
 import { useCallback, useEffect, useMemo } from "react"
 import { Folder, FolderOpen, HardDrive, Send, Unplug } from "lucide-react"
-import { FooterStatus } from "../FlyoutShell"
+import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { useAsyncAction, useCompanion, useNotice } from "../store"
 import { getCompanionApi } from "../api"
 import {
@@ -276,22 +276,20 @@ export default function FilesView() {
         }
         chips={
           <>
-            <Chip size="sm" tone={isOnline ? "success" : "neutral"} className="text-nano px-2 py-0.5">
+            <TrayChip tone={isOnline ? "success" : "neutral"}>
               SMBv3 {isOnline ? "Active" : "Idle"}
-            </Chip>
-            <Chip size="sm" tone={online > 0 ? "info" : "neutral"} className="text-nano px-2 py-0.5">
+            </TrayChip>
+            <TrayChip tone={online > 0 ? "info" : "neutral"}>
               {online} {online === 1 ? "Drive" : "Drives"}
-            </Chip>
-            <Chip
-              size="sm"
+            </TrayChip>
+            <TrayChip
               icon={FolderOpen}
-              className="text-nano px-2 py-0.5"
               onClick={() => {
                 api.openUnc()
                 notify(`Membuka root ${uncHost} di Explorer`, "info")
               }}
-              label={`Open Root UNC ${uncHost}`}
-            >{t("open_unc_chip", "Open UNC")}</Chip>
+              title={`Open Root UNC ${uncHost}`}
+            >{t("open_unc_chip", "Open UNC")}</TrayChip>
           </>
         }
       />

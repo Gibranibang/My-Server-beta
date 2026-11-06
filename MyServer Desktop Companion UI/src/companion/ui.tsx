@@ -386,11 +386,11 @@ export function SectionLabel({
 }) {
   return (
     <div className="flex items-center justify-between px-1">
-      <span className="text-nano font-bold tracking-[0.12em] text-ink-subtle uppercase">
+      <span className="text-nano font-bold tracking-[0.12em] text-ink-muted uppercase">
         {children}
       </span>
       {trailing && (
-        <span className="text-micro font-medium text-ink-faint">
+        <span className="text-micro font-medium text-ink-subtle">
           {trailing}
         </span>
       )}

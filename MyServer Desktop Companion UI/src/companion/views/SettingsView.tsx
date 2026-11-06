@@ -21,7 +21,7 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react"
-import { FooterStatus } from "../FlyoutShell"
+import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { getCompanionApi } from "../api"
 import { errorText, useAsyncAction, useCompanion, useNotice } from "../store"
 import {
@@ -819,24 +819,19 @@ export default function SettingsView() {
         title={t("client_status")}
         chips={
           <>
-            <Chip
-              size="sm"
-              className="cursor-pointer hover:border-brand transition text-nano px-2 py-0.5"
+            <TrayChip
               onClick={toggleLanguage}
+              title={t("lang_chip")}
             >
               {t("lang_chip")}
-            </Chip>
-            <Chip
-              size="sm"
-              className="text-nano px-2 py-0.5"
+            </TrayChip>
+            <TrayChip
               tone={isDpapiActive ? "success" : "danger"}
               title={isDpapiActive ? t("dpapi_tooltip_active") : t("dpapi_tooltip_inactive")}
             >
               {isDpapiActive ? t("dpapi_active") : t("dpapi_inactive")}
-            </Chip>
-            <Chip
-              size="sm"
-              className="text-nano px-2 py-0.5"
+            </TrayChip>
+            <TrayChip
               icon={RotateCcw}
               title={t("reset_default")}
               onClick={() => {
@@ -848,7 +843,7 @@ export default function SettingsView() {
               }}
             >
               Reset
-            </Chip>
+            </TrayChip>
           </>
         }
       />

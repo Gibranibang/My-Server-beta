@@ -1,5 +1,5 @@
 import { useState, useEffect, Component, type ErrorInfo, type ReactNode } from "react"
-import { AlertTriangle, ChevronRight, CircleCheck, Info, RefreshCw, TriangleAlert } from "lucide-react"
+import { AlertTriangle, ChevronRight, CircleCheck, Info, RefreshCw, TriangleAlert, type LucideIcon } from "lucide-react"
 import { assets } from "./assets"
 import { useCompanion, useNotice, usePowerStatus } from "./store"
 import { StatusDot, cx } from "./ui"
@@ -64,7 +64,7 @@ function Toast() {
       {notice && (
         <div
           key={notice.id}
-          className="flex items-center gap-2 rounded-full bg-ink/95 py-1.5 pr-3.5 pl-2.5 text-caption font-medium text-white shadow-toast backdrop-blur motion-safe:animate-toast-in"
+          className="flex items-center gap-2 rounded-full bg-slate-900/95 dark:bg-[#181D12]/95 border border-slate-700/50 dark:border-[#3A452D] py-1.5 pr-3.5 pl-2.5 text-caption font-medium text-white shadow-toast backdrop-blur motion-safe:animate-toast-in"
         >
           <Icon
             className={cx("size-3.5 shrink-0", TOAST_ICON_TONES[notice.tone])}
@@ -114,7 +114,7 @@ export function FlyoutHeader({
   trailing: ReactNode
 }) {
   return (
-    <header className="flex h-[43.68px] shrink-0 items-center justify-between gap-[6.71px] px-[10.08px]">
+    <header className="flex h-[48px] shrink-0 items-center justify-between gap-[6.71px] px-[10.08px] pt-1.5 pb-1">
       <div className="flex min-w-0 flex-1 items-center">{leading}</div>
       <div className="flex shrink-0 items-center gap-[1.68px]">{trailing}</div>
     </header>
@@ -129,11 +129,11 @@ export function HeaderTitle({
   subtitle: string
 }) {
   return (
-    <div className="min-w-0">
-      <h2 className="truncate text-[13px] leading-tight font-bold tracking-[-0.01em] text-ink" title={title}>
+    <div className="min-w-0 flex flex-col justify-center pl-1.5 py-0.5">
+      <h2 className="truncate text-[12.5px] leading-tight font-bold tracking-tight text-ink" title={title}>
         {title}
       </h2>
-      <p className="truncate text-micro font-medium text-ink-subtle">
+      <p className="truncate text-[9.5px] leading-tight font-medium text-ink-subtle mt-[1px]">
         {subtitle}
       </p>
     </div>
@@ -295,6 +295,56 @@ function NoticeMarquee({
 /**
  * Kartu status footer â€” 1:1 dari "footer.relative.svg" (Figma 142:4530 & 83:4623), kartu 252 Ã— 70px.
  */
+/**
+ * Pill status skeuomorfik untuk footer tray (1:1 styling pill HomeView dari Figma)
+ */
+export function TrayChip({
+  tone = "neutral",
+  icon: Icon,
+  children,
+  onClick,
+  title,
+  className,
+}: {
+  tone?: "success" | "info" | "warning" | "danger" | "neutral"
+  icon?: LucideIcon
+  children: ReactNode
+  onClick?: () => void
+  title?: string
+  className?: string
+}) {
+  const toneClasses = {
+    success: "border-[#A7F3D0] text-[#047857] shadow-[0px_2px_4px_rgba(80,130,0,0.18),inset_0px_1px_1px_rgba(255,255,255,0.9)]",
+    info: "border-[#BFDBFE] text-[#1D4ED8] shadow-[0px_2px_4px_rgba(0,52,101,0.15),inset_0px_1px_1px_rgba(255,255,255,0.9)]",
+    warning: "border-[#FDE68A] text-[#B45309] shadow-[0px_2px_4px_rgba(180,83,9,0.15),inset_0px_1px_1px_rgba(255,255,255,0.9)]",
+    danger: "border-[#FECACA] text-[#DC2626] shadow-[0px_2px_4px_rgba(220,38,38,0.15),inset_0px_1px_1px_rgba(255,255,255,0.9)]",
+    neutral: "border-[#DDD] text-[#334155] shadow-[0px_2px_4px_rgba(0,0,0,0.06),inset_0px_1px_1px_rgba(255,255,255,0.9)]",
+  }
+
+  const baseClasses = cx(
+    "h-[20px] shrink-0 rounded-full bg-white border px-[7px] py-0 flex items-center gap-[3.5px] text-[8.5px] font-semibold leading-tight whitespace-nowrap select-none transition-all outline-none",
+    toneClasses[tone],
+    onClick && "cursor-pointer hover:bg-slate-50 hover:brightness-95 active:scale-95",
+    className
+  )
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} title={title} className={baseClasses}>
+        {Icon && <Icon className="size-[10px] shrink-0" strokeWidth={2.2} aria-hidden />}
+        {children}
+      </button>
+    )
+  }
+
+  return (
+    <div title={title} className={baseClasses}>
+      {Icon && <Icon className="size-[10px] shrink-0" strokeWidth={2.2} aria-hidden />}
+      {children}
+    </div>
+  )
+}
+
 export function FooterStatus({
   title,
   chips,
@@ -328,7 +378,7 @@ export function FooterStatus({
   }
 
   return (
-    <footer className={cx("relative shrink-0 w-full z-10 px-0 pt-0 pb-0", className)}>
+    <footer className={cx("relative shrink-0 w-full z-10 px-0 pt-0", showNoticePill ? "pb-0" : "pb-[10px] mt-[9.19px]", className)}>
       <div
         className="relative w-[252px] h-[70px] mx-auto rounded-[10px] border-2 border-[#DDD] shadow-[4px_4px_4px_0px_rgba(0,0,0,0.15)] bg-[#F6F6F6] px-[7px] pt-[6.5px] pb-[6px] flex flex-col justify-between items-start overflow-hidden select-none"
       >
@@ -384,10 +434,7 @@ export function FooterStatus({
         {/* ROW 2: 1:1 Figma 142:4544 & footer.relative.svg — w-[234px], h-[24px], justify-between */}
         <div className="flex items-center justify-between w-[234px] h-[24px] shrink-0 relative z-1">
           {/* Baris chip */}
-          <div className={cx(
-            "flex items-center gap-[5px] pl-[1px] overflow-visible",
-            showNoticePill ? "shrink-0" : "w-full justify-between"
-          )}>
+          <div className="flex items-center gap-[6px] pl-[1px] overflow-visible shrink-0">
             {chips}
           </div>
 

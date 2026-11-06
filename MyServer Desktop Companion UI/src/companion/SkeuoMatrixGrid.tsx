@@ -3439,14 +3439,14 @@ export default function SkeuoMatrixGrid({
 }: SkeuoMatrixGridProps) {
   const handleFileManagerClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement
-    // Tombol 3 titik di File Manager langsung meluncurkan Windows File Explorer
+    // Tombol 3 titik di File Manager membuka Sub Menu Storage & Files (FilesView)
     if (target.closest("#btn-dot3-fm") || target.closest(".btn-dot3-interactive")) {
       e.stopPropagation()
-      onOpenExplorer()
+      go("files")
       return
     }
-    // Klik area kartu langsung membuka Sub Menu Storage & Files (FilesView) konsisten dengan kartu lainnya
-    go("files")
+    // Klik area bodi kartu mengeksekusi perintah dari pengaturan Options (file manager click action)
+    onOpenExplorer()
   }
 
   return (
@@ -3486,7 +3486,7 @@ export default function SkeuoMatrixGrid({
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault()
-            go("files")
+            onOpenExplorer()
           }
         }}
         title={safeT("feat_storage_sub", "Penyimpanan SMB & Web Files")}

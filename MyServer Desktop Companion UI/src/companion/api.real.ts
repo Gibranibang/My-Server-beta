@@ -2071,8 +2071,13 @@ export function createRealApi(): CompanionApi {
     async getEasyTierStatus() {
       try {
         const api = await getPyApi()
-        if (api && api.call_core_api) {
-          return await api.call_core_api('easytier/status', {})
+        if (api) {
+          if (typeof api['easytier/status'] === 'function') {
+            return await api['easytier/status']({})
+          }
+          if (typeof api.easytier_status === 'function') {
+            return await api.easytier_status({})
+          }
         }
       } catch (err) {
         console.warn('[RealApi] getEasyTierStatus error:', err)
@@ -2083,8 +2088,13 @@ export function createRealApi(): CompanionApi {
     async startEasyTier(payload: any) {
       try {
         const api = await getPyApi()
-        if (api && api.call_core_api) {
-          return await api.call_core_api('easytier/start', payload || {})
+        if (api) {
+          if (typeof api['easytier/start'] === 'function') {
+            return await api['easytier/start'](payload || {})
+          }
+          if (typeof api.easytier_start === 'function') {
+            return await api.easytier_start(payload || {})
+          }
         }
       } catch (err) {
         console.error('[RealApi] startEasyTier error:', err)
@@ -2096,8 +2106,13 @@ export function createRealApi(): CompanionApi {
     async stopEasyTier() {
       try {
         const api = await getPyApi()
-        if (api && api.call_core_api) {
-          return await api.call_core_api('easytier/stop', {})
+        if (api) {
+          if (typeof api['easytier/stop'] === 'function') {
+            return await api['easytier/stop']({})
+          }
+          if (typeof api.easytier_stop === 'function') {
+            return await api.easytier_stop({})
+          }
         }
       } catch (err) {
         console.error('[RealApi] stopEasyTier error:', err)
@@ -2109,8 +2124,13 @@ export function createRealApi(): CompanionApi {
     async getRemoteStatus() {
       try {
         const api = await getPyApi()
-        if (api && api.call_core_api) {
-          return await api.call_core_api('remote/status', {})
+        if (api) {
+          if (typeof api['remote/status'] === 'function') {
+            return await api['remote/status']({})
+          }
+          if (typeof api.remote_status === 'function') {
+            return await api.remote_status({})
+          }
         }
       } catch (err) {
         console.warn('[RealApi] getRemoteStatus error:', err)

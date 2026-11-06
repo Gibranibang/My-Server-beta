@@ -21120,14 +21120,33 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+        elif path in ("/api/easytier/status", "/api/easytier_status"):
+            if easytier_manager:
+                mgr = easytier_manager.get_easytier_manager()
+                self._send_json(mgr.get_status_overview())
+            else:
+                self._send_json({"running": False, "error": "easytier_manager not available"})
+        elif path in ("/api/remote/status", "/api/remote_status"):
+            et_status = easytier_manager.get_easytier_manager().get_status_overview() if easytier_manager else {"running": False}
+            zt_client = zerotier_manager.ZeroTierClient() if "zerotier_manager" in globals() else None
+            zt_node = zt_client.get_node_status() if zt_client else {"online": False}
+            zt_nets = zt_client.get_joined_networks() if (zt_client and zt_node.get("online")) else []
+            active_engine = "none"
+            if et_status.get("running"):
+                active_engine = "easytier"
+            elif zt_node.get("online") and len(zt_nets) > 0:
+                active_engine = "zerotier"
+            self._send_json({
+                "activeEngine": active_engine,
+                "easytier": et_status,
+                "zerotier": {
+                    "running": zt_node.get("online", False),
+                    "nodeId": zt_node.get("address", ""),
+                    "version": zt_node.get("version", ""),
+                    "networks": zt_nets
+                }
+            })
         else:
-
-
-
-
-
-
-
             self._send_json({"error": "Not Found"}, status=404)
 
 
@@ -27973,8 +27992,22 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+        # --- Dispatcher Fallback untuk call_core_api ---
+        if path == "/api/call_core_api":
+            ep = (body.get("endpoint") or body.get("arg") or "").strip().lower()
+            if ep in ("easytier/status", "easytier_status"):
+                path = "/api/easytier/status"
+            elif ep in ("easytier/peers", "easytier_peers"):
+                path = "/api/easytier/peers"
+            elif ep in ("easytier/start", "easytier_start"):
+                path = "/api/easytier/start"
+            elif ep in ("easytier/stop", "easytier_stop"):
+                path = "/api/easytier/stop"
+            elif ep in ("remote/status", "remote_status"):
+                path = "/api/remote/status"
+
         # --- Endpoints EasyTier & Remote Mesh Network ---
-        if path == "/api/easytier/status":
+        if path in ("/api/easytier/status", "/api/easytier_status"):
             if easytier_manager:
                 mgr = easytier_manager.get_easytier_manager()
                 self._send_json(mgr.get_status_overview())
@@ -27982,7 +28015,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"running": False, "error": "easytier_manager not available"})
             return
 
-        if path == "/api/easytier/peers":
+        if path in ("/api/easytier/peers", "/api/easytier_peers"):
             if easytier_manager:
                 mgr = easytier_manager.get_easytier_manager()
                 self._send_json({"peers": mgr.get_peers()})
@@ -27990,7 +28023,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"peers": []})
             return
 
-        if path == "/api/easytier/start":
+        if path in ("/api/easytier/start", "/api/easytier_start"):
             if not easytier_manager:
                 self._send_json({"success": False, "message": "easytier_manager tidak tersedia"})
                 return
@@ -28043,7 +28076,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             self._send_json({"success": ok, "message": msg, "status": mgr.get_status_overview()})
             return
 
-        if path == "/api/easytier/stop":
+        if path in ("/api/easytier/stop", "/api/easytier_stop"):
             if easytier_manager:
                 cfg = config_manager.load_or_create_config()
                 if "easytier" in cfg:

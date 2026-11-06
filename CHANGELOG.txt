@@ -1,3 +1,11 @@
+﻿===================================================
+[v4.1.0 - Beta] - 2026-11-06
+Catatan:
+1. Tombol Centang Auto Cek Update (Native UI): Menambahkan baris preferensi auto-check update di menu Pengaturan (Hero Header & Accordion) dengan gaya visual asli MyServer.
+2. Pembersihan Otomatis Berkas Pembaruan di %TEMP%: Menambahkan mekanisme pembersihan aman berkas sisa update MyServer di %TEMP% (> 60 detik) saat aplikasi dijalankan.
+3. Standardisasi Bahasa Bilingual: Memperbaiki inkonsistensi bahasa pada menu Apps dan Backup ke kamus i18n agar konsisten berbahasa Inggris saat bahasa Inggris aktif.
+4. Sinkronisasi Versi Atomik v4.1.0 Beta: Menyelaraskan seluruh konstanta versi aplikasi.
+===================================================
 ===================================================
 [v4.0.6 - Beta] - 2026-11-05
 Catatan:
@@ -74,7 +82,7 @@ Catatan:
 2. Independent Task Routing: Pembuatan task backup langsung memetakan kredensial, Device ID, dan rute efektif server tujuan terpilih secara terisolasi.
 3. Smart Identity Inheritance Architecture: MyServer secara cerdas mewarisi dan mengamankan sertifikat digital (cert.pem & key.pem) dari instalasi lama ke direktori internal MyServer, menjamin 0% re-pairing dan mencegah laptop dibaca sebagai device baru.
 4. Zero-Bias Native Protocol Verification: Terbukti secara empiris melalui pengujian koneksi TLSv1.3 langsung bahwa kode Python MyServer dapat berkomunikasi dengan Syncthing di sisi server (BEP Magic 0x2EA7D90B & Protobuf Hello) saat Syncthing laptop dimatikan.
-5. Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (🎯 Algitha-Server / 🎯 STIMI-Server) dengan visual penanda server aktif.
+5. Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (ðŸŽ¯ Algitha-Server / ðŸŽ¯ STIMI-Server) dengan visual penanda server aktif.
 6. Single-Command Multi-File Version Synchronizer: Utilitas terpusat sync_version.py untuk sinkronisasi versi atomik lintas seluruh ekosistem berkas MyServer.
 ===================================================
 
@@ -97,7 +105,7 @@ Catatan:
 1. Redesain Pill Footer HomeView: Tampilan nama rute ringkas (LAN, Remote, WAN) dengan ikon spesifik (LAN/Ethernet, Remote Wifi, WAN Globe) bebas distraksi.
 2. Quick Route Switcher Pop-up: Modal ganti cepat rute dengan status aktif, latensi ms, opsi otomatis failover, dan masked URL/IP dengan tombol toggle unmask.
 3. Harmonisasi Dialog WinForms ke React: Penggantian seluruh popup skrip PowerShell Windows Forms klasik ke Modal React mengambang terpadu di dalam antarmuka companion.
-4. Hover Telemetri Mendalam: Pengukuran suhu CPU (°C), konsumsi daya (Watt), pembagian RAM GB/GB riil, serta jumlah dan kapasitas partisi disk.
+4. Hover Telemetri Mendalam: Pengukuran suhu CPU (Â°C), konsumsi daya (Watt), pembagian RAM GB/GB riil, serta jumlah dan kapasitas partisi disk.
 5. Label DISK Anti-Patah Baris: Penyelarasan label MEM menjadi DISK dengan whitespace-nowrap.
 6. Pembersihan Dwibahasa Penuh: 100% bebas hardcode pada seluruh kartu (kartu Opsi), chip, notifikasi, dan form.
 ===================================================
@@ -162,7 +170,7 @@ Catatan:
 Catatan:
 1. URL Web App Dinamis via Remote IP: Kontainer aplikasi ZimaOS di menu Apps otomatis diarahkan ke Remote IP (ZeroTier) saat server diakses melalui rute Domain publik, menembus batasan port-forwarding router secara native tanpa hardcode.
 2. Rekayasa Alur File Manager: Tombol File Manager di menu utama Mini Tray kini langsung membuka Windows File Explorer ke disk SMB terpasang untuk akses cepat berkas.
-3. Tombol Menu File Manager Baru: Menambahkan tombol navigasi [Menu →] di kartu File Manager pada menu utama untuk membuka antarmuka lengkap manajemen disk & storage.
+3. Tombol Menu File Manager Baru: Menambahkan tombol navigasi [Menu â†’] di kartu File Manager pada menu utama untuk membuka antarmuka lengkap manajemen disk & storage.
 4. Opsi Ganda Peluncur Berkas: Menyediakan tombol terpisah di menu File Manager untuk membuka File Explorer (Windows SMB) dan ZimaOS File Manager (Web Files), serta opsi preferensi aksi klik cepat.
 5. Deskripsi Hak Akses Dinamis (Nol Hardcode): Menggantikan teks statis dengan deskripsi peran real dari API resmi ZimaOS (/v1/users/current), membedakan izin Administrator vs Pengguna Standar secara presisi.
 6. Opsi Switch Auto Buka Mini Tray: Pengguna dapat memilih apakah jendela mini tray otomatis terbuka di layar saat startup Windows atau tetap berjalan senyap di system tray.
@@ -283,8 +291,8 @@ Catatan:
 ===================================================
 [v3.8.8 - Beta] - 2026-10-24 05:30
 Catatan:
-1. Perbaikan Font & Tampilan Simbol Garis Miring ('/') pada Menu Baki Sistem: Mengganti karakter ampersand ('&') yang sebelumnya disembunyikan oleh Windows Win32 Menu Accelerator menjadi garis miring (' / ') eksplisit pada seluruh tombol menu (seperti '📂 Penyimpanan / Berkas', '🌐 Jaringan / Status', '👥 Akun / Server', dan '🌐 Web Apps / Bookmarks').
-2. Eliminasi Duplikasi Ikon Pengaturan (Gear): Menghilangkan penambahan ikon manual ganda pada item menu baki sistem sehingga ikon '⚙️' hanya tampil tepat satu kali pada '⚙️ Pengaturan / Preferensi'.
+1. Perbaikan Font & Tampilan Simbol Garis Miring ('/') pada Menu Baki Sistem: Mengganti karakter ampersand ('&') yang sebelumnya disembunyikan oleh Windows Win32 Menu Accelerator menjadi garis miring (' / ') eksplisit pada seluruh tombol menu (seperti 'ðŸ“‚ Penyimpanan / Berkas', 'ðŸŒ Jaringan / Status', 'ðŸ‘¥ Akun / Server', dan 'ðŸŒ Web Apps / Bookmarks').
+2. Eliminasi Duplikasi Ikon Pengaturan (Gear): Menghilangkan penambahan ikon manual ganda pada item menu baki sistem sehingga ikon 'âš™ï¸' hanya tampil tepat satu kali pada 'âš™ï¸ Pengaturan / Preferensi'.
 ===================================================
 
 ===================================================
@@ -410,7 +418,7 @@ Catatan:
 3. Failover Rute Otomatis pada Autentikasi Metrik & Status: Autentikasi ZimaOS kini secara cerdas menguji base_url dan seluruh daftar jalur server_connections (LAN IP maupun Domain WAN) sampai menemukan rute yang dapat dihubungi.
 4. Dekopling Validasi Kredensial dari URL Webview Aktif: Dialog konfigurasi kredensial kini mengarahkan validasi secara spesifik ke server target, mencegah validasi kredensial server kantor terlempar ke URL server utama.
 5. Wizard Tambah Server 4-Field Interaktif: Penambahan server baru kini langsung menyertakan input Username dan Password dengan verifikasi koneksi live dan opsi instan beralih ke server baru.
-6. Submenu Manajemen Kredensial Cepat di Baki Sistem: Menambahkan menu '🔑 Kredensial Server' pada system tray untuk memudahkan konfigurasi akun login setiap server secara mandiri tanpa harus mengganti server aktif terlebih dahulu.
+6. Submenu Manajemen Kredensial Cepat di Baki Sistem: Menambahkan menu 'ðŸ”‘ Kredensial Server' pada system tray untuk memudahkan konfigurasi akun login setiap server secara mandiri tanpa harus mengganti server aktif terlebih dahulu.
 ===================================================
 
 ===================================================
@@ -427,7 +435,7 @@ Catatan:
 [v3.6.8 - Alpha] - 2026-09-23 15:35
 Catatan:
 1. Manajemen Perangkat Syncthing Dinamis: Menambahkan fitur penambahan perangkat Syncthing terhubung (Laptop ke Server, Laptop ke Laptop rekan kantor/P2P, dan Mutual Pairing 2-Arah).
-2. Dialog Pop-up Real-Time Izin/Tolak Koneksi: Sistem secara otonom memantau permintaan perangkat masuk dan menampilkan dialog pop-up konfirmasi interaktif ([✔ Izinkan & Hubungkan] atau [✖ Tolak Permintaan]).
+2. Dialog Pop-up Real-Time Izin/Tolak Koneksi: Sistem secara otonom memantau permintaan perangkat masuk dan menampilkan dialog pop-up konfirmasi interaktif ([âœ” Izinkan & Hubungkan] atau [âœ– Tolak Permintaan]).
 3. Tampilan & Penyalinan Device ID Mandiri: Dialog untuk melihat dan menyalin Device ID Laptop dan Server dengan 1-klik ke clipboard untuk kemudahan bertukar ID antar-perangkat.
 4. Menu Kontrol & Pemutusan Perangkat di System Tray: Memungkinkan jeda, lanjutkan, peninjauan permintaan masuk, serta pemutusan/penghapusan perangkat Syncthing langsung dari baki sistem.
 ===================================================
@@ -499,7 +507,7 @@ Catatan:
 ===================================================
 [v3.6.0 - Alpha] - 2026-09-21 22:40
 Catatan:
-1. Pemantauan Suhu CPU Server Real-Time (°C) & Peringatan Termal Otomatis.
+1. Pemantauan Suhu CPU Server Real-Time (Â°C) & Peringatan Termal Otomatis.
 2. Peringatan Kesehatan Server (S.M.A.R.T Disk Failure & Storage Critical Alert).
 3. Penyempurnaan Bahasa Menu Monitoring Baki Sistem ('Performa & Daya Server').
 4. Pengecekan & Pemasangan Pembaruan Online GitHub Releases API serta integrasi update ZIP.
@@ -537,3 +545,4 @@ Catatan:
 3. Dialog konfigurasi interaktif Dual-Route di dialogs.ps1.
 4. Dukungan protokol HTTPS aman untuk subdomain reverse proxy (port 443).
 ===================================================
+

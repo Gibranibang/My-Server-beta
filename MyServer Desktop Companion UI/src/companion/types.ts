@@ -67,6 +67,7 @@ export interface Settings {
   language?: "en" | "id"
   dpapiActive?: boolean
   theme?: "dark" | "light"
+  autoCheckUpdate?: boolean
 }
 
 export type ChecklistKey = "lan" | "bios" | "standby"

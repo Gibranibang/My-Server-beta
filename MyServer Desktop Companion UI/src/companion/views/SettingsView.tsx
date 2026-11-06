@@ -381,6 +381,39 @@ export default function SettingsView() {
             </div>
           </div>
 
+          {/* Auto Check Update Preference (Native Checkbox) */}
+          <div className="mt-1.5 flex w-full items-center justify-between rounded-control border border-line bg-surface-sunken px-3 py-1.5">
+            <div className="flex items-center gap-1.5 text-micro font-semibold text-ink">
+              <RefreshCw className="size-3.5 text-brand" />
+              <span>{t("auto_check_update_label", "Check for Updates Automatically")}</span>
+            </div>
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={settings?.autoCheckUpdate ?? true}
+              onClick={() => {
+                const nextVal = !(settings?.autoCheckUpdate ?? true)
+                void setSetting("autoCheckUpdate", nextVal).then(() => {
+                  notify(
+                    nextVal
+                      ? (isId ? "Pemeriksaan pembaruan otomatis diaktifkan" : "Automatic update check enabled")
+                      : (isId ? "Pemeriksaan pembaruan otomatis dinonaktifkan" : "Automatic update check disabled"),
+                    "neutral",
+                  )
+                })
+              }}
+              className={cx(
+                "size-4 rounded border flex items-center justify-center transition cursor-pointer select-none",
+                (settings?.autoCheckUpdate ?? true)
+                  ? "bg-brand text-brand-ink border-transparent shadow-xs"
+                  : "bg-surface border-line hover:border-line-strong text-transparent",
+              )}
+              title={t("auto_check_update_desc", "Automatically check for updates on startup")}
+            >
+              {(settings?.autoCheckUpdate ?? true) && <Check className="size-3 text-brand-ink" strokeWidth={3} />}
+            </button>
+          </div>
+
           {/* Action Update Buttons - Tata Letak Bersih Bebas Tabrakan */}
           <div className="mt-3 flex flex-col gap-2 w-full">
             <Button
@@ -488,6 +521,12 @@ export default function SettingsView() {
               label={t("autoOpenMiniTray_label")}
               caption={t(settings.autoOpenMiniTray ? "autoOpenMiniTray_on" : "autoOpenMiniTray_off")}
               settingKey="autoOpenMiniTray"
+            />
+            <SettingToggleRow
+              icon={RefreshCw}
+              label={t("auto_check_update_label", "Check for Updates Automatically")}
+              caption={t((settings.autoCheckUpdate ?? true) ? "auto_check_update_on" : "auto_check_update_off")}
+              settingKey="autoCheckUpdate"
             />
           </div>
         </AccordionSection>

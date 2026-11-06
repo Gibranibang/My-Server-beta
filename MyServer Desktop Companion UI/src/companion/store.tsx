@@ -406,6 +406,33 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       }, remaining)
     })
 
+    // v4.1.0: Silent background check for updates on startup if enabled
+    const autoUpdateCheckTimer = setTimeout(() => {
+      try {
+        const checkPromise = typeof api.loadSettings === "function" ? api.loadSettings() : Promise.resolve(null)
+        Promise.resolve(checkPromise).then((loadedSettings: any) => {
+          const autoCheck = loadedSettings?.autoCheckUpdate ?? true
+          if (autoCheck && typeof api.checkForUpdate === "function") {
+            api.checkForUpdate().then((info) => {
+              if (info && !info.upToDate) {
+                const isId = (loadedSettings?.language || "id") === "id"
+                window.dispatchEvent(
+                  new CustomEvent("myserver:notify", {
+                    detail: {
+                      text: isId
+                        ? `Pembaruan Tersedia: MyServer v${info.version}!`
+                        : `Update Available: MyServer v${info.version}!`,
+                      tone: "info",
+                    },
+                  }),
+                )
+              }
+            }).catch(() => {})
+          }
+        }).catch(() => {})
+      } catch {}
+    }, 3500)
+
     // Safety fallback: ensure monitoring skeleton doesn't spin forever if core service or server is unreachable
     const monitoringFallbackTimer = setTimeout(() => {
       setMonitoringLoading(false)
@@ -432,6 +459,7 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       clearInterval(appsInterval)
       clearInterval(milestoneInterval)
       clearTimeout(monitoringFallbackTimer)
+      clearTimeout(autoUpdateCheckTimer)
       window.removeEventListener("myserver:refresh", onStoreRefresh)
     }
   }, [api, refreshWebApps])

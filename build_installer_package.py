@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "4.0.12"
+VERSION = "4.1.0"
 
 APP_NAME = "My-Server by algitha BETA"
 

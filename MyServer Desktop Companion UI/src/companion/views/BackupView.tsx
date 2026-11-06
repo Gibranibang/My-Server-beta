@@ -917,9 +917,9 @@ export default function BackupView() {
               state={rescanAllBusy ? "busy" : "idle"}
               onClick={handleRescanAll}
               className="h-6 text-micro px-2"
-              title="Pindai ulang seluruh direktori"
+              title={t("rescan_all_title", "Rescan all directory paths")}
             >
-              Pindai Semua
+              {t("rescan_all_btn", "Rescan All")}
             </Button>
           </div>
         </Card>
@@ -1039,16 +1039,16 @@ export default function BackupView() {
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="flex items-center gap-1.5 text-label font-semibold text-ink">
                 <Folder className="size-4 text-info" strokeWidth={2.2} />
-                Jalur Backup ({displayedTasks.length})
+                {t("backup_paths", "Backup Paths")} ({displayedTasks.length})
               </span>
               {otherServerTasks.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setFilterActiveServerOnly(!filterActiveServerOnly)}
                   className="rounded-full bg-surface-sunken border border-line px-2 py-0.5 text-micro font-medium text-ink-subtle hover:text-ink hover:border-line-strong transition cursor-pointer"
-                  title="Klik untuk beralih filter tampilan jalur server"
+                  title={t("filter_active_server_title", "Click to switch server path display filter")}
                 >
-                  {filterActiveServerOnly ? `Server Aktif (${activeServerTasks.length})` : `Semua (${tasks.length})`}
+                  {filterActiveServerOnly ? `${t("filter_active_server_badge", "Active Server")} (${activeServerTasks.length})` : `${t("filter_all_servers_badge", "All")} (${tasks.length})`}
                 </button>
               )}
             </div>
@@ -1060,7 +1060,7 @@ export default function BackupView() {
               onClick={handleOpenCreateTask}
               className="h-6 px-2 text-micro font-medium"
             >
-              + Tambah Jalur
+              {t("add_path_btn", "+ Add Path")}
             </Button>
           </div>
 
@@ -1070,14 +1070,14 @@ export default function BackupView() {
               <div className="flex items-center justify-between border-b border-line pb-1.5">
                 <span className="flex items-center gap-1.5 font-semibold text-ink text-label">
                   <FolderPlus className="size-4 text-info" />
-                  Tambah Jalur Backup Baru
+                  {t("modal_add_path_title", "Add New Backup Path")}
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowCreateTaskModal(false)}
                   className="text-micro text-ink-muted hover:text-ink"
                 >
-                  ✕ Batal
+                  ✕ {t("cancel_modal", "Cancel")}
                 </button>
               </div>
 
@@ -1237,7 +1237,7 @@ export default function BackupView() {
                       Mirroring (Send Only)
                     </span>
                     <span className="text-nano text-ink-subtle">
-                      Kirim cadangan dari Laptop ke Server (Satu arah aman).
+                      {t("mode_mirror_desc", "Send backup from Laptop to Server (safe one-way)")}
                     </span>
                   </button>
 
@@ -1252,10 +1252,10 @@ export default function BackupView() {
                   >
                     <span className="text-caption font-semibold flex items-center gap-1">
                       <ArrowUpDown className="size-3 text-success" />
-                      2-Arah (Sync Dua Arah)
+                      {t("mode_twoway", "2-Way (Sync)")}
                     </span>
                     <span className="text-nano text-ink-subtle">
-                      Kirim & terima perubahan file bolak-balik.
+                      {t("mode_twoway_desc", "Send & receive file changes bidirectionally")}
                     </span>
                   </button>
                 </div>
@@ -1269,7 +1269,7 @@ export default function BackupView() {
                   onClick={() => setShowCreateTaskModal(false)}
                   className="h-6 px-2 text-micro"
                 >
-                  Batal
+                  {t("cancel_modal", "Cancel")}
                 </Button>
                 <Button
                   variant="primary"
@@ -1279,7 +1279,7 @@ export default function BackupView() {
                   onClick={handleConfirmCreateTask}
                   className="h-6 px-2.5 text-micro font-medium"
                 >
-                  + Buat Jalur Backup
+                  {t("create_path_btn", "+ Create Backup Path")}
                 </Button>
               </div>
             </div>
@@ -1287,16 +1287,16 @@ export default function BackupView() {
 
           {displayedTasks.length === 0 ? (
             <div className="rounded-tile border border-dashed border-line p-3 text-center text-caption text-ink-subtle">
-              <p>Belum ada jalur folder yang dicadangkan.</p>
+              <p>{t("empty_backup_tasks_title", "No folder backup paths configured.")}</p>
               <p className="text-micro text-ink-faint mt-0.5">
-                Klik "+ Tambah Jalur" untuk memilih folder di Laptop dan menghubungkannya otomatis ke Server.
+                {t("empty_backup_tasks_desc", "Click '+ Add Path' to select a folder on Laptop and link it automatically to Server.")}
               </p>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
               {displayedTasks.map((task) => {
                 const isMirror = task.type === "sendonly"
-                const modeLabel = isMirror ? "Mirroring (Send Only)" : "2-Arah (Sync)"
+                const modeLabel = isMirror ? t("mode_mirror", "Mirroring (Send Only)") : t("mode_twoway", "2-Way (Sync)")
                 return (
                   <div
                     key={task.id}
@@ -1356,7 +1356,7 @@ export default function BackupView() {
                             .catch((e) => notify(errorText(e), "danger"))
                         }}
                         className="inline-flex size-6 items-center justify-center rounded-control text-ink-muted hover:bg-surface hover:text-ink cursor-pointer"
-                        title="Buka di File Explorer"
+                        title={t("open_in_file_explorer", "Open in File Explorer")}
                       >
                         <Folder className="size-3.5" />
                       </button>
@@ -1411,7 +1411,7 @@ export default function BackupView() {
                           }
                         }}
                         className="inline-flex size-6 items-center justify-center rounded-control text-ink-muted hover:bg-danger-soft hover:text-danger-ink cursor-pointer"
-                        title="Hapus Jalur Backup"
+                        title={t("delete_backup_path_title", "Delete Backup Path")}
                       >
                         <Trash2 className="size-3.5" />
                       </button>
@@ -1472,7 +1472,7 @@ export default function BackupView() {
                   onClick={() => setShowAddDevice(false)}
                   className="h-6 px-2 text-micro"
                 >
-                  Batal
+                  {t("cancel_modal", "Cancel")}
                 </Button>
                 <Button
                   variant="primary"

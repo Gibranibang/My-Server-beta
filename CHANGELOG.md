@@ -1,5 +1,14 @@
 # Changelog MyServer Desktop
 
+## [v4.1.0 - Beta] - 2026-11-06
+
+- Tombol Centang Auto Cek Update (Native UI): Menambahkan baris preferensi pemeriksaan pembaruan otomatis di menu Pengaturan (Hero Header & Accordion Sistem & Startup) dengan gaya visual asli MyServer (`text-micro`, `font-semibold`, `text-ink`, `rounded-control`, `bg-brand` #7BC504). Saat diaktifkan, companion melakukan pemeriksaan pembaruan secara hening di latar belakang saat startup (3.5 detik) dan menampilkan notifikasi halus di Notification Center jika versi baru tersedia.
+- Pembersihan Otomatis Berkas Pembaruan di %TEMP%: Menambahkan mekanisme pembersihan otomatis aman (Zero Data Risk - Pasal 2) pada startup daemon myserver-core yang secara spesifik membersihkan berkas sisa artefak pembaruan (`MyServer_Update_*`, `myserver_upd_*.bat`, `myserver_ext_*`) dengan usia > 60 detik tanpa pernah menyentuh data atau berkas pribadi pengguna di direktori mana pun.
+- Standardisasi Bahasa Bilingual (Eliminasi Inkonsistensi EN / ID):
+  - Menu Apps (Services & Containers): Menghubungkan header seksi ("SERVICES & CONTAINERS"), tombol penambahan ("+ Add App"), tombol buka aplikasi ("Open"), serta tooltip dan menu opsi ke kamus i18n sehingga konsisten berbahasa Inggris saat bahasa Inggris dipilih.
+  - Menu Backup & Sync: Menyelaraskan teks tombol pemindaian ("Rescan All"), header daftar jalur ("Backup Paths"), tombol penambahan ("+ Add Path"), badge status ("2-Way (Sync)"), dan teks wizard pembuatan jalur ke kamus i18n bilingual.
+- Sinkronisasi Versi Atomik v4.1.0 Beta: Menyelaraskan seluruh konstanta versi pada frontend, backend headless, metadata PE Windows, Inno Setup installer, dan Tauri shell.
+
 ## [v4.0.12 - Beta] - 2026-11-06
 
 - Overhaul Marquee Notifikasi Footer: Memperbaiki animasi ticker marquee pada pill notifikasi bawah, teks bergerak halus masuk dari sisi kanan luar kontainer (translateX 25px) meluncur ke kiri (-100%) dengan durasi proporsional (~30-32px/s) tanpa terpotong di tengah layar, dan mengeliminasi bug snap-back kemunculan teks ke-3 dengan fill-mode forwards.

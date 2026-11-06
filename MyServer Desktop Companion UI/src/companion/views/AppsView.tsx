@@ -232,7 +232,7 @@ export default function AppsView() {
         <div className="flex items-center justify-between pl-1">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
-              {t("apps_section_title", "Layanan & Kontainer")}
+              {t("apps_section_title", "SERVICES & CONTAINERS")}
             </span>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -242,7 +242,7 @@ export default function AppsView() {
               className="h-[23px] px-2.5 flex items-center gap-1 rounded-full bg-info-ink/15 hover:bg-info-ink/25 text-info-ink text-[10.5px] font-semibold transition cursor-pointer select-none"
             >
               {isAdding ? <X className="size-3" /> : <Plus className="size-3" />}
-              <span>{isAdding ? t("close_btn", "Tutup") : t("add_app_btn", "Tambah App")}</span>
+              <span>{isAdding ? t("close_btn", "Close") : t("add_app_btn", "Add App")}</span>
             </button>
           </div>
         </div>
@@ -465,13 +465,13 @@ export default function AppsView() {
                       >
                         <div className="flex items-center justify-between px-1.5 py-0.5 border-b border-ink-subtle/10 mb-0.5">
                           <span className="text-nano font-bold uppercase tracking-wider text-ink-subtle truncate">
-                            Opsi {app.name}
+                            {t("options_for", "Options for")} {app.name}
                           </span>
                           <button
                             type="button"
                             onClick={() => setMenuOpenId(null)}
                             className="rounded p-0.5 text-ink-subtle hover:text-ink transition cursor-pointer"
-                            aria-label="Tutup menu opsi"
+                            aria-label={t("close_options_menu", "Close options menu")}
                           >
                             <X className="h-3 w-3" />
                           </button>
@@ -486,7 +486,7 @@ export default function AppsView() {
                           className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-micro font-medium text-ink hover:bg-surface transition cursor-pointer text-left"
                         >
                           <Globe className="h-3 w-3 text-info-ink shrink-0" />
-                          <span className="truncate">{t("open_in_browser", "Browser Luar")}</span>
+                          <span className="truncate">{t("open_in_browser_action", "External Browser")}</span>
                         </button>
 
                         <button
@@ -498,7 +498,7 @@ export default function AppsView() {
                           className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-micro font-medium text-ink hover:bg-surface transition cursor-pointer text-left"
                         >
                           <Copy className="h-3 w-3 text-ink-muted shrink-0" />
-                          <span className="truncate">{t("copy_url_action", "Salin URL")}</span>
+                          <span className="truncate">{t("copy_url_action", "Copy URL")}</span>
                         </button>
 
                         {!app.is_zima_container && (
@@ -511,7 +511,7 @@ export default function AppsView() {
                             className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-micro font-medium text-danger-ink hover:bg-danger-ink/10 transition cursor-pointer text-left border-t border-ink-subtle/10 pt-1"
                           >
                             <Trash2 className="h-3 w-3 shrink-0" />
-                            <span className="truncate">{t("delete_app", "Hapus App")}</span>
+                            <span className="truncate">{t("delete_app_action", "Delete App")}</span>
                           </button>
                         )}
                       </div>
@@ -521,18 +521,18 @@ export default function AppsView() {
                           type="button"
                           disabled={isDeleting}
                           aria-label={`Buka jendela ${app.name}`}
-                          title="Buka di jendela mandiri MyServer"
+                          title={t("open_independent_window", "Open in independent MyServer window")}
                           onClick={() => handleOpen(app.url, app.name)}
                           className="flex-1 h-[23px] rounded-md px-2 flex items-center justify-center gap-1 bg-surface-sunken hover:bg-line border border-line text-[10.5px] font-semibold text-ink transition cursor-pointer select-none active:scale-[0.98]"
                         >
                           <ExternalLink className="size-3 text-ink-muted shrink-0" />
-                          <span className="truncate">{t("open_btn", "Buka")}</span>
+                          <span className="truncate">{t("open_btn", "Open")}</span>
                         </button>
 
                         <button
                           type="button"
-                          aria-label={`Opsi lainnya untuk ${app.name}`}
-                          title="Opsi lainnya"
+                          aria-label={`${t("more_options_for", "More options for")} ${app.name}`}
+                          title={t("more_options_title", "More options")}
                           onClick={(e) => {
                             e.stopPropagation()
                             setMenuOpenId(app.id)

@@ -384,6 +384,8 @@ export const DEFAULT_SETTINGS: Settings = {
 
   theme: "dark",
 
+  autoCheckUpdate: true,
+
 }
 
 
@@ -982,7 +984,21 @@ export function createMockApi(): CompanionApi {
           isActiveServer: true,
 
           targetServerName: "Server Utama"
-
+        },
+        {
+          id: "task-capcut-project-102",
+          label: "CapCut Project",
+          localPath: "D:/Capcut Project",
+          serverPath: "/disk_gibran1/Disk D/CapCut Project",
+          type: "sendreceive",
+          paused: false,
+          completion: 100,
+          needFiles: 0,
+          needBytes: 0,
+          owner: "Admin",
+          existsOnServer: true,
+          isActiveServer: true,
+          targetServerName: "Server Utama"
         }
 
       ]

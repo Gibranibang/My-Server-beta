@@ -366,7 +366,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.0.12"
+APP_VERSION_NUMBER = "4.1.0"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -20064,6 +20064,37 @@ def dialog_join_zerotier():
 
 
 
+
+def cleanup_temp_update_artifacts():
+    """
+    Membersihkan HANYA berkas sisa artefak pembaruan MyServer di folder %TEMP% (> 60 detik).
+    Mematuhi Pasal 2 (Zero Data Risk): hanya memindai %TEMP% dan hanya menyentuh berkas
+    dengan prefix resmi ('myserver_update_', 'myserver_upd_', 'myserver_ext_').
+    """
+    try:
+        temp_dir = os.environ.get("TEMP", tempfile.gettempdir())
+        if not os.path.isdir(temp_dir):
+            return
+        now = time.time()
+        ALLOWED_PREFIXES = ("myserver_update_", "myserver_upd_", "myserver_ext_")
+        for item_name in os.listdir(temp_dir):
+            lower_name = item_name.lower()
+            if not any(lower_name.startswith(pfx) for pfx in ALLOWED_PREFIXES):
+                continue
+            full_path = os.path.join(temp_dir, item_name)
+            try:
+                # Lewati jika usia berkas kurang dari 60 detik
+                if now - os.path.getmtime(full_path) < 60:
+                    continue
+                if os.path.isfile(full_path) or os.path.islink(full_path):
+                    os.remove(full_path)
+                elif os.path.isdir(full_path):
+                    shutil.rmtree(full_path, ignore_errors=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 def apply_zip_update(zip_file_path=None):
 
 
@@ -30962,6 +30993,7 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
     threading.Thread(target=ensure_autorun_registry_healthy, daemon=True).start()
+    threading.Thread(target=cleanup_temp_update_artifacts, daemon=True).start()
 
 
 

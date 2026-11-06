@@ -20,7 +20,8 @@
 
 [Setup]
 
-AppId={{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}}
+; AppId resmi MyServer Beta (hanya 1 kurung kurawal penutup agar tepat mencocokkan registry key)
+AppId={{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}
 
 AppName={#MyAppName}
 
@@ -34,7 +35,7 @@ AppSupportURL={#MyAppURL}
 
 AppUpdatesURL={#MyAppURL}
 
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={code:GetInstallDir}
 
 DefaultGroupName={#MyAppName}
 
@@ -54,7 +55,13 @@ WizardStyle=modern
 
 PrivilegesRequired=lowest
 
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequiredOverridesAllowed=commandline
+
+UsePreviousAppDir=yes
+
+UsePreviousPrivileges=yes
+
+DirExistsWarning=no
 
 DisableProgramGroupPage=auto
 
@@ -119,6 +126,37 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 
 
 [Code]
+var
+  IsUpgradeMode: Boolean;
+  DetectedPath: String;
+
+function GetExistingAppDir(): String;
+var
+  S: String;
+begin
+  Result := '';
+  // 1. Cek registry HKCU (instalasi per-user saat ini)
+  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}_is1', 'Inno Setup: App Path', S) and (S <> '') then
+    Result := S
+  else if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}_is1', 'InstallLocation', S) and (S <> '') then
+    Result := S
+  // 2. Cek registry HKLM (jika pernah dipasang untuk semua pengguna)
+  else if RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}_is1', 'Inno Setup: App Path', S) and (S <> '') then
+    Result := S
+  else if RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}_is1', 'InstallLocation', S) and (S <> '') then
+    Result := S
+  // 3. Fallback jika biner MyServer ditemukan langsung di D:\Softwares\MyServer
+  else if FileExists('D:\Softwares\MyServer\MyServer-Beta.exe') then
+    Result := 'D:\Softwares\MyServer';
+end;
+
+function GetInstallDir(Param: String): String;
+begin
+  if DetectedPath <> '' then
+    Result := DetectedPath
+  else
+    Result := ExpandConstant('{autopf}\{#MyAppName}');
+end;
 
 procedure KillRunningAppProcesses();
 var
@@ -130,6 +168,8 @@ end;
 
 function InitializeSetup(): Boolean;
 begin
+  DetectedPath := GetExistingAppDir();
+  IsUpgradeMode := (DetectedPath <> '');
   KillRunningAppProcesses();
   Result := True;
 end;
@@ -138,6 +178,23 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   KillRunningAppProcesses();
   Result := '';
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  // Saat mode update, lewati halaman pemilihan folder agar tetap di folder instalasi yang sudah ada
+  if IsUpgradeMode and (PageID = wpSelectDir) then
+    Result := True
+  else
+    Result := False;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if IsUpgradeMode and (CurPageID = wpReady) then
+  begin
+    WizardForm.NextButton.Caption := '&Update';
+  end;
 end;
 
 function InitializeUninstall(): Boolean;

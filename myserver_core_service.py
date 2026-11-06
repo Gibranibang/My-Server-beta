@@ -27994,6 +27994,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             if not easytier_manager:
                 self._send_json({"success": False, "message": "easytier_manager tidak tersedia"})
                 return
+            remote_id = (body.get("remote_id") or body.get("remoteId") or "").strip().lower()
             net_name = body.get("network_name") or body.get("networkName") or ""
             net_secret = body.get("network_secret") or body.get("networkSecret") or ""
             ipv4 = body.get("ipv4") or ""
@@ -28001,10 +28002,28 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             use_no_tun = bool(body.get("use_no_tun") or body.get("useNoTun", False))
             ext_node = body.get("external_node") or body.get("externalNode") or ""
 
-            # Simpan ke config.json
             cfg = config_manager.load_or_create_config()
+            srv = config_manager.get_active_server(cfg) or {}
+
+            # Jika remote_id tidak dikirim, fallback ke Remote ID server aktif
+            if not remote_id and not net_name:
+                remote_id = (srv.get("zerotier_network_id") or srv.get("remote_id") or "").strip().lower()
+
+            if remote_id:
+                # Jika user memasukkan remote_id manual (misal setup baru beda jaringan), sinkronkan ke server aktif
+                cur_nwid = (srv.get("zerotier_network_id") or srv.get("remote_id") or "").strip().lower()
+                if remote_id != cur_nwid:
+                    srv["zerotier_network_id"] = remote_id
+                    srv["remote_id"] = remote_id
+                params = easytier_manager.derive_easytier_params(remote_id)
+                net_name = params["network_name"]
+                net_secret = params["network_secret"]
+
+            # Simpan ke config.json
             if "easytier" not in cfg:
                 cfg["easytier"] = {}
+            if remote_id:
+                cfg["easytier"]["remote_id"] = remote_id
             cfg["easytier"]["network_name"] = net_name
             cfg["easytier"]["network_secret"] = net_secret
             cfg["easytier"]["ipv4"] = ipv4
@@ -28019,6 +28038,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 peers=peers,
                 use_no_tun=use_no_tun,
                 external_node=ext_node,
+                remote_id=remote_id,
             )
             self._send_json({"success": ok, "message": msg, "status": mgr.get_status_overview()})
             return

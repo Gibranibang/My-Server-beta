@@ -6,6 +6,7 @@ Mengadopsi standar embedded daemon Zima Client v2.3.5 untuk akses remote tanpa b
 """
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -31,6 +32,25 @@ DEFAULT_RELAY_PEERS = [
 ]
 
 DEFAULT_RPC_PORT = 15888
+
+
+def derive_easytier_params(remote_id: str):
+    """
+    Menurunkan network_name dan network_secret dari 16-digit Remote ID ZimaOS
+    mengikuti standar integrasi ZimaNet di Zima Client v2.3.5.
+    """
+    clean_id = str(remote_id or "").strip().lower()
+    if not clean_id:
+        return {"network_name": "", "network_secret": "", "network_hash": "", "remote_id": ""}
+    nhash = hashlib.sha256(f"zima-easytier-network-v1:{clean_id}".encode("utf-8")).hexdigest()
+    net_name = f"zima-{clean_id}"
+    net_secret = clean_id
+    return {
+        "network_name": net_name,
+        "network_secret": net_secret,
+        "network_hash": nhash,
+        "remote_id": clean_id,
+    }
 
 
 def find_easytier_binaries():
@@ -74,6 +94,7 @@ class EasyTierManager:
     def __init__(self):
         self._lock = threading.Lock()
         self._proc = None
+        self._remote_id = None
         self._network_name = None
         self._network_secret = None
         self._ipv4 = None
@@ -121,17 +142,31 @@ class EasyTierManager:
                 self._proc = None
             return False
 
-    def start(self, network_name, network_secret, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT):
+    def start(self, network_name=None, network_secret=None, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None):
         """
         Meluncurkan daemon easytier-core.exe secara headless di background.
+        Mendukung peluncuran via remote_id ZimaOS (mengikuti standar Zima Client)
+        maupun konfigurasi network_name & network_secret manual.
         """
         with self._lock:
             if not self.is_available():
                 return False, "Biner EasyTier tidak ditemukan di resources/deps/easytier."
 
+            clean_rid = str(remote_id or "").strip().lower()
+            if clean_rid:
+                params = derive_easytier_params(clean_rid)
+                target_net_name = params["network_name"]
+                target_net_secret = params["network_secret"]
+            else:
+                target_net_name = str(network_name or "").strip()
+                target_net_secret = str(network_secret or "").strip()
+
+            if not target_net_name:
+                return False, "Parameter Remote ID atau Network Name wajib diisi."
+
             if self._proc is not None and self._proc.poll() is None:
                 # Sudah berjalan, jika konfigurasi sama, gunakan yang ada
-                if self._network_name == network_name and self._network_secret == network_secret:
+                if self._network_name == target_net_name and self._network_secret == target_net_secret:
                     logger.info("EasyTier daemon sudah berjalan dengan konfigurasi yang sama.")
                     return True, "Daemon sudah aktif."
                 else:
@@ -141,8 +176,9 @@ class EasyTierManager:
             # Bersihkan proses yatim jika ada
             self._kill_orphaned_daemon()
 
-            self._network_name = str(network_name).strip()
-            self._network_secret = str(network_secret).strip()
+            self._remote_id = clean_rid if clean_rid else None
+            self._network_name = target_net_name
+            self._network_secret = target_net_secret
             self._ipv4 = str(ipv4).strip() if ipv4 else None
             self._rpc_port = int(rpc_port)
 
@@ -335,19 +371,24 @@ class EasyTierManager:
             return {
                 "running": False,
                 "available": self.is_available(),
+                "remote_id": self._remote_id,
                 "network_name": self._network_name,
                 "virtual_ipv4": None,
+                "virtual_ip": None,
                 "peers_count": 0,
                 "peers": []
             }
 
         peers = self.get_peers()
         node_info = self.get_node_info()
+        vip = node_info.get("virtual_ipv4") or self._ipv4
         return {
             "running": True,
             "available": True,
+            "remote_id": self._remote_id,
             "network_name": self._network_name,
-            "virtual_ipv4": node_info.get("virtual_ipv4"),
+            "virtual_ipv4": vip,
+            "virtual_ip": vip,
             "uptime": node_info.get("uptime", 0),
             "peers_count": len(peers),
             "peers": peers
@@ -358,9 +399,9 @@ class EasyTierManager:
         """Alias untuk get_summary() demi kompatibilitas penuh."""
         return self.get_summary()
 
-    def start_easytier(self, network_name, network_secret, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT):
+    def start_easytier(self, network_name=None, network_secret=None, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None):
         """Alias untuk start() dengan parameter fleksibel."""
-        return self.start(network_name=network_name, network_secret=network_secret, ipv4=ipv4, peers=peers, rpc_port=rpc_port)
+        return self.start(network_name=network_name, network_secret=network_secret, ipv4=ipv4, peers=peers, rpc_port=rpc_port, remote_id=remote_id)
 
     def stop_easytier(self):
         """Alias untuk stop() demi kompatibilitas penuh."""

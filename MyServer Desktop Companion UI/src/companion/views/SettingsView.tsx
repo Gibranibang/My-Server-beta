@@ -138,13 +138,7 @@ export default function SettingsView() {
     }
     return null
   })
-  const [etNetName, setEtNetName] = useState(() => {
-    if (typeof window !== "undefined" && window.location.search.includes("mock_easytier=1")) {
-      return "myserver-mesh"
-    }
-    return ""
-  })
-  const [etSecret, setEtSecret] = useState("")
+  const [etRemoteId, setEtRemoteId] = useState("")
   const [etBusy, setEtBusy] = useState(false)
 
   const t = getTranslation(settings?.language)
@@ -153,28 +147,33 @@ export default function SettingsView() {
   const activeChannel = details?.appChannel || APP_CHANNEL
 
   useEffect(() => {
-    api.getServerDetails().then(setDetails).catch(() => {})
+    api.getServerDetails().then((d) => {
+      setDetails(d)
+      if (d?.zeroTier?.configuredNwid) {
+        setEtRemoteId(d.zeroTier.configuredNwid)
+      }
+    }).catch(() => {})
     if (api.getEasyTierStatus) {
       api.getEasyTierStatus().then((st: any) => {
         if (st && st.running) {
           setEasyTierStatus(st)
-          if (st.network_name) setEtNetName(st.network_name)
+          if (st.remote_id) setEtRemoteId(st.remote_id)
         }
       }).catch(() => {})
     }
   }, [api])
 
   const handleConnectEasyTier = async () => {
-    if (!etNetName.trim() || !etSecret.trim()) {
-      notify(isId ? "Network Name dan Secret wajib diisi!" : "Network Name and Secret are required!", "danger")
+    const cleanId = etRemoteId.trim().toLowerCase()
+    if (!cleanId) {
+      notify(isId ? "Remote ID ZimaOS wajib diisi!" : "ZimaOS Remote ID is required!", "danger")
       return
     }
     setEtBusy(true)
     try {
       if (api.startEasyTier) {
         const res = await api.startEasyTier({
-          network_name: etNetName.trim(),
-          network_secret: etSecret.trim(),
+          remote_id: cleanId,
         })
         if (res?.success) {
           notify(isId ? "EasyTier P2P Mesh terhubung!" : "EasyTier P2P Mesh connected!", "success")
@@ -834,8 +833,8 @@ export default function SettingsView() {
               {easyTierStatus?.running ? (
                 <div className="flex flex-col gap-1.5 rounded-control bg-surface-sunken border border-line p-2 text-micro">
                   <div className="flex justify-between items-center text-ink">
-                    <span className="text-ink-subtle">Network:</span>
-                    <span className="font-mono font-medium">{easyTierStatus.network_name || etNetName}</span>
+                    <span className="text-ink-subtle">Remote ID:</span>
+                    <span className="font-mono font-medium">{easyTierStatus.remote_id || etRemoteId || easyTierStatus.network_name}</span>
                   </div>
                   {easyTierStatus.virtual_ip && (
                     <div className="flex justify-between items-center text-ink">
@@ -861,32 +860,29 @@ export default function SettingsView() {
               ) : (
                 <div className="flex flex-col gap-2 pt-0.5">
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-medium text-ink-subtle">
-                      {t("easytier_net_name_label")}
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-medium text-ink-subtle">
+                        {t("easytier_remote_id_label", "ZimaOS Remote ID (16-Digit)")}
+                      </label>
+                      <span className="text-[9.5px] text-ink-faint font-mono">
+                        {etRemoteId.length}/16
+                      </span>
+                    </div>
                     <input
                       type="text"
-                      value={etNetName}
-                      onChange={(e) => setEtNetName(e.target.value)}
-                      placeholder={t("easytier_net_name_placeholder")}
-                      className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-micro text-ink focus:border-brand focus:outline-none"
+                      value={etRemoteId}
+                      maxLength={16}
+                      onChange={(e) => setEtRemoteId(e.target.value.trim().toLowerCase())}
+                      placeholder={t("easytier_remote_id_placeholder", "e.g. 2be7ac7a591b7bc8")}
+                      className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-micro font-mono text-ink focus:border-brand focus:outline-none"
                     />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-medium text-ink-subtle">
-                      {t("easytier_secret_label")}
-                    </label>
-                    <input
-                      type="password"
-                      value={etSecret}
-                      onChange={(e) => setEtSecret(e.target.value)}
-                      placeholder={t("easytier_secret_placeholder")}
-                      className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-micro text-ink focus:border-brand focus:outline-none"
-                    />
+                    <span className="text-[9.5px] text-ink-subtle leading-tight">
+                      {t("easytier_remote_id_help", "Masukkan 16-karakter Remote ID dari ZimaOS")}
+                    </span>
                   </div>
                   <button
                     type="button"
-                    disabled={etBusy}
+                    disabled={etBusy || !etRemoteId.trim()}
                     onClick={handleConnectEasyTier}
                     className="flex items-center justify-center gap-1.5 rounded-control bg-brand px-2.5 py-1.5 text-micro font-semibold text-brand-ink transition cursor-pointer hover:opacity-90 disabled:opacity-50"
                   >

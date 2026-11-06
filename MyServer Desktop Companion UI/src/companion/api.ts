@@ -199,7 +199,7 @@ export interface CompanionApi {
   joinZeroTier(): Promise<void>
 
   getEasyTierStatus?(): Promise<any>
-  startEasyTier?(payload: { network_name: string; network_secret: string; ipv4?: string; peers?: string[]; use_no_tun?: boolean; external_node?: string }): Promise<any>
+  startEasyTier?(payload: { remote_id?: string; network_name?: string; network_secret?: string; ipv4?: string; peers?: string[]; use_no_tun?: boolean; external_node?: string }): Promise<any>
   stopEasyTier?(): Promise<any>
   getRemoteStatus?(): Promise<any>
 

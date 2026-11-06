@@ -520,7 +520,7 @@ export default function AppsView() {
                         <button
                           type="button"
                           disabled={isDeleting}
-                          aria-label={`Buka jendela ${app.name}`}
+                          aria-label={`${t("open_window_for", "Open window for")} ${app.name}`}
                           title={t("open_independent_window", "Open in independent MyServer window")}
                           onClick={() => handleOpen(app.url, app.name)}
                           className="flex-1 h-[23px] rounded-md px-2 flex items-center justify-center gap-1 bg-surface-sunken hover:bg-line border border-line text-[10.5px] font-semibold text-ink transition cursor-pointer select-none active:scale-[0.98]"

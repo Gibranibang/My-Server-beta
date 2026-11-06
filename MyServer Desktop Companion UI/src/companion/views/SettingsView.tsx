@@ -94,7 +94,17 @@ export default function SettingsView() {
   const { notify } = useNotice()
   const [updateState, runUpdate] = useAsyncAction(api.checkForUpdate)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(() => {
+    if (typeof window !== "undefined" && window.location.search.includes("mock_update=1")) {
+      return {
+        upToDate: false,
+        version: "4.1.0-beta",
+        htmlUrl: "https://github.com/Gibranibang/My-Server-beta/releases/latest",
+        downloadUrl: "https://github.com/Gibranibang/My-Server-beta/releases/download/v4.1.0-beta/MyServer-v4.1.0-Beta-Setup.exe"
+      }
+    }
+    return null
+  })
   const [installingUpdate, setInstallingUpdate] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState("")
   const [zipUpdateState, setZipUpdateState] = useState<"idle" | "busy" | "done">("idle")
@@ -464,16 +474,17 @@ export default function SettingsView() {
                 </div>
               </div>
 
-              {/* Action Buttons: Direct Install & Open in Browser */}
-              <div className="mt-2.5 flex items-center gap-2">
+              {/* Action Buttons: Clean & Perfectly Contained (Zero Overflow) */}
+              <div className="mt-3 flex flex-col gap-2 w-full">
                 <Button
                   size="sm"
                   variant="primary"
                   icon={Download}
+                  block
                   state={installingUpdate ? "busy" : "idle"}
                   busyLabel={downloadProgress || (isId ? "Mengunduh..." : "Downloading...")}
                   onClick={handleDownloadAndInstall}
-                  className="h-7 text-micro px-2.5 font-semibold"
+                  className="h-8 rounded-control text-micro font-semibold shadow-xs justify-center"
                 >
                   {isId ? "Unduh & Pasang Sekarang" : "Download & Install Now"}
                 </Button>
@@ -481,11 +492,12 @@ export default function SettingsView() {
                   size="sm"
                   variant="secondary"
                   icon={ExternalLink}
+                  block
                   onClick={() => {
                     const targetUrl = updateInfo.htmlUrl || updateInfo.downloadUrl || "https://github.com/Gibranibang/My-Server-beta/releases/latest"
                     api.openExternalBrowser(targetUrl)
                   }}
-                  className="h-7 text-micro px-2.5"
+                  className="h-7 rounded-control text-micro font-medium text-ink-subtle hover:text-ink justify-center"
                 >
                   {isId ? "Buka di Browser" : "Open in Browser"}
                 </Button>

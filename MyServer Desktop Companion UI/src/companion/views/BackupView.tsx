@@ -1187,7 +1187,7 @@ export default function BackupView() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-micro font-semibold text-ink-subtle mb-0.5">
-                    Nama Jalur (Label):
+                    {t("backup_label_field", "Path Label (Name):")}
                   </label>
                   <input
                     type="text"
@@ -1750,7 +1750,7 @@ export default function BackupView() {
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1 text-micro font-bold text-ink">
                   <Network className="size-3 text-info" />
-                  Jalur Akses LAN (Lokal)
+                  {t("lan_access_route", "LAN Access Route (Local)")}
                 </span>
                 <label className="flex items-center gap-1 text-nano text-ink-muted cursor-pointer">
                   <input
@@ -1821,7 +1821,7 @@ export default function BackupView() {
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1 text-micro font-bold text-ink">
                   <Globe className="size-3 text-info" />
-                  Jalur Akses WAN / Remote (Subdomain / IP)
+                  {t("wan_access_route", "WAN Access Route (Remote Subdomain / IP)")}
                 </span>
                 <label className="flex items-center gap-1 text-nano text-ink-muted cursor-pointer">
                   <input

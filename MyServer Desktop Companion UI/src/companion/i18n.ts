@@ -197,6 +197,10 @@ export const I18N = {
     filter_active_server_title: "Click to switch server path display filter",
     filter_active_server_badge: "Active Server",
     filter_all_servers_badge: "All",
+    backup_label_field: "Path Label (Name):",
+    lan_access_route: "LAN Access Route (Local)",
+    wan_access_route: "WAN Access Route (Remote Subdomain / IP)",
+    open_window_for: "Open window for",
 
     // SettingsView
     // Accordion Sections (v3.12.0)
@@ -779,6 +783,10 @@ export const I18N = {
     filter_active_server_title: "Klik untuk beralih filter tampilan jalur server",
     filter_active_server_badge: "Server Aktif",
     filter_all_servers_badge: "Semua",
+    backup_label_field: "Nama Jalur (Label):",
+    lan_access_route: "Jalur Akses LAN (Lokal)",
+    wan_access_route: "Jalur Akses WAN / Remote (Subdomain / IP)",
+    open_window_for: "Buka jendela",
     paired: "Terhubung",
     idle: "Siaga",
     syncing: "Menyinkronkan",

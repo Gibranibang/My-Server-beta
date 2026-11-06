@@ -1,3 +1,7 @@
+[v4.1.1 - Beta] - 2026-11-06
+1. Perbaikan Form Web App (RPC Argument Swap Fix): Memperbaiki bug pada jembatan antarmuka Tauri RPC (api.real.ts) dan endpoint core service (/api/add_web_app) di mana nama aplikasi sebelumnya menimpa alamat URL (url: args[0]). Sekarang nama aplikasi dan URL tersimpan murni sesuai kolom input pengguna secara presisi 1:1 tanpa tertukar maupun terabaikan.
+2. Sinkronisasi Versi Atomik v4.1.1 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest.
+
 ﻿===================================================
 [v4.1.0 - Beta] - 2026-11-06
 Catatan:

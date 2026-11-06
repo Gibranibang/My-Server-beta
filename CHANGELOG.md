@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.1.1 - Beta] - 2026-11-06
+
+- Perbaikan Form Web App (RPC Argument Swap Fix): Memperbaiki bug pada jembatan antarmuka Tauri RPC (api.real.ts) dan endpoint core service (/api/add_web_app) di mana nama aplikasi sebelumnya menimpa alamat URL (url: args[0]). Sekarang nama aplikasi dan URL tersimpan murni sesuai kolom input pengguna secara presisi 1:1 tanpa tertukar maupun terabaikan.
+- Sinkronisasi Versi Atomik v4.1.1 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest.
+
 ## [v4.1.0 - Beta] - 2026-11-06
 
 - Tombol Centang Auto Cek Update (Native UI): Menambahkan baris preferensi pemeriksaan pembaruan otomatis di menu Pengaturan (Hero Header & Accordion Sistem & Startup) dengan gaya visual asli MyServer (`text-micro`, `font-semibold`, `text-ink`, `rounded-control`, `bg-brand` #7BC504). Saat diaktifkan, companion melakukan pemeriksaan pembaruan secara hening di latar belakang saat startup (3.5 detik) dan menampilkan notifikasi halus di Notification Center jika versi baru tersedia.

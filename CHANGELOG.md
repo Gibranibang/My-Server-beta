@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.3.1 - Beta] - 2026-11-08
+
+- Perbaikan Cepat (Hotfix) Runtime ReferenceError NoticeMarquee: Menambahkan parameter `isOnline` pada deklarasi parameter fungsi `NoticeMarquee` dan saat pemanggilannya di `FooterStatus` (`FlyoutShell.tsx`), mengeliminasi tuntas galat fatal "Failed to Load View: isOnline is not defined" pada tampilan beranda.
+- Bump Versi Atomik v4.3.1 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
 ## [v4.3.0 - Beta] - 2026-11-08
 
 - Penuntasan Definitif Akses Terkunci (Access Denied) In-App Updater: Mengonfigurasi hak akses Inno Setup menjadi elevated (`PrivilegesRequired=admin` dan `PrivilegesRequiredOverridesAllowed=commandline`) serta menambahkan flag `runasoriginaluser` pada eksekusi aplikasi paska-instalasi. Dengan elevasi ini, installer memiliki hak penuh untuk mematikan daemon background elevated EasyTier (`easytier-core.exe` & `easytier-cli.exe`), menuntaskan galat `DeleteFile failed; code 5. Access is denied` saat update berlangsung.

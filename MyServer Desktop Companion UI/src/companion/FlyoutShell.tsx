@@ -226,6 +226,7 @@ function NoticeMarquee({
   text,
   noticeId,
   count,
+  isOnline,
 }: {
   text: string
   noticeId?: number
@@ -467,7 +468,8 @@ export function FooterStatus({
                   text={hasUnread ? (latest?.text ?? "") : ""}
                   noticeId={hasUnread ? latest?.id : undefined}
                   count={historyList.length}
-                  />
+                  isOnline={isOnline}
+                />
               </span>
             </div>
           )}

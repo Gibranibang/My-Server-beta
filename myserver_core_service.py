@@ -386,7 +386,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.3.0"
+APP_VERSION_NUMBER = "4.3.1"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 

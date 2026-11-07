@@ -1,3 +1,7 @@
+[v4.3.1 - Beta] - 2026-11-08
+- Perbaikan Cepat (Hotfix) Runtime ReferenceError NoticeMarquee: Menambahkan parameter isOnline pada deklarasi NoticeMarquee di FlyoutShell.tsx, mengeliminasi galat fatal 'Failed to Load View: isOnline is not defined'.
+- Bump Versi Atomik v4.3.1 Beta.
+
 ## [v4.3.0 - Beta] - 2026-11-08
 
 - Penuntasan Definitif Akses Terkunci (Access Denied) In-App Updater: Mengonfigurasi hak akses Inno Setup menjadi elevated (`PrivilegesRequired=admin` dan `PrivilegesRequiredOverridesAllowed=commandline`) serta menambahkan flag `runasoriginaluser` pada eksekusi aplikasi paska-instalasi. Dengan elevasi ini, installer memiliki hak penuh untuk mematikan daemon background elevated EasyTier (`easytier-core.exe` & `easytier-cli.exe`), menuntaskan galat `DeleteFile failed; code 5. Access is denied` saat update berlangsung.

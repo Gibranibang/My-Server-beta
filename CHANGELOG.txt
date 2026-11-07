@@ -1,3 +1,13 @@
+[v4.2.1 - Beta] - 2026-11-07
+1. Perbaikan Layout Tombol Remote ID: Tombol edit pensil EasyTier rapi di dalam batas kartu (zero overflow).
+2. Penyelarasan UX Tombol ZeroTier: Memisahkan tombol Connect/Disconnect dengan tombol edit pensil Network ID.
+3. Dual Remote Engine Failover & Manual Mode: Otomatis failover EasyTier <-> ZeroTier serta kontrol manual (Auto, EasyTier, ZeroTier).
+4. Kartu Rute Remote Dinamis Tunggal: Hanya memunculkan 1 kartu rute remote di daftar rute yang berubah mulus sesuai engine aktif.
+5. Visual Kartu Auto Failover Solid: Fill solid bg-surface dengan stroke hijau saat aktif (Dark & Light mode).
+6. Mounting SMB WAN Dinamis: Mengarahkan SMB WAN ke IP remote aktif secara dinamis.
+7. Web Apps WAN Dinamis: URL aplikasi kontainer di rute WAN menggunakan IP remote aktif (kecuali link ZimaOS).
+8. Masking URL Seragam '••••': Format masking popover rute menjadi tepat 4 titik tanpa http://.
+
 [v4.2.0 - Beta] - 2026-11-07
 1. Integrasi EasyTier P2P Mesh sebagai Remote Engine Utama: Mengadopsi arsitektur embedded daemon Zima Client v2.3.5 (easytier-core.exe & wintun.dll) untuk koneksi remote P2P multi-protokol tanpa blokir firewall dan tanpa wajib install ZeroTier di awal.
 2. Orkestrasi Failover Cerdas ke ZeroTier: Menjadikan ZeroTier sebagai engine cadangan otomatis saat EasyTier terkendala.

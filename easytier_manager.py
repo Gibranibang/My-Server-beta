@@ -364,6 +364,30 @@ class EasyTierManager:
             return data["routes"]
         return []
 
+    def get_peer_ip(self):
+        """Mencari alamat IPv4 dari peer server di jaringan mesh EasyTier."""
+        if not self.is_running():
+            return None
+        node_info = self.get_node_info()
+        local_ip = node_info.get("virtual_ipv4") or self._ipv4
+        routes = self.get_routes()
+        for r in routes:
+            if isinstance(r, dict):
+                ipv4 = r.get("ipv4") or r.get("ip") or r.get("peer_ipv4")
+                if ipv4:
+                    clean = str(ipv4).split("/")[0].strip()
+                    if clean and clean != local_ip and not clean.startswith("127."):
+                        return clean
+        peers = self.get_peers()
+        for p in peers:
+            if isinstance(p, dict):
+                ipv4 = p.get("ipv4") or p.get("ip") or p.get("peer_ipv4")
+                if ipv4:
+                    clean = str(ipv4).split("/")[0].strip()
+                    if clean and clean != local_ip and not clean.startswith("127."):
+                        return clean
+        return None
+
     def get_summary(self):
         """Mengambil ringkasan telemetri komprehensif untuk antarmuka UI."""
         running = self.is_running()
@@ -391,7 +415,8 @@ class EasyTierManager:
             "virtual_ip": vip,
             "uptime": node_info.get("uptime", 0),
             "peers_count": len(peers),
-            "peers": peers
+            "peers": peers,
+            "server_peer_ip": self.get_peer_ip()
         }
 
 

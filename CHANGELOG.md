@@ -1,5 +1,16 @@
 # Changelog MyServer Desktop
 
+## [v4.2.1 - Beta] - 2026-11-07
+
+- Perbaikan Layout Tombol Remote ID: Memperbaiki flex flow dan padding kartu EasyTier sehingga tombol edit Remote ID menyatu rapi di dalam batas kartu tanpa meluber keluar (zero overflow).
+- Penyelarasan UX Tombol EasyTier & ZeroTier: Memisahkan tombol Hubungkan/Putuskan dengan tombol edit pensil pada ZeroTier secara simetris mengikuti tata letak EasyTier.
+- Dual Remote Engine Auto-Failover & Selector Manual: Menyediakan sistem failover otomatis khusus dua mode remote (EasyTier <-> ZeroTier) serta kontrol manual (Auto, EasyTier, ZeroTier) agar pengguna dapat mematikan salah satunya.
+- Kartu Rute Remote Dinamis Tunggal (Single Card): Menyederhanakan daftar rute jaringan sehingga hanya memunculkan 1 kartu rute remote dinamis yang berubah mulus mengikuti mode remote yang sedang aktif.
+- Visual Kartu Auto Failover Solid: Memperbaiki fill kartu Auto Failover rute dengan warna background solid kartu (bg-surface) dan stroke hijau tegas saat aktif di mode Dark dan Light.
+- Mounting SMB WAN Dinamis: Mengarahkan koneksi share SMB di rute WAN/Domain ke IP remote yang sedang aktif secara dinamis antara EasyTier dan ZeroTier.
+- Akses Web Apps WAN Dinamis: Membangun URL aplikasi web Docker/Compose pada rute WAN menggunakan IP remote aktif, dengan pengecualian link dashboard ZimaOS tetap mengarah ke domain WAN asli.
+- Masking URL Seragam '••••': Menyelaraskan seluruh URL yang disembunyikan pada popover menu switch rute menjadi tepat 4 titik '••••' murni tanpa awalan http://.
+
 ## [v4.2.0 - Beta] - 2026-11-07
 
 - Integrasi EasyTier P2P Mesh sebagai Remote Engine Utama: Mengadopsi arsitektur embedded background daemon Zima Client v2.3.5 (easytier-core.exe & wintun.dll) untuk akses remote peer-to-peer tanpa batasan firewall, tanpa instalasi driver pihak ketiga di awal, dan mendukung multi-protokol (UDP, TCP, WebSocket Secure port 443).

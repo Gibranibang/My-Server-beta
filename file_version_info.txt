@@ -2,8 +2,8 @@
 # Windows PE Version Information Resource File for MyServer Desktop (Beta)
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(4, 2, 0, 0),
-    prodvers=(4, 2, 0, 0),
+    filevers=(4, 2, 1, 0),
+    prodvers=(4, 2, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,

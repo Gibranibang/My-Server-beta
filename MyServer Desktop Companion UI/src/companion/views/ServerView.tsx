@@ -287,6 +287,58 @@ export default function ServerView({ go }: ViewProps) {
     }
   }
 
+  const onConnectZeroTier = async () => {
+    const nwid = details?.zeroTier?.configuredNwid || details?.easyTier?.remote_id || ""
+    if (!nwid) {
+      onJoinZeroTier()
+      return
+    }
+    setIsSubmitting(true)
+    try {
+      const res = await api.joinZeroTierNetwork(nwid)
+      if (res?.success !== false) {
+        notify(t("zt_connected_notice", "ZeroTier berhasil terhubung"), "success")
+        loadDetails()
+      } else {
+        notify(res?.message || "Gagal menghubungkan ZeroTier", "danger")
+      }
+    } catch (err: any) {
+      notify(err?.message || "Terjadi kesalahan ZeroTier", "danger")
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const onDisconnectZeroTier = async () => {
+    const nwid = details?.zeroTier?.configuredNwid || ""
+    setIsSubmitting(true)
+    try {
+      const res = await api.leaveZeroTierNetwork(nwid)
+      if (res?.success !== false) {
+        notify(t("zt_disconnected_notice", "ZeroTier diputuskan"), "neutral")
+        loadDetails()
+      } else {
+        notify(res?.message || "Gagal memutuskan ZeroTier", "danger")
+      }
+    } catch (err: any) {
+      notify(err?.message || "Terjadi kesalahan ZeroTier", "danger")
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const onSetRemoteMode = async (mode: "auto" | "easytier" | "zerotier") => {
+    try {
+      const res = await api.setRemoteMode?.(mode)
+      if (res?.success !== false) {
+        notify(t("remote_mode_updated", `Mode failover remote: ${mode}`), "info")
+        loadDetails()
+      }
+    } catch (err: any) {
+      notify(err?.message || "Gagal mengubah mode remote", "danger")
+    }
+  }
+
   const onJoinZeroTier = () => {
     setFormNwid(details?.zeroTier?.configuredNwid || "")
     setModalMode("joinZeroTier")
@@ -443,6 +495,43 @@ export default function ServerView({ go }: ViewProps) {
 
         {/* 2. KARTU REMOTE ACCESS: EASYTIER (UTAMA) & ZEROTIER (CADANGAN) */}
         <section aria-label="Remote Access" className="flex flex-col gap-3">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
+              {t("remote_engine_mode", "Remote Mode")}
+            </span>
+            <div className="flex items-center gap-1 bg-surface-sunken p-0.5 rounded-full border border-line text-nano">
+              <button
+                type="button"
+                onClick={() => onSetRemoteMode("auto")}
+                className={cx(
+                  "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
+                  (details?.remoteMode || "auto") === "auto" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
+                )}
+              >
+                Auto
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetRemoteMode("easytier")}
+                className={cx(
+                  "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
+                  details?.remoteMode === "easytier" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
+                )}
+              >
+                EasyTier
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetRemoteMode("zerotier")}
+                className={cx(
+                  "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
+                  details?.remoteMode === "zerotier" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
+                )}
+              >
+                ZeroTier
+              </button>
+            </div>
+          </div>
           {/* EASYTIER REMOTE ACCESS (UTAMA) */}
           <div className="flex flex-col gap-2">
             <SectionLabel trailing={details?.easyTier?.running ? t("service_active", "Service Aktif") : t("status_offline", "Offline")}>
@@ -524,13 +613,13 @@ export default function ServerView({ go }: ViewProps) {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex items-center gap-2 pt-1 min-w-0">
                 {details?.easyTier?.running ? (
                   <Button
                     size="sm"
                     variant="soft"
                     icon={Network}
-                    block
+                    className="flex-1 min-w-0"
                     disabled={isSubmitting}
                     onClick={onDisconnectEasyTier}
                   >
@@ -541,7 +630,7 @@ export default function ServerView({ go }: ViewProps) {
                     size="sm"
                     variant="primary"
                     icon={Network}
-                    block
+                    className="flex-1 min-w-0"
                     disabled={isSubmitting}
                     onClick={onConnectEasyTier}
                   >
@@ -552,11 +641,11 @@ export default function ServerView({ go }: ViewProps) {
                   size="sm"
                   variant="soft"
                   icon={Edit2}
+                  className="shrink-0 px-2.5"
                   onClick={onJoinZeroTier}
-                  title="Setup Remote ID"
-                >
-                  Remote ID
-                </Button>
+                  title={t("edit_remote_id", "Ubah Remote ID")}
+                  aria-label={t("edit_remote_id", "Ubah Remote ID")}
+                />
               </div>
             </Card>
           </div>
@@ -650,13 +739,40 @@ export default function ServerView({ go }: ViewProps) {
                 )}
               </div>
 
-              <Button
-                size="sm"
-                variant="soft"
-                icon={Network}
-                block
-                onClick={onJoinZeroTier}
-              >{t("zt_connect_btn", "Connect / Disconnect Remote ID")}</Button>
+              <div className="flex items-center gap-2 pt-1 min-w-0">
+                {details?.zeroTier?.running && details?.zeroTier?.joined !== false ? (
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    icon={Network}
+                    className="flex-1 min-w-0"
+                    disabled={isSubmitting}
+                    onClick={onDisconnectZeroTier}
+                  >
+                    {t("zt_btn_disconnect", "Putuskan ZeroTier")}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    icon={Network}
+                    className="flex-1 min-w-0"
+                    disabled={isSubmitting}
+                    onClick={onConnectZeroTier}
+                  >
+                    {t("zt_btn_connect", "Hubungkan ZeroTier")}
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="soft"
+                  icon={Edit2}
+                  className="shrink-0 px-2.5"
+                  onClick={onJoinZeroTier}
+                  title={t("edit_network_id", "Ubah Network ID")}
+                  aria-label={t("edit_network_id", "Ubah Network ID")}
+                />
+              </div>
             </Card>
           </div>
         </section>
@@ -684,8 +800,8 @@ export default function ServerView({ go }: ViewProps) {
               className={cx(
                 "group flex w-full items-center justify-between rounded-tile border p-2.5 text-left transition-[border-color,background-color] duration-150 outline-none cursor-pointer",
                 isAutoActive
-                  ? "border-brand/40 bg-brand/5 shadow-tile"
-                  : "border-line bg-surface hover:border-line-strong hover:bg-surface-sunken"
+                  ? "border-2 border-brand bg-surface shadow-tile"
+                  : "border border-line bg-surface hover:border-line-strong hover:bg-surface-sunken"
               )}
             >
               <div className="flex items-center gap-3">
@@ -730,8 +846,8 @@ export default function ServerView({ go }: ViewProps) {
                   className={cx(
                     "rounded-tile border transition-[border-color,background-color] duration-150",
                     route.active && !isAutoActive
-                      ? "border-brand/40 bg-brand/5 shadow-tile"
-                      : "border-line bg-surface hover:border-line-strong hover:bg-surface-sunken"
+                      ? "border-2 border-brand bg-surface shadow-tile"
+                      : "border border-line bg-surface hover:border-line-strong hover:bg-surface-sunken"
                   )}
                 >
                   <div

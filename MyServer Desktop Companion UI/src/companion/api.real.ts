@@ -2137,6 +2137,21 @@ export function createRealApi(): CompanionApi {
       }
       return { activeEngine: 'none', easytier: { running: false }, zerotier: { running: false } }
     },
+
+    async setRemoteMode(mode: string) {
+      try {
+        const api = await getPyApi()
+        if (api) {
+          if (typeof api.set_remote_mode === 'function') {
+            return await api.set_remote_mode({ mode })
+          }
+        }
+      } catch (err) {
+        console.error('[RealApi] setRemoteMode error:', err)
+        throw err
+      }
+      return { success: false, message: 'Core API unavailable' }
+    },
   }
 
 }

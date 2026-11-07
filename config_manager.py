@@ -933,6 +933,85 @@ def classify_connection_priority(conn_or_url):
         return 3, "Unknown"
 
 
+def get_dynamic_remote_info(server, config=None):
+    """
+    Menentukan informasi remote engine aktif secara dinamis (EasyTier vs ZeroTier)
+    berdasarkan mode failover ('auto', 'easytier', 'zerotier').
+    """
+    if not isinstance(server, dict):
+        return None
+    if config is None:
+        try:
+            config = load_or_create_config()
+        except Exception:
+            config = {}
+
+    r_mode = (server.get("remote_mode") or config.get("remote_mode", "auto")).lower()
+    srv_zt_vip = (server.get("zerotier_virtual_ip") or "").strip()
+    srv_et_vip = (server.get("easytier_virtual_ip") or "").strip()
+
+    # Cek EasyTier jika modul tersedia
+    et_peer_ip = None
+    et_running = False
+    try:
+        import easytier_manager
+        mgr = easytier_manager.get_easytier_manager()
+        et_running = mgr.is_running()
+        if et_running:
+            et_peer_ip = mgr.get_peer_ip()
+    except Exception:
+        pass
+
+    chosen_et_ip = et_peer_ip or srv_et_vip
+
+    # 1. Jika mode paksa easytier
+    if r_mode == "easytier":
+        ip = chosen_et_ip or srv_zt_vip
+        if ip:
+            return {
+                "engine": "easytier",
+                "name": "EasyTier Remote (P2P)",
+                "ip": ip,
+                "url": f"http://{ip}",
+                "badge": "P2P"
+            }
+        return None
+
+    # 2. Jika mode paksa zerotier
+    if r_mode == "zerotier":
+        if srv_zt_vip:
+            return {
+                "engine": "zerotier",
+                "name": "ZeroTier Remote (P2P)",
+                "ip": srv_zt_vip,
+                "url": f"http://{srv_zt_vip}",
+                "badge": "P2P"
+            }
+        return None
+
+    # 3. Mode AUTO FAILOVER (Default: EasyTier Utama -> ZeroTier Cadangan)
+    if et_running and chosen_et_ip:
+        return {
+            "engine": "easytier",
+            "name": "EasyTier Remote (P2P)",
+            "ip": chosen_et_ip,
+            "url": f"http://{chosen_et_ip}",
+            "badge": "P2P"
+        }
+
+    # Fallback ke ZeroTier
+    if srv_zt_vip:
+        return {
+            "engine": "zerotier",
+            "name": "ZeroTier Remote (P2P)",
+            "ip": srv_zt_vip,
+            "url": f"http://{srv_zt_vip}",
+            "badge": "Fallback" if et_running else "P2P"
+        }
+
+    return None
+
+
 def resolve_target_connection(config, check_network=True, current_loaded_url=None, target_server=None):
     cur_l = config.get("language", "en")
     server = target_server if target_server else get_active_server(config)
@@ -941,17 +1020,20 @@ def resolve_target_connection(config, check_network=True, current_loaded_url=Non
     
     connections = list(server.get("connections", []))
     
-    # Injeksi Rute Dinamis ZeroTier (Tier 3) jika server memiliki zerotier_virtual_ip
-    srv_zt_vip = (server.get("zerotier_virtual_ip") or "").strip()
-    if srv_zt_vip:
-        zt_url = f"http://{srv_zt_vip}"
-        if not any(c.get("url", "").rstrip("/") == zt_url for c in connections):
+    # Injeksi Rute Dinamis Remote Tunggal (Tier 3) (EasyTier <-> ZeroTier Failover)
+    rem_info = get_dynamic_remote_info(server, config)
+    if rem_info and rem_info.get("url"):
+        rem_u = rem_info["url"]
+        if not any(c.get("url", "").rstrip("/") == rem_u.rstrip("/") for c in connections):
             connections.append({
-                "id": "conn_zerotier_auto",
-                "name": "ZeroTier Remote (P2P)",
-                "url": zt_url,
+                "id": "conn_remote_dynamic",
+                "name": rem_info["name"],
+                "url": rem_u,
                 "tier": 3,
-                "isZeroTier": True
+                "isRemoteDynamic": True,
+                "isZeroTier": (rem_info["engine"] == "zerotier"),
+                "isEasyTier": (rem_info["engine"] == "easytier"),
+                "badge": rem_info["badge"]
             })
 
     if not connections:
@@ -962,15 +1044,15 @@ def resolve_target_connection(config, check_network=True, current_loaded_url=Non
     
     # 1. Rute Manual Spesifik yang dipilih pengguna
     if active_conn != "auto":
-        # Periksa apakah pengguna memilih rute ZeroTier dinamis
-        if srv_zt_vip and (active_conn == "conn_zerotier_auto" or active_conn == f"http://{srv_zt_vip}"):
-            zt_u = f"http://{srv_zt_vip}"
+        # Periksa apakah pengguna memilih rute remote dinamis (EasyTier / ZeroTier)
+        if rem_info and (active_conn in ("conn_remote_dynamic", "conn_zerotier_auto") or active_conn == rem_info["url"]):
+            target_u = rem_info["url"]
             if check_network:
-                ok, ms = check_server_ping(zt_u, timeout=2.0)
+                ok, ms = check_server_ping(target_u, timeout=2.0)
                 lat_str = f" ({ms}ms)" if ok else " (Offline)"
-                return zt_u, f"ZeroTier Remote: {zt_u}{lat_str}"
+                return target_u, f"{rem_info['name']}: {target_u}{lat_str}"
             else:
-                return zt_u, f"ZeroTier Remote: {zt_u}"
+                return target_u, f"{rem_info['name']}: {target_u}"
 
         for c in connections:
             if c["id"] == active_conn or c["url"] == active_conn:
@@ -1028,7 +1110,7 @@ def resolve_target_connection(config, check_network=True, current_loaded_url=Non
     for c in tier3_conns:
         ok, ms = check_server_ping(c["url"], timeout=2.5)
         if ok:
-            lbl = "ZeroTier" if c.get("isZeroTier") else ("Special/Zima" if cur_l == "en" else "Khusus/Zima")
+            lbl = "EasyTier" if c.get("isEasyTier") else ("ZeroTier" if c.get("isZeroTier") else ("Special/Zima" if cur_l == "en" else "Khusus/Zima"))
             return c["url"], f"{auto_txt} ({lbl}: {c['url']} - {ms}ms)"
 
     # Fallback Cerdas jika seluruh rute offline (Anti-Banting ke LAN jika posisi remote):

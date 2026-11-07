@@ -202,6 +202,7 @@ export interface CompanionApi {
   startEasyTier?(payload: { remote_id?: string; network_name?: string; network_secret?: string; ipv4?: string; peers?: string[]; use_no_tun?: boolean; external_node?: string }): Promise<any>
   stopEasyTier?(): Promise<any>
   getRemoteStatus?(): Promise<any>
+  setRemoteMode?(mode: string): Promise<any>
 
 
 

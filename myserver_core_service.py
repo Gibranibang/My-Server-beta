@@ -1,3 +1,16 @@
+def get_active_remote_ip(srv, cfg=None):
+    """Menentukan alamat IP remote aktif secara dinamis antara EasyTier dan ZeroTier."""
+    if not isinstance(srv, dict):
+        return ""
+    try:
+        rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
+        if rem_info and rem_info.get("ip"):
+            return rem_info["ip"]
+    except Exception as e:
+        logger_manager.log_debug(f"[get_active_remote_ip] Error: {e}")
+    return (srv.get("zerotier_virtual_ip") or "").strip()
+
+
 """
 
 
@@ -370,7 +383,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.2.0"
+APP_VERSION_NUMBER = "4.2.1"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3190,7 +3203,7 @@ def run_app_window(url, title=None, width=1150, height=750, target_server_id=Non
 
 
 
-                zerotier_ip=(srv.get("zerotier_virtual_ip") or "").strip(),
+                zerotier_ip=get_active_remote_ip(srv),
 
 
 
@@ -13148,7 +13161,7 @@ def _resolve_smb_route_params(srv, active_u):
 
 
 
-    zt_ip = (srv.get("zerotier_virtual_ip") or "").strip() if isinstance(srv, dict) else ""
+    zt_ip = get_active_remote_ip(srv) if isinstance(srv, dict) else ""
 
 
 
@@ -14108,7 +14121,7 @@ def _scan_compose_apps_now():
 
 
 
-                zerotier_ip=(srv.get("zerotier_virtual_ip") or "").strip(),
+                zerotier_ip=get_active_remote_ip(srv),
 
 
 
@@ -14832,75 +14845,33 @@ def get_server_details_data(cfg=None):
 
 
 
-    # Injeksi rute ZeroTier dinamis jika server memiliki zerotier_virtual_ip
+    # Injeksi rute remote dinamis tunggal (EasyTier <-> ZeroTier Failover)
+    rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
+    if rem_info and rem_info.get("url"):
+        rem_u = rem_info["url"]
+        rem_name = rem_info["name"]
+        rem_engine = rem_info["engine"]
+        rem_act = (act_conn_id in ("conn_remote_dynamic", "conn_zerotier_auto")) or (act_conn_id == "auto" and rem_u.rstrip("/") in active_u.rstrip("/"))
+        rem_p_ms = None
+        if rem_act:
+            ok_r, lat_r = config_manager.check_server_ping(rem_u, timeout=1.5)
+            rem_p_ms = lat_r if ok_r else None
 
+        # Bersihkan rute remote duplikat agar hanya muncul 1 kartu tunggal
+        routes_list = [r for r in routes_list if not r.get("isZeroTier") and not r.get("isRemoteDynamic") and not ("ZeroTier" in r.get("name", "") or "EasyTier" in r.get("name", ""))]
 
-
-    srv_zt_vip = (srv.get("zerotier_virtual_ip") or "").strip()
-
-
-
-    if srv_zt_vip:
-
-
-
-        has_zt_in_routes = any(r.get("isZeroTier") or (srv_zt_vip in r.get("url", "")) for r in routes_list)
-
-
-
-        if not has_zt_in_routes:
-
-
-
-            zt_is_act = (act_conn_id == "conn_zerotier_auto") or (act_conn_id == "auto" and srv_zt_vip in active_u)
-
-
-
-            zt_p_ms = None
-
-
-
-            if zt_is_act:
-
-
-
-                ok_zt, lat_zt = config_manager.check_server_ping(f"http://{srv_zt_vip}", timeout=1.5)
-
-
-
-                zt_p_ms = lat_zt if ok_zt else None
-
-
-
-            routes_list.append({
-
-
-
-                "id": "conn_zerotier_auto",
-
-
-
-                "name": "ZeroTier Remote (P2P)",
-
-
-
-                "url": f"http://{srv_zt_vip}",
-
-
-
-                "active": zt_is_act,
-
-
-
-                "isZeroTier": True,
-
-
-
-                "pingMs": zt_p_ms,
-
-
-
-            })
+        routes_list.append({
+            "id": "conn_remote_dynamic",
+            "name": rem_name,
+            "url": rem_u,
+            "active": rem_act,
+            "isZeroTier": (rem_engine == "zerotier"),
+            "isEasyTier": (rem_engine == "easytier"),
+            "isRemoteDynamic": True,
+            "remoteEngine": rem_engine,
+            "badge": rem_info.get("badge", "P2P"),
+            "pingMs": rem_p_ms,
+        })
 
 
 
@@ -15530,6 +15501,9 @@ def get_server_details_data(cfg=None):
 
         "zeroTier": zt_info,
         "easyTier": (lambda s: (s.update({"remote_id": s.get("remote_id") or srv.get("remote_id") or srv.get("zerotier_network_id") or cfg.get("easytier", {}).get("remote_id")}), s)[1])(easytier_manager.get_easytier_manager().get_status_overview()) if easytier_manager else {"running": False},
+        "remoteMode": srv.get("remote_mode") or cfg.get("remote_mode", "auto"),
+        "activeRemoteEngine": rem_info.get("engine", "none") if rem_info else "none",
+        "activeRemoteIp": rem_info.get("ip", "") if rem_info else "",
 
 
 
@@ -21885,7 +21859,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                        zerotier_ip=(srv.get("zerotier_virtual_ip") or "").strip(),
+                        zerotier_ip=get_active_remote_ip(srv),
 
 
 
@@ -22169,7 +22143,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                        zerotier_ip=(srv.get("zerotier_virtual_ip") or "").strip(),
+                        zerotier_ip=get_active_remote_ip(srv),
 
 
 
@@ -30106,6 +30080,19 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+
+        if path == "/api/set_remote_mode":
+            mode = (body.get("mode") or "auto").strip().lower()
+            if mode not in ("auto", "easytier", "zerotier"):
+                mode = "auto"
+            cfg = config_manager.load_or_create_config()
+            srv = config_manager.get_active_server(cfg)
+            if srv:
+                srv["remote_mode"] = mode
+            cfg["remote_mode"] = mode
+            config_manager.save_config(cfg)
+            self._send_json({"success": True, "remote_mode": mode})
+            return
 
         if path == "/api/leave_zerotier_network":
 

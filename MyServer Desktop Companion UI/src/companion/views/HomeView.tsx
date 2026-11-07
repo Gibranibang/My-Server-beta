@@ -175,14 +175,7 @@ export default function HomeView({ go }: ViewProps) {
     e.stopPropagation()
     setMaskedRoutes((prev) => ({ ...prev, [id]: !isRouteMasked(id) }))
   }
-  const maskUrl = (url: string) => {
-    return url.replace(/^(https?:\/\/)?([^\/:]+)/, (_m, proto = "", host = "") => {
-      if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-        return `${proto}${host.split(".")[0]}.•••.•••.•••`
-      }
-      return `${proto}••••••••••••`
-    })
-  }
+  const maskUrl = (_url: string) => "••••"
 
   const onSwitchProfileQuick = (profile: string) => {
     if (details?.activeProfile === profile) {

@@ -1,5 +1,17 @@
 # Changelog MyServer Desktop
 
+## [v4.2.6 - Beta] - 2026-11-07
+
+- Restorasi Ikon Pensil Edit Remote/Network ID: Memperbaiki render tombol edit pensil pada kartu EasyTier dan ZeroTier di menu Server & Network. Sebelumnya pembungkusan komponen `<Button>` dengan padding horizontal default (`px-3`) menyebabkan ikon pensil (`Edit2`) terhimpit menjadi bintik mikro (~2px); kini digantikan dengan tombol circular semantik (`rounded-full h-7 w-7`) dengan rendering SVG stroke tegas yang tampil tajam dan presisi pada mode Dark maupun Light.
+- Sinkronisasi Versi Atomik v4.2.6 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
+## [v4.2.6 - Beta] - 2026-11-07
+
+- Perbaikan Layout & Overflow Tombol Remote ID (Pencil Button): Memperbaiki tombol aksi pensil Edit Remote ID dan Edit Network ID di `ServerView.tsx` menjadi circular button presisi (`h-7 w-7 rounded-full bg-surface-muted hover:bg-line text-ink`), menghilangkan tuntas masalah tombol edit yang meluber keluar dari batas kartu (*card overflow*) baik pada kartu EasyTier maupun ZeroTier.
+- Penyelarasan UX Tombol Remote Seragam: Menyelaraskan struktur tata letak tombol aksi kartu ZeroTier agar identik dengan EasyTier (tombol aksi utama Putuskan/Hubungkan yang fleksibel dan tombol pensil terpisah di samping kanan dalam kartu).
+- Verifikasi Integritas Failover & Multi-Remote: Memastikan kestabilan switch dinamis antara EasyTier dan ZeroTier untuk mounting drive SMB File Explorer serta navigasi aplikasi Web Apps pada rute WAN.
+- Bump Versi Atomik v4.2.6 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
 ## [v4.2.5 - Beta] - 2026-11-07
 
 - Perbaikan Klasifikasi Tipe Rute Remote (Eliminasi Salah Deteksi LAN): Memperbaiki helper `classifyRoute` di `HomeView.tsx` agar memprioritaskan deteksi rute Remote P2P (`EasyTier` dan `ZeroTier`, subnet `10.126.126.x`, `172.24.x`, `172.25.x`) sebelum evaluasi subnet LAN, menghilangkan tuntas bug di mana rute EasyTier sebelumnya salah dilabeli sebagai `LAN (EasyTier Remote (P2P))` dengan ikon network.

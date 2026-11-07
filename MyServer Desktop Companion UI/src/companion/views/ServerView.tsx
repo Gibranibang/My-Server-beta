@@ -653,15 +653,15 @@ export default function ServerView({ go }: ViewProps) {
                         {t("easytier_btn_connect", "Hubungkan EasyTier")}
                       </Button>
                     )}
-                    <Button
-                      size="sm"
-                      variant="soft"
-                      icon={Edit2}
-                      className="shrink-0 w-8 px-0 flex items-center justify-center"
+                    <button
+                      type="button"
                       onClick={onJoinZeroTier}
+                      className="h-7 w-7 shrink-0 rounded-full bg-surface-muted hover:bg-line text-ink flex items-center justify-center transition cursor-pointer"
                       title={t("edit_remote_id", "Ubah Remote ID")}
                       aria-label={t("edit_remote_id", "Ubah Remote ID")}
-                    />
+                    >
+                      <Edit2 className="size-3.5 shrink-0 stroke-[2]" aria-hidden />
+                    </button>
                   </div>
                 </Card>
               ) : (
@@ -773,15 +773,15 @@ export default function ServerView({ go }: ViewProps) {
                         {t("zt_btn_connect", "Hubungkan ZeroTier")}
                       </Button>
                     )}
-                    <Button
-                      size="sm"
-                      variant="soft"
-                      icon={Edit2}
-                      className="shrink-0 w-8 px-0 flex items-center justify-center"
+                    <button
+                      type="button"
                       onClick={onJoinZeroTier}
+                      className="h-7 w-7 shrink-0 rounded-full bg-surface-muted hover:bg-line text-ink flex items-center justify-center transition cursor-pointer"
                       title={t("edit_network_id", "Ubah Network ID")}
                       aria-label={t("edit_network_id", "Ubah Network ID")}
-                    />
+                    >
+                      <Edit2 className="size-3.5 shrink-0 stroke-[2]" aria-hidden />
+                    </button>
                   </div>
                 </Card>
               )}

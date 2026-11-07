@@ -319,15 +319,18 @@ class EasyTierManager:
                 "uptime": 0
             }
 
-        data, err = self.run_cli(["node"])
+        data, err = self.run_cli(["node", "info"])
+        if not data:
+            data, err = self.run_cli(["node"])
         uptime = int(time.time() - self._start_time) if self._start_time else 0
         if data and isinstance(data, dict):
+            vip = data.get("ipv4_addr") or data.get("ipv4") or self._ipv4
             return {
                 "running": True,
                 "network_name": self._network_name,
-                "virtual_ipv4": data.get("ipv4") or self._ipv4,
+                "virtual_ipv4": vip,
                 "hostname": data.get("hostname", ""),
-                "node_id": data.get("node_id", ""),
+                "node_id": str(data.get("peer_id") or data.get("node_id") or ""),
                 "uptime": uptime,
                 "raw": data
             }
@@ -345,7 +348,9 @@ class EasyTierManager:
         if not self.is_running():
             return []
 
-        data, err = self.run_cli(["peer"])
+        data, err = self.run_cli(["peer", "list"])
+        if not data:
+            data, err = self.run_cli(["peer"])
         if isinstance(data, list):
             return data
         elif isinstance(data, dict) and "peers" in data:
@@ -357,7 +362,9 @@ class EasyTierManager:
         if not self.is_running():
             return []
 
-        data, err = self.run_cli(["route"])
+        data, err = self.run_cli(["route", "list"])
+        if not data:
+            data, err = self.run_cli(["route"])
         if isinstance(data, list):
             return data
         elif isinstance(data, dict) and "routes" in data:
@@ -369,11 +376,11 @@ class EasyTierManager:
         if not self.is_running():
             return None
         node_info = self.get_node_info()
-        local_ip = node_info.get("virtual_ipv4") or self._ipv4
+        local_ip = str(node_info.get("virtual_ipv4") or self._ipv4 or "").split("/")[0].strip()
         routes = self.get_routes()
         for r in routes:
             if isinstance(r, dict):
-                ipv4 = r.get("ipv4") or r.get("ip") or r.get("peer_ipv4")
+                ipv4 = r.get("ipv4") or r.get("ipv4_addr") or r.get("ip") or r.get("peer_ipv4")
                 if ipv4:
                     clean = str(ipv4).split("/")[0].strip()
                     if clean and clean != local_ip and not clean.startswith("127."):
@@ -381,7 +388,7 @@ class EasyTierManager:
         peers = self.get_peers()
         for p in peers:
             if isinstance(p, dict):
-                ipv4 = p.get("ipv4") or p.get("ip") or p.get("peer_ipv4")
+                ipv4 = p.get("ipv4") or p.get("ipv4_addr") or p.get("ip") or p.get("peer_ipv4")
                 if ipv4:
                     clean = str(ipv4).split("/")[0].strip()
                     if clean and clean != local_ip and not clean.startswith("127."):

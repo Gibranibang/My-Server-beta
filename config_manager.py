@@ -966,13 +966,21 @@ def get_dynamic_remote_info(server, config=None):
 
     # 1. Jika mode paksa easytier
     if r_mode == "easytier":
-        ip = chosen_et_ip or srv_zt_vip
-        if ip:
+        if chosen_et_ip:
             return {
                 "engine": "easytier",
                 "name": "EasyTier Remote (P2P)",
-                "ip": ip,
-                "url": f"http://{ip}",
+                "ip": chosen_et_ip,
+                "url": f"http://{chosen_et_ip}",
+                "badge": "P2P"
+            }
+        # Jika belum ada IP EasyTier terdeteksi, gunakan srv_et_vip jika ada
+        if srv_et_vip:
+            return {
+                "engine": "easytier",
+                "name": "EasyTier Remote (P2P)",
+                "ip": srv_et_vip,
+                "url": f"http://{srv_et_vip}",
                 "badge": "P2P"
             }
         return None

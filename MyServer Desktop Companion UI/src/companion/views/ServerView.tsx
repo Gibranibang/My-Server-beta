@@ -608,9 +608,15 @@ export default function ServerView({ go }: ViewProps) {
                 <div className="flex items-center justify-end gap-1 min-w-0 text-right">
                   <span className="shrink-0 text-ink-subtle">Laptop IP:</span>
                   <Mono className="text-ink text-[9.5px] truncate">
-                    {details?.easyTier?.virtual_ipv4 || details?.easyTier?.virtual_ip || details?.zeroTier?.virtualIp || "–"}
+                    {details?.easyTier?.virtual_ipv4 || details?.easyTier?.virtual_ip || "–"}
                   </Mono>
                 </div>
+                {details?.easyTier?.server_peer_ip && (
+                  <div className="col-span-2 flex items-center justify-between text-nano border-t border-line/40 pt-1">
+                    <span className="text-ink-subtle">Server IP:</span>
+                    <Mono className="text-ink font-semibold text-[9.5px]">{details.easyTier.server_peer_ip}</Mono>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2 pt-1 min-w-0">

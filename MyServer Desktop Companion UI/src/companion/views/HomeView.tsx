@@ -319,16 +319,16 @@ export default function HomeView({ go }: ViewProps) {
               style={{
                 boxShadow: isOnline 
                   ? "0px 4px 6px 0px rgba(80,130,0,0.20), inset 4px 4px 8px 0px rgba(50,81,2,0.30)"
-                  : "0px 4px 6px 0px rgba(230,0,4,0.20), inset 4px 4px 8px 0px rgba(180,0,3,0.30)",
+                  : "0px 4px 6px 0px rgba(130,0,22,0.20), inset 4px 4px 8px 0px rgba(130,0,22,0.30)",
               }}
               className="h-[20.16px] shrink-0 justify-center rounded-full bg-white border border-[#DDD] px-[6.39px] flex items-center gap-[3.36px] cursor-pointer hover:bg-slate-50 transition outline-none relative select-none"
               title={t("switch_route_title", "Ganti Rute Akses")}
             >
-              <Globe className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#047857]" : "text-[#E60004]")} strokeWidth={1.8} />
-              <span className={cx("text-[8.4px] font-semibold leading-[11.76px] whitespace-nowrap", isOnline ? "text-[#047857]" : "text-[#E60004]")}>
+              <Globe className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#047857]" : "text-[#2D2D2D]")} strokeWidth={1.8} />
+              <span className={cx("text-[8.4px] font-semibold leading-[11.76px] whitespace-nowrap", isOnline ? "text-[#047857]" : "text-[#CCCCCC]")}>
                 {currentRouteMeta.label}
               </span>
-              <ChevronDown className="size-[10.07px] text-[#475569] shrink-0" strokeWidth={1.8} />
+              <ChevronDown className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#475569]" : "text-[#CBCBCA]")} strokeWidth={1.8} />
             </button>
             <button
               type="button"
@@ -337,16 +337,18 @@ export default function HomeView({ go }: ViewProps) {
                 setShowRouteMenu(false)
               }}
               style={{
-                boxShadow: "0px 4px 6px 0px rgba(0,52,101,0.15), inset 4px 4px 8px 0px rgba(3,38,138,0.30)",
+                boxShadow: isOnline
+                  ? "0px 4px 6px 0px rgba(0,52,101,0.15), inset 4px 4px 8px 0px rgba(3,38,138,0.30)"
+                  : "0px 4px 6px 0px rgba(130,0,22,0.15), inset 4px 4px 8px 0px rgba(130,0,22,0.30)",
               }}
               className="h-[20px] w-auto shrink-0 justify-center rounded-full bg-white border border-[#DDD] px-[6.39px] flex items-center gap-[3.36px] cursor-pointer hover:bg-slate-50 transition outline-none relative select-none"
               title={t("switch_account_title", "Ganti Akun")}
             >
-              <User className="size-[10.07px] text-[#1D4ED8] shrink-0" strokeWidth={1.8} />
-              <span className="text-[8.4px] font-semibold text-[#1D4ED8] leading-[11.76px] whitespace-nowrap">
+              <User className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#1D4ED8]" : "text-[#2D2D2D]")} strokeWidth={1.8} />
+              <span className={cx("text-[8.4px] font-semibold leading-[11.76px] whitespace-nowrap", isOnline ? "text-[#1D4ED8]" : "text-[#CCCCCC]")}>
                 {details?.activeProfile || details?.profiles?.[0] || "–"}
               </span>
-              <ChevronDown className="size-[10.07px] text-[#2563EB] shrink-0" strokeWidth={1.8} />
+              <ChevronDown className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#2563EB]" : "text-[#CBCBCA]")} strokeWidth={1.8} />
             </button>
           </>
         }

@@ -1,5 +1,14 @@
 # Changelog MyServer Desktop
 
+## [v4.3.2 - Beta] - 2026-11-08
+
+- Penyelarasan Presisi Chip Footer Mode OFFLINE (1:1 Acuan footer.relative (offline).svg):
+  - Mengubah styling tombol rute jaringan (LAN/WAN) dan tombol akun pengguna (Account/User) saat server offline agar selaras 100% dengan desain footer.relative (offline).svg.
+  - Ikon globe dan ikon pengguna kini mengadopsi warna charcoal gelap #2D2D2D, teks rute dan nama akun menggunakan abu-abu lembut #CCCCCC, serta chevron dropdown menggunakan #CBCBCA.
+  - Menggantikan bayangan biru pada chip akun saat offline dengan bayangan halus beraksen kemerahan 0px 4px 6px 0px rgba(130,0,22,0.15), inset 4px 4px 8px 0px rgba(130,0,22,0.30), dan bayangan chip rute 0px 4px 6px 0px rgba(130,0,22,0.20), inset 4px 4px 8px 0px rgba(130,0,22,0.30).
+  - Seluruh dimensi, padding, font size, border radius, dan interaktivitas tetap 100% konsisten (zero layout shift).
+- Bump Versi Atomik v4.3.2 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
 ## [v4.3.1 - Beta] - 2026-11-08
 
 - Perbaikan Cepat (Hotfix) Runtime ReferenceError NoticeMarquee: Menambahkan parameter `isOnline` pada deklarasi parameter fungsi `NoticeMarquee` dan saat pemanggilannya di `FooterStatus` (`FlyoutShell.tsx`), mengeliminasi tuntas galat fatal "Failed to Load View: isOnline is not defined" pada tampilan beranda.

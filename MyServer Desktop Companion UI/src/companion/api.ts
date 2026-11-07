@@ -455,7 +455,8 @@ const MOCK_METRICS: Metrics = {
 
 export function createMockApi(): CompanionApi {
 
-  let power: PowerState = "online"
+  const isOfflineMock = typeof window !== "undefined" && (window.location.search.includes("power=offline") || window.location.search.includes("offline=1"))
+  let power: PowerState = isOfflineMock ? "offline" : "online"
 
   let drives = MOCK_DRIVES
 

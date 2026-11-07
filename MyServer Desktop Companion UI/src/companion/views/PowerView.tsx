@@ -398,13 +398,13 @@ export default function PowerView() {
         chips={
           <>
             <TrayChip>
-              {t("port_label", "Port")}: 9 UDP
+              9 / UDP
             </TrayChip>
             <TrayChip>
-              {t("target_broadcast", "Target: Broadcast")}
+              Broadcast
             </TrayChip>
             <TrayChip tone={ready ? "success" : "warning"}>
-              {t("status_label", "Status")}: {ready ? t("status_ready", "Siap") : (!isLanReady ? t("wol_status_need_lan", "Perlu LAN") : t("status_check", "Periksa"))}
+              {ready ? t("status_ready", "Siap") : (!isLanReady ? t("wol_status_need_lan", "Perlu LAN") : t("status_check", "Periksa"))}
             </TrayChip>
           </>
         }

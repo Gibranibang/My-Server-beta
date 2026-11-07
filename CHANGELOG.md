@@ -1,5 +1,16 @@
 # Changelog MyServer Desktop
 
+## [v4.2.7 - Beta] - 2026-11-07
+
+- Perbaikan Penguncian Packet.dll pada In-App Update: Menambahkan penghentian bersih proses background `easytier-core.exe` dan `easytier-cli.exe` pada backend sebelum installer dieksekusi, serta pada prosedur `KillRunningAppProcesses()` di Inno Setup, menuntaskan galat `DeleteFile failed; code 5. Access is denied` saat update di perangkat klien.
+- Perbaikan & Dukungan Pembaruan via ZIP Portabel: Menambahkan graceful shutdown daemon EasyTier dan perintah taskkill pada skrip batch `myserver_upd_*.bat` di `apply_zip_update()`, memastikan berkas paket ZIP resmi yang diunduh dari GitHub dapat diterapkan sempurna tanpa terhambat file lock.
+- Penyelarasan Layout Chip Modal Power Subsystem: Mengoptimalkan tata letak baris chip `FooterStatus` di `FlyoutShell.tsx` saat notice pill dinonaktifkan sehingga mengisi lebar penuh kartu dengan margin seimbang, serta memadatkan teks chip pada `PowerView.tsx` (`9 / UDP`, `Broadcast`, `Need LAN`/`Perlu LAN`) sehingga bebas dari terpotongnya tepi kanan chip.
+- Penghapusan Toggle Legacy Auto-connect ZeroTier: Menghapus baris pengaturan `autoZeroTier` dari jendela Pengaturan demi keselarasan murni arsitektur dual-engine remote (Auto, EasyTier, ZeroTier).
+- Penyelarasan Tombol Change Log Folder: Menyelaraskan teks tombol menjadi `Change Folder...` / `Ubah Folder...` dengan penahan truncate simetris sehingga teks muat rapi di dalam pill tombol berdampingan dengan tombol `Copy Log`.
+- Kamus Bilingual Lengkap Aksi Remote: Melengkapi terjemahan tombol Hubungkan/Putuskan (`Connect`/`Disconnect`), subtitle status peer node, serta modal Ubah Remote ID EasyTier dan ZeroTier secara kontekstual.
+- Jarak Header Kartu Remote & Indikator Titik Blooming: Menambahkan gap dan ruang fleksibel pada header kartu remote di Server & Network, serta menyederhanakan indikator statusnya menjadi bulatan blooming `StatusDot` yang bersih dan elegan (tanpa mengubah indikator dock putih di bagian bawah).
+- Bump Versi Atomik v4.2.7 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
 ## [v4.2.6 - Beta] - 2026-11-07
 
 - Restorasi Ikon Pensil Edit Remote/Network ID: Memperbaiki render tombol edit pensil pada kartu EasyTier dan ZeroTier di menu Server & Network. Sebelumnya pembungkusan komponen `<Button>` dengan padding horizontal default (`px-3`) menyebabkan ikon pensil (`Edit2`) terhimpit menjadi bintik mikro (~2px); kini digantikan dengan tombol circular semantik (`rounded-full h-7 w-7`) dengan rendering SVG stroke tegas yang tampil tajam dan presisi pada mode Dark maupun Light.

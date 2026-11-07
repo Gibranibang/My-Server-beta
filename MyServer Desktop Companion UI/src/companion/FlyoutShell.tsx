@@ -429,9 +429,9 @@ export function FooterStatus({
         </div>
 
         {/* ROW 2: 1:1 Figma 142:4544 & footer.relative.svg — w-[234px], h-[24px], justify-between */}
-        <div className="flex items-center justify-between w-[234px] h-[24px] shrink-0 relative z-1">
+        <div className={cx("flex items-center h-[24px] shrink-0 relative z-1", showNoticePill ? "w-[234px] justify-between" : "w-full justify-start gap-1.5 px-0.5")}>
           {/* Baris chip */}
-          <div className="flex items-center gap-[6px] pl-[1px] overflow-visible shrink-0">
+          <div className={cx("flex items-center overflow-visible", showNoticePill ? "gap-[6px] pl-[1px] shrink-0" : "gap-1.5 w-full")}>
             {chips}
           </div>
 

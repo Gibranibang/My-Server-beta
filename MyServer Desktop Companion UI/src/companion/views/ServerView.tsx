@@ -144,7 +144,7 @@ export default function ServerView({ go }: ViewProps) {
   // ============================================================================
   // REACT MODALS STATE & HANDLERS (Pengganti Native WinForms)
   // ============================================================================
-  const [modalMode, setModalMode] = useState<null | "addServer" | "editServer" | "deleteServer" | "addRoute" | "editRoute" | "deleteRoute" | "addProfile" | "editProfile" | "deleteProfile" | "credentials" | "joinZeroTier">(null)
+  const [modalMode, setModalMode] = useState<null | "addServer" | "editServer" | "deleteServer" | "addRoute" | "editRoute" | "deleteRoute" | "addProfile" | "editProfile" | "deleteProfile" | "credentials" | "joinZeroTier" | "joinEasyTier">(null)
   const [activeItem, setActiveItem] = useState<any>(null)
   const [formName, setFormName] = useState("")
   const [formUrl, setFormUrl] = useState("")
@@ -339,9 +339,14 @@ export default function ServerView({ go }: ViewProps) {
     }
   }
 
-  const onJoinZeroTier = () => {
-    setFormNwid(details?.zeroTier?.configuredNwid || "")
-    setModalMode("joinZeroTier")
+  const onJoinZeroTier = (engine: "easytier" | "zerotier" = "zerotier") => {
+    if (engine === "easytier") {
+      setFormNwid(details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid || "")
+      setModalMode("joinEasyTier")
+    } else {
+      setFormNwid(details?.zeroTier?.configuredNwid || details?.easyTier?.remote_id || "")
+      setModalMode("joinZeroTier")
+    }
   }
 
   const handleSaveModal = async (e: React.FormEvent) => {
@@ -388,6 +393,14 @@ export default function ServerView({ go }: ViewProps) {
         const res = await api.saveProfile({ oldProfileName: activeItem?.name, profileName: activeItem?.name, username: formUser, password: formPass })
         if (res?.success === false) throw new Error(res.message || "Gagal memperbarui kredensial")
         notify(t("creds_updated_notice", "Kredensial berhasil diperbarui"), "success")
+      } else if (modalMode === "joinEasyTier") {
+        const cleanNwid = formNwid.trim().toLowerCase()
+        if (api.startEasyTier && cleanNwid) {
+          try {
+            await api.startEasyTier({ remote_id: cleanNwid })
+          } catch (_) {}
+        }
+        notify(t("zt_join_sent_notice", "Perintah sambung Remote ID berhasil dikirim"), "success")
       } else if (modalMode === "joinZeroTier") {
         const cleanNwid = formNwid.trim().toLowerCase()
         const res = await api.joinZeroTierNetwork(cleanNwid)
@@ -547,8 +560,8 @@ export default function ServerView({ go }: ViewProps) {
               {activeRemoteEngine === "easytier" ? (
                 /* KARTU EASYTIER TUNGGAL */
                 <Card className="flex flex-col gap-2.5 p-3 overflow-hidden">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-center justify-between gap-3 min-w-0">
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-1.5">
                       <IconBadge
                         icon={Network}
                         tone={
@@ -558,7 +571,7 @@ export default function ServerView({ go }: ViewProps) {
                         }
                         size="sm"
                       />
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="text-label font-semibold text-ink truncate">
                           {details?.easyTier?.network_name || "EasyTier P2P Mesh"}
                         </div>
@@ -567,19 +580,24 @@ export default function ServerView({ go }: ViewProps) {
                           <span className="font-semibold text-ink-muted">
                             {details?.easyTier?.running
                               ? (details?.easyTier?.peers_count > 0
-                                  ? `${details.easyTier.peers_count} Node Peer Aktif`
-                                  : "Menghubungkan Relay...")
+                                  ? t("easytier_peer_count", "{count} Node Peer Aktif").replace("{count}", String(details.easyTier.peers_count))
+                                  : t("easytier_connecting_relay", "Menghubungkan Relay..."))
                               : t("easytier_status_disconnected", "Terputus")}
                           </span>
                         </div>
                       </div>
                     </div>
-                    <Chip
-                      size="sm"
-                      tone={
+                    <div
+                      className="shrink-0 flex items-center justify-center p-1.5 rounded-full bg-surface-muted/60 border border-line"
+                      title={
                         details?.easyTier?.running
-                          ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
-                          : "neutral"
+                          ? (details?.easyTier?.peers_count > 0 ? "Direct P2P" : "Relay")
+                          : t("status_disabled_zt", "Nonaktif")
+                      }
+                      aria-label={
+                        details?.easyTier?.running
+                          ? (details?.easyTier?.peers_count > 0 ? "Direct P2P" : "Relay")
+                          : t("status_disabled_zt", "Nonaktif")
                       }
                     >
                       <StatusDot
@@ -589,10 +607,7 @@ export default function ServerView({ go }: ViewProps) {
                             : "neutral"
                         }
                       />
-                      {details?.easyTier?.running
-                        ? (details?.easyTier?.peers_count > 0 ? "Direct P2P" : "Relay")
-                        : t("status_disabled_zt", "Nonaktif")}
-                    </Chip>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-nano border-t border-line pt-2 text-ink-subtle">
@@ -639,7 +654,7 @@ export default function ServerView({ go }: ViewProps) {
                         disabled={isSubmitting}
                         onClick={onDisconnectEasyTier}
                       >
-                        {t("easytier_btn_disconnect", "Putuskan EasyTier")}
+                        {t("easytier_btn_disconnect", "Putuskan")}
                       </Button>
                     ) : (
                       <Button
@@ -650,12 +665,12 @@ export default function ServerView({ go }: ViewProps) {
                         disabled={isSubmitting}
                         onClick={onConnectEasyTier}
                       >
-                        {t("easytier_btn_connect", "Hubungkan EasyTier")}
+                        {t("easytier_btn_connect", "Hubungkan")}
                       </Button>
                     )}
                     <button
                       type="button"
-                      onClick={onJoinZeroTier}
+                      onClick={() => onJoinZeroTier("easytier")}
                       className="h-7 w-7 shrink-0 rounded-full bg-surface-muted hover:bg-line text-ink flex items-center justify-center transition cursor-pointer"
                       title={t("edit_remote_id", "Ubah Remote ID")}
                       aria-label={t("edit_remote_id", "Ubah Remote ID")}
@@ -667,8 +682,8 @@ export default function ServerView({ go }: ViewProps) {
               ) : (
                 /* KARTU ZEROTIER TUNGGAL */
                 <Card className="flex flex-col gap-2.5 p-3 overflow-hidden">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-center justify-between gap-3 min-w-0">
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-1.5">
                       <IconBadge
                         icon={Network}
                         tone={
@@ -680,7 +695,7 @@ export default function ServerView({ go }: ViewProps) {
                         }
                         size="sm"
                       />
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="text-label font-semibold text-ink truncate">
                           {details?.zeroTier?.networkName || (details?.zeroTier?.configuredNwid ? `Network ${details.zeroTier.configuredNwid}` : t("zt_one_net", "ZeroTier One Network"))}
                         </div>
@@ -694,14 +709,21 @@ export default function ServerView({ go }: ViewProps) {
                         </div>
                       </div>
                     </div>
-                    <Chip
-                      size="sm"
-                      tone={
-                        details?.zeroTier?.running && (details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running))
-                          ? "success"
-                          : details?.zeroTier?.running
-                          ? "warning"
-                          : "neutral"
+                    <div
+                      className="shrink-0 flex items-center justify-center p-1.5 rounded-full bg-surface-muted/60 border border-line"
+                      title={
+                        details?.zeroTier?.running
+                          ? details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running)
+                            ? t("status_active_zt", "Aktif")
+                            : t("status_connecting_zt", "Menghubungkan")
+                          : t("status_disabled_zt", "Nonaktif")
+                      }
+                      aria-label={
+                        details?.zeroTier?.running
+                          ? details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running)
+                            ? t("status_active_zt", "Aktif")
+                            : t("status_connecting_zt", "Menghubungkan")
+                          : t("status_disabled_zt", "Nonaktif")
                       }
                     >
                       <StatusDot
@@ -713,12 +735,7 @@ export default function ServerView({ go }: ViewProps) {
                             : "neutral"
                         }
                       />
-                      {details?.zeroTier?.running
-                        ? details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running)
-                          ? t("status_active_zt", "Aktif")
-                          : t("status_connecting_zt", "Menghubungkan")
-                        : t("status_disabled_zt", "Nonaktif")}
-                    </Chip>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-nano border-t border-line pt-2 text-ink-subtle">
@@ -759,7 +776,7 @@ export default function ServerView({ go }: ViewProps) {
                         disabled={isSubmitting}
                         onClick={onDisconnectZeroTier}
                       >
-                        {t("zt_btn_disconnect", "Putuskan ZeroTier")}
+                        {t("zt_btn_disconnect", "Putuskan")}
                       </Button>
                     ) : (
                       <Button
@@ -770,12 +787,12 @@ export default function ServerView({ go }: ViewProps) {
                         disabled={isSubmitting}
                         onClick={onConnectZeroTier}
                       >
-                        {t("zt_btn_connect", "Hubungkan ZeroTier")}
+                        {t("zt_btn_connect", "Hubungkan")}
                       </Button>
                     )}
                     <button
                       type="button"
-                      onClick={onJoinZeroTier}
+                      onClick={() => onJoinZeroTier("zerotier")}
                       className="h-7 w-7 shrink-0 rounded-full bg-surface-muted hover:bg-line text-ink flex items-center justify-center transition cursor-pointer"
                       title={t("edit_network_id", "Ubah Network ID")}
                       aria-label={t("edit_network_id", "Ubah Network ID")}
@@ -1111,7 +1128,7 @@ export default function ServerView({ go }: ViewProps) {
                 {modalMode.includes("Server") && <Server className="size-4 text-brand" />}
                 {modalMode.includes("Route") && <Network className="size-4 text-brand" />}
                 {(modalMode.includes("Profile") || modalMode === "credentials") && <User className="size-4 text-info" />}
-                {modalMode === "joinZeroTier" && <Network className="size-4 text-brand" />}
+                {(modalMode === "joinZeroTier" || modalMode === "joinEasyTier") && <Network className="size-4 text-brand" />}
                 {modalMode === "addServer" && t("add_server_modal_title", "Tambah Server Baru")}
                 {modalMode === "editServer" && t("edit_server_modal_title", "Ubah Server")}
                 {modalMode === "deleteServer" && t("confirm_delete_title", "Konfirmasi Hapus")}
@@ -1122,7 +1139,8 @@ export default function ServerView({ go }: ViewProps) {
                 {modalMode === "editProfile" && t("edit_profile_modal_title", "Ubah Nama Akun")}
                 {modalMode === "deleteProfile" && t("confirm_delete_title", "Konfirmasi Hapus")}
                 {modalMode === "credentials" && t("profile_creds_modal_title", "Kelola Kredensial Akun")}
-                {modalMode === "joinZeroTier" && t("join_zt_modal_title", "Sambung Jaringan ZeroTier")}
+                {modalMode === "joinZeroTier" && t("edit_zt_id_title", "Ubah Network ID ZeroTier")}
+                {modalMode === "joinEasyTier" && t("edit_remote_id_title", "Ubah Remote ID EasyTier")}
               </span>
               <button
                 type="button"
@@ -1293,11 +1311,13 @@ export default function ServerView({ go }: ViewProps) {
                   </>
                 )}
 
-                {/* ZeroTier Field */}
-                {modalMode === "joinZeroTier" && (
+                {/* Remote ID / Network ID Field */}
+                {(modalMode === "joinZeroTier" || modalMode === "joinEasyTier") && (
                   <div className="flex flex-col gap-1.5">
                     <p className="text-micro text-ink-subtle">
-                      {t("join_zt_desc", "Masukkan 16 karakter heksadesimal Network ID:")}
+                      {modalMode === "joinEasyTier"
+                        ? t("edit_remote_id_desc", "Masukkan 16 karakter heksadesimal Remote ID:")
+                        : t("edit_zt_id_desc", "Masukkan 16 karakter heksadesimal Network ID:")}
                     </p>
                     <input
                       type="text"

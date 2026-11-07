@@ -1,3 +1,13 @@
+[v4.2.7 - Beta] - 2026-11-07
+- Perbaikan Penguncian Packet.dll pada In-App Update (Kill Daemon EasyTier)
+- Perbaikan & Dukungan Penuh Pembaruan via Berkas ZIP Portabel
+- Penyelarasan Layout Chip Modal Power Subsystem (Margin Seimbang & Zero Overflow)
+- Penghapusan Toggle Legacy Auto-connect ZeroTier di Pengaturan
+- Penyelarasan Tombol Change Log Folder (Teks Rapi di Dalam Pill)
+- Kamus Bilingual Lengkap Tombol Aksi Remote & Modal Edit Remote ID Kontekstual
+- Jarak Header Kartu Remote Lega & Indikator Titik Blooming (Dock Bawah Terjaga 100%)
+- Bump Versi Atomik v4.2.7 Beta
+
 [v4.2.6 - Beta] - 2026-11-07
 - Perbaikan Layout & Overflow Tombol Remote ID (Pencil Button) di dalam batas kartu
 - Penyelarasan UX Tombol Remote Seragam (EasyTier & ZeroTier)

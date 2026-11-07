@@ -735,18 +735,12 @@ export default function SettingsView() {
             </div>
 
             {/* Storage & Network Startup Toggles */}
-            <div className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
+            <div className="overflow-hidden rounded-tile border border-line bg-surface">
               <SettingToggleRow
                 icon={HardDrive}
                 label={t("autoMountSmb_label")}
                 caption={t(settings.autoMountSmb ? "autoMountSmb_on" : "autoMountSmb_off")}
                 settingKey="autoMountSmb"
-              />
-              <SettingToggleRow
-                icon={Network}
-                label={t("autoZeroTier_label")}
-                caption={t(settings.autoZeroTier ? "autoZeroTier_on" : "autoZeroTier_off")}
-                settingKey="autoZeroTier"
               />
             </div>
           </div>
@@ -772,8 +766,9 @@ export default function SettingsView() {
                 busyLabel="Menyalin..."
                 onClick={handleCopyLog}
                 title={t("copy_log_desc")}
+                className="min-w-0 truncate text-[11px] px-2"
               >
-                {t("copy_log_btn")}
+                <span className="truncate">{t("copy_log_btn")}</span>
               </Button>
               <Button
                 size="sm"
@@ -784,8 +779,9 @@ export default function SettingsView() {
                 busyLabel="Mengubah..."
                 onClick={handleChangeLogFolder}
                 title={t("change_log_folder_desc")}
+                className="min-w-0 truncate text-[11px] px-2"
               >
-                {t("change_log_folder_btn")}
+                <span className="truncate">{t("change_log_folder_btn")}</span>
               </Button>
             </div>
 

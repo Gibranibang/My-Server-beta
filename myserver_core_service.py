@@ -386,7 +386,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.2.6"
+APP_VERSION_NUMBER = "4.2.7"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -20494,16 +20494,24 @@ def apply_zip_update(zip_file_path=None):
 
 
 
+    # Hentikan daemon EasyTier terlebih dahulu agar handle berkas Packet.dll & wintun.dll dilepas
+    try:
+        import easytier_manager
+        easytier_manager.get_easytier_manager().stop()
+        time.sleep(0.5)
+    except Exception as _et_err:
+        logger_manager.log_error(f"[ZipUpdate] Gagal menghentikan EasyTier: {_et_err}")
+
     kill_gui_cmd = f"taskkill /PID {gui_pid} /F >nul 2>&1" if gui_pid > 0 else ""
 
     bat_content = f"""@echo off
 chcp 65001 >nul
 ping 127.0.0.1 -n 2 >nul
 {kill_gui_cmd}
-taskkill /F /IM MyServer-Beta.exe /IM MyServer.exe /IM syncthing.exe >nul 2>&1
+taskkill /F /IM MyServer-Beta.exe /IM MyServer.exe /IM syncthing.exe /IM easytier-core.exe /IM easytier-cli.exe >nul 2>&1
 taskkill /PID {current_pid} /F >nul 2>&1
-taskkill /F /IM myserver-core.exe >nul 2>&1
-ping 127.0.0.1 -n 3 >nul
+taskkill /F /IM myserver-core.exe /IM easytier-core.exe /IM easytier-cli.exe >nul 2>&1
+ping 127.0.0.1 -n 4 >nul
 set "APP_DIR={app_dir}"
 set "TEMP_DIR={source_copy_dir}"
 set "ROOT_TEMP_DIR={temp_extract_dir}"
@@ -27951,6 +27959,14 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     self._send_json(res)
                     return
                 else:
+                    # Hentikan daemon EasyTier terlebih dahulu agar Packet.dll & wintun.dll tidak terkunci saat installer menimpa berkas
+                    try:
+                        import easytier_manager
+                        easytier_manager.get_easytier_manager().stop()
+                        time.sleep(0.5)
+                    except Exception as _et_err:
+                        logger_manager.log_error(f"[Updater] Gagal menghentikan EasyTier sebelum installer: {_et_err}")
+
                     # Gunakan os.startfile agar installer berjalan mandiri di bawah Windows Shell (Explorer),
                     # sehingga bebas dari pohon proses myserver-core dan tidak terimbas pematian proses.
                     try:

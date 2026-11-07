@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "4.2.6"
+VERSION = "4.2.7"
 
 APP_NAME = "My-Server by algitha BETA"
 
@@ -500,7 +500,7 @@ procedure KillRunningAppProcesses();
 var
   ResultCode: Integer;
 begin
-  Exec(AddBackslash(ExpandConstant('{{sys}}')) + 'taskkill.exe', '/F /IM MyServer-Beta.exe /IM MyServer.exe /IM myserver-core.exe /IM syncthing.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(AddBackslash(ExpandConstant('{{sys}}')) + 'taskkill.exe', '/F /IM MyServer-Beta.exe /IM MyServer.exe /IM myserver-core.exe /IM syncthing.exe /IM easytier-core.exe /IM easytier-cli.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1500);
 end;
 

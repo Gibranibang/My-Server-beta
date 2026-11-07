@@ -8,7 +8,7 @@
 
 #define MyAppName "My-Server by algitha BETA"
 
-#define MyAppVersion "4.2.6"
+#define MyAppVersion "4.2.7"
 
 #define MyAppPublisher "Algitha Project"
 
@@ -43,7 +43,7 @@ AllowNoIcons=yes
 
 OutputDir=dist
 
-OutputBaseFilename=MyServer-v4.2.6-Beta-Setup
+OutputBaseFilename=MyServer-v4.2.7-Beta-Setup
 
 SetupIconFile=app_icon.ico
 
@@ -162,7 +162,7 @@ procedure KillRunningAppProcesses();
 var
   ResultCode: Integer;
 begin
-  Exec(AddBackslash(ExpandConstant('{sys}')) + 'taskkill.exe', '/F /IM MyServer-Beta.exe /IM MyServer.exe /IM myserver-core.exe /IM syncthing.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(AddBackslash(ExpandConstant('{sys}')) + 'taskkill.exe', '/F /IM MyServer-Beta.exe /IM MyServer.exe /IM myserver-core.exe /IM syncthing.exe /IM easytier-core.exe /IM easytier-cli.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1500);
 end;
 

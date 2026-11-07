@@ -112,6 +112,7 @@ export interface ServerDetails {
   activeHost?: string
   servers?: ServerItem[]
   zeroTier?: ZeroTierInfo
+  easyTier?: any
   activeRoute: string
   routes: ServerRoute[]
   activeProfile: string

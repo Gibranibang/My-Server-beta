@@ -15529,6 +15529,7 @@ def get_server_details_data(cfg=None):
 
 
         "zeroTier": zt_info,
+        "easyTier": easytier_manager.get_easytier_manager().get_status_overview() if easytier_manager else {"running": False},
 
 
 

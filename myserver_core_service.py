@@ -386,7 +386,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.2.7"
+APP_VERSION_NUMBER = "4.3.0"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -27963,9 +27963,14 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     try:
                         import easytier_manager
                         easytier_manager.get_easytier_manager().stop()
-                        time.sleep(0.5)
                     except Exception as _et_err:
                         logger_manager.log_error(f"[Updater] Gagal menghentikan EasyTier sebelum installer: {_et_err}")
+                    try:
+                        # Paksa taskkill proses easytier-core dan easytier-cli jika masih memegang file handle
+                        subprocess.run(["taskkill.exe", "/F", "/IM", "easytier-core.exe", "/IM", "easytier-cli.exe"], capture_output=True, timeout=5)
+                    except Exception:
+                        pass
+                    time.sleep(1.5)
 
                     # Gunakan os.startfile agar installer berjalan mandiri di bawah Windows Shell (Explorer),
                     # sehingga bebas dari pohon proses myserver-core dan tidak terimbas pematian proses.

@@ -303,6 +303,35 @@
   --shadow-control: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 1px 2px rgb(0 0 0 / 0.4);
 }
 
+/* ==========================================================================
+   OFFLINE MODE THEME REMAPPING
+   Menyelaraskan seluruh font dan aksen hijau menjadi merah #E60004 & #FF001E
+   100% selaras dengan font Server di logo dan status Offline di kartu bawah
+   ========================================================================== */
+[data-server-status="offline"] {
+  --color-brand: #E60004;
+  --color-brand-ink: #ffffff;
+  --color-success: #E60004;
+  --color-success-strong: #C40003;
+  --color-success-bright: #FF001E;
+  --color-success-soft: rgba(230, 0, 4, 0.12);
+  --color-success-line: rgba(230, 0, 4, 0.35);
+  --color-success-ink: #E60004;
+}
+
+[data-theme="dark"][data-server-status="offline"],
+[data-theme="dark"] [data-server-status="offline"],
+.dark [data-server-status="offline"] {
+  --color-brand: #E60004;
+  --color-brand-ink: #ffffff;
+  --color-success: #E60004;
+  --color-success-strong: #C40003;
+  --color-success-bright: #FF001E;
+  --color-success-soft: rgba(230, 0, 4, 0.18);
+  --color-success-line: rgba(230, 0, 4, 0.45);
+  --color-success-ink: #FF4D4F;
+}
+
 @layer base {
   html {
     background: transparent !important;

@@ -287,9 +287,10 @@ export default function HomeView({ go }: ViewProps) {
     <>
       <div className="flex flex-col items-center px-[16px] pt-0 pb-0 w-full select-none">
         {/* 1:1 Official Figma div.flex.svg Header Lockup with dynamic V{APP_VERSION} */}
-        <HeaderLogo />
+        <HeaderLogo isOnline={isOnline} />
         <div className="h-[10px] shrink-0" aria-hidden />
         <SkeuoMatrixGrid
+          isOnline={isOnline}
           go={go}
           onOpenExplorer={() => {
             api.openFileManager()
@@ -303,7 +304,7 @@ export default function HomeView({ go }: ViewProps) {
         title={
           <div className="flex items-center justify-between w-full">
             <span className="truncate">{serverName}</span>
-            <ChevronRight className="size-3.5 text-[#7BC504] shrink-0 ml-1" />
+            <ChevronRight className={cx("size-3.5 shrink-0 ml-1", isOnline ? "text-[#7BC504]" : "text-[#E60004]")} />
           </div>
         }
         onClick={() => go("server")}
@@ -316,13 +317,15 @@ export default function HomeView({ go }: ViewProps) {
                 setShowAccountMenu(false)
               }}
               style={{
-                boxShadow: "0px 4px 6px 0px rgba(80,130,0,0.20), inset 4px 4px 8px 0px rgba(50,81,2,0.30)",
+                boxShadow: isOnline 
+                  ? "0px 4px 6px 0px rgba(80,130,0,0.20), inset 4px 4px 8px 0px rgba(50,81,2,0.30)"
+                  : "0px 4px 6px 0px rgba(230,0,4,0.20), inset 4px 4px 8px 0px rgba(180,0,3,0.30)",
               }}
               className="h-[20.16px] shrink-0 justify-center rounded-full bg-white border border-[#DDD] px-[6.39px] flex items-center gap-[3.36px] cursor-pointer hover:bg-slate-50 transition outline-none relative select-none"
               title={t("switch_route_title", "Ganti Rute Akses")}
             >
-              <Globe className="size-[10.07px] text-[#047857] shrink-0" strokeWidth={1.8} />
-              <span className="text-[8.4px] font-semibold text-[#047857] leading-[11.76px] whitespace-nowrap">
+              <Globe className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#047857]" : "text-[#E60004]")} strokeWidth={1.8} />
+              <span className={cx("text-[8.4px] font-semibold leading-[11.76px] whitespace-nowrap", isOnline ? "text-[#047857]" : "text-[#E60004]")}>
                 {currentRouteMeta.label}
               </span>
               <ChevronDown className="size-[10.07px] text-[#475569] shrink-0" strokeWidth={1.8} />

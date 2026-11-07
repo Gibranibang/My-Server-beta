@@ -8,7 +8,7 @@
 
 #define MyAppName "My-Server by algitha BETA"
 
-#define MyAppVersion "4.2.7"
+#define MyAppVersion "4.3.0"
 
 #define MyAppPublisher "Algitha Project"
 
@@ -43,7 +43,7 @@ AllowNoIcons=yes
 
 OutputDir=dist
 
-OutputBaseFilename=MyServer-v4.2.7-Beta-Setup
+OutputBaseFilename=MyServer-v4.3.0-Beta-Setup
 
 SetupIconFile=app_icon.ico
 
@@ -53,13 +53,13 @@ SolidCompression=yes
 
 WizardStyle=modern
 
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 
 PrivilegesRequiredOverridesAllowed=commandline
 
 UsePreviousAppDir=yes
 
-UsePreviousPrivileges=yes
+UsePreviousPrivileges=no
 
 DirExistsWarning=no
 
@@ -121,7 +121,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 
 [Run]
 
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 
 

@@ -169,7 +169,7 @@ function CompanionFrame({
   onViewChange: (view: ViewId) => void
 }) {
   const api = getCompanionApi()
-  const { settings, setSetting } = useCompanion()
+  const { settings, setSetting, isOnline } = useCompanion()
   const t = getTranslation(settings?.language)
   const isId = settings?.language === "id"
   const activeTheme = settings?.theme === "light" ? "light" : "dark"
@@ -179,7 +179,8 @@ function CompanionFrame({
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", activeTheme)
-  }, [activeTheme])
+    document.documentElement.setAttribute("data-server-status", isOnline ? "online" : "offline")
+  }, [activeTheme, isOnline])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -298,6 +299,7 @@ function CompanionFrame({
   return (
     <div
       data-theme={activeTheme}
+      data-server-status={isOnline ? "online" : "offline"}
       className="flex items-start gap-[13.1px] companion-fit bg-[#0E100A] data-[theme=light]:bg-white rounded-[16px] overflow-hidden select-none border border-[#262626] data-[theme=light]:border-[#E2E8F0] shadow-2xl p-0"
     >
       {open ? (

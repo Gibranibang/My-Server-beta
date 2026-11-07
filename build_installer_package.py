@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "4.2.7"
+VERSION = "4.3.0"
 
 APP_NAME = "My-Server by algitha BETA"
 
@@ -391,13 +391,13 @@ SolidCompression=yes
 
 WizardStyle=modern
 
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 
 PrivilegesRequiredOverridesAllowed=commandline
 
 UsePreviousAppDir=yes
 
-UsePreviousPrivileges=yes
+UsePreviousPrivileges=no
 
 DirExistsWarning=no
 
@@ -459,7 +459,7 @@ Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}";
 
 [Run]
 
-Filename: "{{app}}\\{{#MyAppExeName}}"; Description: "{{cm:LaunchProgram,{{#MyAppName}}}}"; Flags: nowait postinstall skipifsilent
+Filename: "{{app}}\\{{#MyAppExeName}}"; Description: "{{cm:LaunchProgram,{{#MyAppName}}}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 
 

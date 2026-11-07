@@ -147,6 +147,8 @@ function Readout({ children, tone }: { children: ReactNode; tone?: Tone }) {
       ? LED_ALERT
       : tone === "info"
         ? "url(#telemetry-readout-grad-blue)"
+        : tone === "neutral"
+        ? "#2E2E2E"
         : "url(#telemetry-readout-grad)"
   return (
     <text
@@ -181,8 +183,8 @@ interface DotMatrixProps {
 }
 
 function DotMatrix({ levels, tone }: DotMatrixProps) {
-  const on = tone === "danger" ? LED_ALERT : tone === "info" ? LED_BLUE_ON : LED_ON
-  const off = tone === "info" ? LED_BLUE_OFF : LED_OFF
+  const on = tone === "danger" ? LED_ALERT : tone === "info" ? LED_BLUE_ON : tone === "neutral" ? "#2E2E2E" : LED_ON
+  const off = tone === "info" ? LED_BLUE_OFF : tone === "neutral" ? "#2E2E2E" : LED_OFF
   return (
     <>
       {Array.from({ length: DOT_COLS }, (_, col) => {
@@ -226,7 +228,7 @@ function PercentMeter({
 }) {
   return (
     <>
-      <Readout tone={live ? tone : undefined}>{live ? `${value}%` : "–"}</Readout>
+      <Readout tone={live ? tone : "neutral"}>{live ? `${value}%` : "–"}</Readout>
       <DotMatrix
         levels={percentLevels(value, live)}
         tone={live ? tone : "neutral"}

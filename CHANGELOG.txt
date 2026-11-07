@@ -1,3 +1,19 @@
+## [v4.3.0 - Beta] - 2026-11-08
+
+- Penuntasan Definitif Akses Terkunci (Access Denied) In-App Updater: Mengonfigurasi hak akses Inno Setup menjadi elevated (`PrivilegesRequired=admin` dan `PrivilegesRequiredOverridesAllowed=commandline`) serta menambahkan flag `runasoriginaluser` pada eksekusi aplikasi paska-instalasi. Dengan elevasi ini, installer memiliki hak penuh untuk mematikan daemon background elevated EasyTier (`easytier-core.exe` & `easytier-cli.exe`), menuntaskan galat `DeleteFile failed; code 5. Access is denied` saat update berlangsung.
+- Penguatan Backend Pre-Installer Termination: Menambahkan penutupan paksa proses EasyTier via `taskkill` dan jeda `time.sleep(1.5)` pada handler backend `/api/download_and_install_update` sebelum installer dijalankan, memastikan seluruh open file handle kernel terlepas sempurna.
+- Tampilan UI Mode OFFLINE Murni (1:1 Acuan v4.2.7 Beta):
+  - Mengadopsi 4 kartu CRT standby elegan berbasis SVG terbaru pengguna (`Backup Card (offline).svg`, `File Manager Card (offline).svg`, `Apps Card (offline).svg`, dan `Options card (offline).svg`) dengan tampilan CRT monitor standby gelap (`#121212`).
+  - Penyelarasan Logo CRT: Kata "Server" pada bezel monitor bertransformasi menjadi dot-matrix merah `#E60004` (glow `#FF001E`), 100% selaras dengan status "Offline" pada kartu server bawah.
+  - Kartu Server Bawah (`FooterStatus`): Mengadopsi glow merah `#FF001E`, nama server font dots abu-abu `#2D2D2D`, status koneksi "Offline" merah `#E60004`, dan lonceng notifikasi abu-abu `#2E2E2E` (Idle).
+  - Mini Tray Dock Telemetri: Unit telemetri kiri menampilkan readout strip standby (`–`) dan titik LED unlit dalam font dots abu-abu `#2E2E2E`.
+  - Flyout Background Grid Merah: Mengintegrasikan tekstur latar belakang grid merah halus khusus mode offline untuk Dark Mode dan Light Mode.
+- Penyelarasan Menyeluruh Seluruh Font Hijau Menjadi Merah saat Offline (Zero Layout Shift):
+  - Mengimplementasikan CSS semantic token remapping otomatis `[data-server-status="offline"]` di `index.css`, meremap `--color-brand` dan `--color-success` ke `#E60004`.
+  - Seluruh font teks, badge, checkmark, dan aksen hijau pada seluruh menu (Server & Network, Settings & Preferences, Server Power Control, Backup & Sync, Web Apps, dan Storage & Files) otomatis bertransformasi menjadi merah `#E60004` saat server offline, tanpa mengubah margin, padding, ukuran font, maupun dimensi layout 1 pixel pun.
+- Bump Versi Atomik v4.3.0 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
+
 [v4.2.7 - Beta] - 2026-11-07
 - Perbaikan Penguncian Packet.dll pada In-App Update (Kill Daemon EasyTier)
 - Perbaikan & Dukungan Penuh Pembaruan via Berkas ZIP Portabel

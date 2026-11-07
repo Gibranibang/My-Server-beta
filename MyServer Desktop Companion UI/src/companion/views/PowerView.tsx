@@ -331,7 +331,7 @@ export default function PowerView() {
             type="button"
             disabled={!macValid || power === "rebooting" || wolState === "busy"}
             onClick={onWake}
-            className="h-[30px] w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold transition shadow-xs cursor-pointer select-none disabled:opacity-50 disabled:pointer-events-none"
+            className={cx("h-[30px] w-full flex items-center justify-center gap-2 rounded-lg text-white text-[11px] font-semibold transition shadow-xs cursor-pointer select-none disabled:opacity-50 disabled:pointer-events-none", isOnline ? "bg-emerald-600 hover:bg-emerald-500" : "bg-[#E60004] hover:bg-[#C40003]")}
           >
             <Zap className="size-3.5 shrink-0" />
             <span>

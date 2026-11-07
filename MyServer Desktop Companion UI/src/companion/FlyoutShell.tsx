@@ -7,14 +7,14 @@ import type { Tone } from "./types"
 
 /** Engineering graph-paper texture from the Figma reference, fading in toward the footer module. */
 function GridTexture() {
-  const { settings } = useCompanion()
+  const { settings, isOnline } = useCompanion()
   const isLight = settings?.theme === "light"
 
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[16px]">
       <img
         alt=""
-        src={isLight ? assets.flyoutBgLight : assets.flyoutBgDark}
+        src={isLight ? (isOnline ? assets.flyoutBgLight : assets.flyoutBgLightOffline) : (isOnline ? assets.flyoutBgDark : assets.flyoutBgDarkOffline)}
         className="block size-full object-cover select-none"
       />
     </div>
@@ -230,7 +230,10 @@ function NoticeMarquee({
   text: string
   noticeId?: number
   count: number
+  isOnline?: boolean
 }) {
+  const companion = useCompanion()
+  const activeOnline = isOnline ?? companion.isOnline
   const [activeCycleId, setActiveCycleId] = useState<number | undefined>(noticeId)
   const isAlreadySeen = noticeId ? completedNoticeIds.has(noticeId) : false
   const [isMarqueeDone, setIsMarqueeDone] = useState(isAlreadySeen)
@@ -243,8 +246,10 @@ function NoticeMarquee({
     }
   }, [noticeId, activeCycleId])
 
-  const textCls =
-    "font-['Doto'] font-black text-[8px] leading-none whitespace-nowrap bg-gradient-to-b from-[#7BC504] to-[#FBEE75] bg-clip-text text-transparent"
+  const textCls = cx(
+    "font-['Doto'] font-black text-[8px] leading-none whitespace-nowrap",
+    activeOnline ? "bg-gradient-to-b from-[#7BC504] to-[#FBEE75] bg-clip-text text-transparent" : "text-[#2D2D2D]"
+  )
 
   const handleAnimationEnd = () => {
     if (noticeId) {
@@ -382,7 +387,7 @@ export function FooterStatus({
         {/* Glow hijau (#9DFF00, blur 53.76) di pojok kanan bawah persis sesuai SVG & Figma 142:4533 */}
         <div
           aria-hidden
-          className="pointer-events-none absolute right-[4.78px] top-[31.91px] size-[42px] rounded-full bg-[#9DFF00] blur-[53.76px]"
+          className={cx("pointer-events-none absolute right-[4.78px] top-[31.91px] size-[42px] rounded-full blur-[53.76px]", isOnline ? "bg-[#9DFF00]" : "bg-[#FF001E]")}
         />
 
         {/* ROW 1: 1:1 Figma 142:4538 & footer.relative.svg — w-[234px], h-[21px], gap-[8px] */}
@@ -402,7 +407,7 @@ export function FooterStatus({
             {isTransitioning ? (
               <div className="h-3.5 w-24 rounded bg-surface-sunken animate-pulse" />
             ) : (
-              <div className="min-w-0 w-full truncate text-[11.5px] leading-none font-black bg-gradient-to-b from-[#7BC504] to-[#FBEE75] bg-clip-text text-transparent flex items-center justify-between font-['Doto']">
+              <div className={cx("min-w-0 w-full truncate text-[11.5px] leading-none font-black flex items-center justify-between font-['Doto']", isOnline ? "bg-gradient-to-b from-[#7BC504] to-[#FBEE75] bg-clip-text text-transparent" : "text-[#2D2D2D]")}>
                 {title}
               </div>
             )}
@@ -416,10 +421,10 @@ export function FooterStatus({
               <span
                 className={cx(
                   "font-['Doto'] text-[9px] leading-normal font-black tracking-tight text-center whitespace-nowrap",
-                  currentTone === "success" && "bg-gradient-to-b from-[#7BC504] to-[#FBEE75] bg-clip-text text-transparent",
+                  currentTone === "success" && (isOnline ? "bg-gradient-to-b from-[#7BC504] to-[#FBEE75] bg-clip-text text-transparent" : "text-[#E60004]"),
                   currentTone === "warning" && "bg-gradient-to-b from-[#F59E0B] to-[#FDE047] bg-clip-text text-transparent animate-pulse",
                   currentTone === "danger" && "bg-gradient-to-b from-[#EF4444] to-[#FCA5A5] bg-clip-text text-transparent",
-                  currentTone === "neutral" && "text-slate-400",
+                  currentTone === "neutral" && (isOnline ? "text-slate-400" : "text-[#E60004]"),
                 )}
               >
                 {currentLabel}
@@ -453,7 +458,7 @@ export function FooterStatus({
                 )}
               >
                 <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path transform="translate(-210 -52)" d="M220.519 60.9157H220.234V56.8681C220.234 55.1883 218.992 53.8002 217.377 53.5693V53.1062C217.377 52.8431 216.163 52.63 216.9 52.63C216.637 52.63 216.424 52.8431 216.424 53.1062V53.5693C214.809 53.8002 213.567 55.1883 213.567 56.8681V60.9157H213.281C213.071 60.9157 212.9 61.086 212.9 61.2967V61.6776C212.9 61.73 212.943 61.7729 212.996 61.7729H215.567C215.567 62.5086 216.165 63.1062 216.9 63.1062C217.636 63.1062 218.234 62.5086 218.234 61.7729H220.805C220.858 61.7729 220.9 61.73 220.9 61.6776V61.2967C220.9 61.086 220.73 60.9157 220.519 60.9157ZM216.9 62.3443C216.585 62.3443 216.329 62.0883 216.329 61.7729H217.472C217.472 62.0883 217.216 62.3443 216.9 62.3443ZM214.424 60.9157V56.8681C214.424 56.2062 214.681 55.5848 215.149 55.1169C215.617 54.6491 216.238 54.3919 216.9 54.3919C217.562 54.3919 218.184 54.6491 218.652 55.1169C219.119 55.5848 219.377 56.2062 219.377 56.8681V60.9157H214.424Z" fill="#5F9901" />
+                  <path transform="translate(-210 -52)" d="M220.519 60.9157H220.234V56.8681C220.234 55.1883 218.992 53.8002 217.377 53.5693V53.1062C217.377 52.8431 216.163 52.63 216.9 52.63C216.637 52.63 216.424 52.8431 216.424 53.1062V53.5693C214.809 53.8002 213.567 55.1883 213.567 56.8681V60.9157H213.281C213.071 60.9157 212.9 61.086 212.9 61.2967V61.6776C212.9 61.73 212.943 61.7729 212.996 61.7729H215.567C215.567 62.5086 216.165 63.1062 216.9 63.1062C217.636 63.1062 218.234 62.5086 218.234 61.7729H220.805C220.858 61.7729 220.9 61.73 220.9 61.6776V61.2967C220.9 61.086 220.73 60.9157 220.519 60.9157ZM216.9 62.3443C216.585 62.3443 216.329 62.0883 216.329 61.7729H217.472C217.472 62.0883 217.216 62.3443 216.9 62.3443ZM214.424 60.9157V56.8681C214.424 56.2062 214.681 55.5848 215.149 55.1169C215.617 54.6491 216.238 54.3919 216.9 54.3919C217.562 54.3919 218.184 54.6491 218.652 55.1169C219.119 55.5848 219.377 56.2062 219.377 56.8681V60.9157H214.424Z" fill={isOnline ? "#5F9901" : "#2E2E2E"} />
                 </svg>
               </span>
               {/* Layar teks aperture 25 × 13px: 1:1 Figma 142:4571 (left 35.5px, top 12.5px / center) */}

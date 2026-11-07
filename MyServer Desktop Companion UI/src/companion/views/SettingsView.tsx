@@ -118,28 +118,7 @@ export default function SettingsView() {
     isCustom: false,
   })
   const [details, setDetails] = useState<ServerDetails | null>(null)
-  const [easyTierStatus, setEasyTierStatus] = useState<any>(() => {
-    if (typeof window !== "undefined" && window.location.search.includes("mock_easytier=1")) {
-      return {
-        running: true,
-        version: "2.6.4-8428a89d",
-        network_name: "myserver-mesh",
-        virtual_ip: "10.144.144.12",
-        peer_id: 12345678,
-        peers_count: 2,
-        direct_peers: 1,
-        relay_peers: 1,
-        peers: [
-          { id: "1001", hostname: "Ubuntu-Server", ipv4: "10.144.144.1", cost: "Direct", lat_ms: "8ms", rx_bytes: "1.2 MB", tx_bytes: "450 KB", tunnel_proto: "udp", nat_type: "Cone" }
-        ],
-        routes: [],
-        error: null,
-      }
-    }
-    return null
-  })
-  const [etRemoteId, setEtRemoteId] = useState("")
-  const [etBusy, setEtBusy] = useState(false)
+
 
   const t = getTranslation(settings?.language)
   const isId = settings?.language === "id"
@@ -149,60 +128,10 @@ export default function SettingsView() {
   useEffect(() => {
     api.getServerDetails().then((d) => {
       setDetails(d)
-      if (d?.zeroTier?.configuredNwid) {
-        setEtRemoteId(d.zeroTier.configuredNwid)
-      }
     }).catch(() => {})
-    if (api.getEasyTierStatus) {
-      api.getEasyTierStatus().then((st: any) => {
-        if (st && st.running) {
-          setEasyTierStatus(st)
-          if (st.remote_id) setEtRemoteId(st.remote_id)
-        }
-      }).catch(() => {})
-    }
   }, [api])
 
-  const handleConnectEasyTier = async () => {
-    const cleanId = etRemoteId.trim().toLowerCase()
-    if (!cleanId) {
-      notify(isId ? "Remote ID ZimaOS wajib diisi!" : "ZimaOS Remote ID is required!", "danger")
-      return
-    }
-    setEtBusy(true)
-    try {
-      if (api.startEasyTier) {
-        const res = await api.startEasyTier({
-          remote_id: cleanId,
-        })
-        if (res?.success) {
-          notify(isId ? "EasyTier P2P Mesh terhubung!" : "EasyTier P2P Mesh connected!", "success")
-          setEasyTierStatus(res.status)
-        } else {
-          notify(res?.message || (isId ? "Gagal terhubung" : "Connection failed"), "danger")
-        }
-      }
-    } catch (e: any) {
-      notify(e.message || "Error", "danger")
-    } finally {
-      setEtBusy(false)
-    }
-  }
 
-  const handleDisconnectEasyTier = async () => {
-    setEtBusy(true)
-    try {
-      if (api.stopEasyTier) {
-        const res = await api.stopEasyTier()
-        setEasyTierStatus(res?.status || { running: false })
-        notify(isId ? "EasyTier diputuskan" : "EasyTier disconnected", "neutral")
-      }
-    } catch (e: any) {
-      notify(e.message || "Error", "danger")
-    } finally {
-      setEtBusy(false)
-    }
-  }
 
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true)
@@ -803,94 +732,6 @@ export default function SettingsView() {
                   <span>{t("fm_target_zimaos")}</span>
                 </button>
               </div>
-            </div>
-
-            {/* EasyTier P2P Mesh Card */}
-            <div className="flex flex-col gap-2 rounded-tile border border-line bg-surface p-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <Network className="size-4 text-brand" />
-                  <span className="text-micro font-semibold text-ink">
-                    {t("easytier_title")}
-                  </span>
-                </div>
-                {easyTierStatus?.running ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-                    <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    {(easyTierStatus.direct_peers && easyTierStatus.direct_peers > 0) ? t("easytier_status_connected") : t("easytier_status_relay")}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center rounded-full border border-line bg-surface-sunken px-2 py-0.5 text-[10px] font-medium text-ink-subtle">
-                    {t("easytier_status_disconnected")}
-                  </span>
-                )}
-              </div>
-
-              <span className="text-micro text-ink-subtle leading-relaxed">
-                {t("easytier_desc")}
-              </span>
-
-              {easyTierStatus?.running ? (
-                <div className="flex flex-col gap-1.5 rounded-control bg-surface-sunken border border-line p-2 text-micro">
-                  <div className="flex justify-between items-center text-ink">
-                    <span className="text-ink-subtle">Remote ID:</span>
-                    <span className="font-mono font-medium">{easyTierStatus.remote_id || etRemoteId || easyTierStatus.network_name}</span>
-                  </div>
-                  {easyTierStatus.virtual_ip && (
-                    <div className="flex justify-between items-center text-ink">
-                      <span className="text-ink-subtle">Virtual IP:</span>
-                      <span className="font-mono font-medium">{easyTierStatus.virtual_ip}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between items-center text-ink">
-                    <span className="text-ink-subtle">Peers:</span>
-                    <span className="font-medium">{easyTierStatus.peers_count || 0} node</span>
-                  </div>
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      disabled={etBusy}
-                      onClick={handleDisconnectEasyTier}
-                      className="w-full flex items-center justify-center gap-1.5 rounded-control border border-line bg-surface px-2.5 py-1.5 text-micro font-medium text-ink hover:bg-surface-elevated transition cursor-pointer disabled:opacity-50"
-                    >
-                      {t("easytier_btn_disconnect")}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2 pt-0.5">
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[11px] font-medium text-ink-subtle">
-                        {t("easytier_remote_id_label", "ZimaOS Remote ID (16-Digit)")}
-                      </label>
-                      <span className="text-[9.5px] text-ink-faint font-mono">
-                        {etRemoteId.length}/16
-                      </span>
-                    </div>
-                    <input
-                      type="text"
-                      value={etRemoteId}
-                      maxLength={16}
-                      onChange={(e) => setEtRemoteId(e.target.value.trim().toLowerCase())}
-                      placeholder={t("easytier_remote_id_placeholder", "e.g. 2be7ac7a591b7bc8")}
-                      className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-micro font-mono text-ink focus:border-brand focus:outline-none"
-                    />
-                    <span className="text-[9.5px] text-ink-subtle leading-tight">
-                      {t("easytier_remote_id_help", "Masukkan 16-karakter Remote ID dari ZimaOS")}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={etBusy || !etRemoteId.trim()}
-                    onClick={handleConnectEasyTier}
-                    className="flex items-center justify-center gap-1.5 rounded-control bg-brand px-2.5 py-1.5 text-micro font-semibold text-brand-ink transition cursor-pointer hover:opacity-90 disabled:opacity-50"
-                  >
-                    {etBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <Network className="size-3.5" />}
-                    <span>{t("easytier_btn_connect")}</span>
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Storage & Network Startup Toggles */}

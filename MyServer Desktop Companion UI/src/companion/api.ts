@@ -767,23 +767,24 @@ export function createMockApi(): CompanionApi {
         ],
 
         zeroTier: {
-
           running: true,
-
           networkStatus: "OK",
-
           networkName: "IceWhale-RemoteAccess",
-
-          configuredNwid: "f1efb745b3",
-
+          configuredNwid: "2be7ac7a591b7bc8",
           nodeId: "e642c82437",
-
           virtualIp: "172.24.236.144",
-
           serverVirtualIp: "172.24.0.1",
-
           joined: true,
-
+        },
+        easyTier: {
+          running: true,
+          available: true,
+          remote_id: "2be7ac7a591b7bc8",
+          network_name: "zima-2be7ac7a591b7bc8",
+          virtual_ipv4: null,
+          virtual_ip: null,
+          uptime: 120,
+          peers_count: 3,
         },
 
         activeProfile: "Marcom",

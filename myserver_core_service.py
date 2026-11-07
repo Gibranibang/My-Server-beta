@@ -15529,7 +15529,7 @@ def get_server_details_data(cfg=None):
 
 
         "zeroTier": zt_info,
-        "easyTier": easytier_manager.get_easytier_manager().get_status_overview() if easytier_manager else {"running": False},
+        "easyTier": (lambda s: (s.update({"remote_id": s.get("remote_id") or srv.get("remote_id") or srv.get("zerotier_network_id") or cfg.get("easytier", {}).get("remote_id")}), s)[1])(easytier_manager.get_easytier_manager().get_status_overview()) if easytier_manager else {"running": False},
 
 
 
@@ -20763,14 +20763,16 @@ def auto_start_easytier_worker():
             cfg = config_manager.load_or_create_config()
             et_cfg = cfg.get("easytier", {})
             if et_cfg.get("enabled"):
+                rid = et_cfg.get("remote_id")
                 net_name = et_cfg.get("network_name")
                 net_secret = et_cfg.get("network_secret")
                 ipv4 = et_cfg.get("ipv4")
                 peers = et_cfg.get("peers") or []
-                if net_name and net_secret:
-                    logger_manager.log_info(f"[EasyTier] Memulai koneksi otomatis startup: {net_name}")
+                if rid or (net_name and net_secret):
+                    logger_manager.log_info(f"[EasyTier] Memulai koneksi otomatis startup: {rid or net_name}")
                     mgr = easytier_manager.get_easytier_manager()
                     mgr.start_easytier(
+                        remote_id=rid,
                         network_name=net_name,
                         network_secret=net_secret,
                         ipv4=ipv4,
@@ -30055,15 +30057,38 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/easytier_start":
+            rid = (body.get("remote_id") or body.get("remoteId") or "").strip().lower()
             net_name = (body.get("network_name") or body.get("networkName") or "").strip()
             net_secret = (body.get("network_secret") or body.get("networkSecret") or "").strip()
             peers = body.get("peers") or []
-            if not net_name:
-                self._send_json({"success": False, "error": "network_name wajib diisi."})
+            if not rid and not net_name:
+                self._send_json({"success": False, "error": "Remote ID atau Network Name wajib diisi."})
                 return
             if easytier_manager:
-                ok, msg = easytier_manager.easytier_instance.start(net_name, net_secret, peers=peers)
-                self._send_json({"success": ok, "message": msg})
+                mgr = easytier_manager.get_easytier_manager()
+                ok, msg = mgr.start(
+                    remote_id=rid or None,
+                    network_name=net_name or None,
+                    network_secret=net_secret or None,
+                    peers=peers
+                )
+                if ok:
+                    try:
+                        cfg = config_manager.load_or_create_config()
+                        et_cfg = cfg.setdefault("easytier", {})
+                        et_cfg["enabled"] = True
+                        if rid:
+                            et_cfg["remote_id"] = rid
+                            params = easytier_manager.derive_easytier_params(rid)
+                            et_cfg["network_name"] = params["network_name"]
+                            et_cfg["network_secret"] = params["network_secret"]
+                            srv = config_manager.get_active_server(cfg)
+                            if srv:
+                                srv["remote_id"] = rid
+                        config_manager.save_config(cfg)
+                    except Exception as ce:
+                        logger_manager.log_debug(f"[EasyTierStart] Gagal simpan config: {ce}")
+                self._send_json({"success": ok, "message": msg, "status": mgr.get_status_overview()})
             else:
                 self._send_json({"success": False, "error": "EasyTier module not available."})
             return

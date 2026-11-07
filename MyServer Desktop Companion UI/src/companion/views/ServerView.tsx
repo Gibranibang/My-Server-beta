@@ -493,295 +493,301 @@ export default function ServerView({ go }: ViewProps) {
           </div>
         </Card>
 
-        {/* 2. KARTU REMOTE ACCESS: EASYTIER (UTAMA) & ZEROTIER (CADANGAN) */}
-        <section aria-label="Remote Access" className="flex flex-col gap-3">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
-              {t("remote_engine_mode", "Remote Mode")}
-            </span>
-            <div className="flex items-center gap-1 bg-surface-sunken p-0.5 rounded-full border border-line text-nano">
-              <button
-                type="button"
-                onClick={() => onSetRemoteMode("auto")}
-                className={cx(
-                  "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
-                  (details?.remoteMode || "auto") === "auto" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
-                )}
-              >
-                Auto
-              </button>
-              <button
-                type="button"
-                onClick={() => onSetRemoteMode("easytier")}
-                className={cx(
-                  "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
-                  details?.remoteMode === "easytier" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
-                )}
-              >
-                EasyTier
-              </button>
-              <button
-                type="button"
-                onClick={() => onSetRemoteMode("zerotier")}
-                className={cx(
-                  "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
-                  details?.remoteMode === "zerotier" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
-                )}
-              >
-                ZeroTier
-              </button>
-            </div>
-          </div>
-          {/* EASYTIER REMOTE ACCESS (UTAMA) */}
-          <div className="flex flex-col gap-2">
-            <SectionLabel trailing={details?.easyTier?.running ? t("service_active", "Service Aktif") : t("status_offline", "Offline")}>
-              {t("easytier_p2p_title", "Akses Remote EasyTier (Utama)")}
-            </SectionLabel>
+        {/* 2. KARTU REMOTE ACCESS DINAMIS TUNGGAL (EASYTIER / ZEROTIER) */}
+        {(() => {
+          const activeRemoteEngine = 
+            details?.remoteMode === "easytier" 
+              ? "easytier" 
+              : details?.remoteMode === "zerotier" 
+                ? "zerotier" 
+                : (details?.activeRemoteEngine === "easytier" || (details?.easyTier?.running && !details?.zeroTier?.running) ? "easytier" : "zerotier");
 
-            <Card className="flex flex-col gap-2.5 p-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <IconBadge
-                    icon={Network}
-                    tone={
-                      details?.easyTier?.running
-                        ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
-                        : "neutral"
-                    }
-                    size="sm"
-                  />
-                  <div>
-                    <div className="text-label font-semibold text-ink">
-                      {details?.easyTier?.network_name || "EasyTier P2P Mesh"}
-                    </div>
-                    <div className="text-micro text-ink-subtle">
-                      {t("status_label", "Status:")}{" "}
-                      <span className="font-semibold text-ink-muted">
-                        {details?.easyTier?.running
-                          ? (details?.easyTier?.peers_count > 0
-                              ? `${details.easyTier.peers_count} Node Peer Aktif`
-                              : "Menghubungkan Relay...")
-                          : t("easytier_status_disconnected", "Terputus")}
-                      </span>
-                    </div>
-                  </div>
+          return (
+            <section aria-label="Remote Access" className="flex flex-col gap-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
+                  {activeRemoteEngine === "easytier" 
+                    ? t("easytier_p2p_title", "EasyTier Remote Access (P2P)")
+                    : t("zerotier_p2p_title", "ZeroTier Remote Access (P2P)")}
+                </span>
+                <div className="flex items-center gap-1 bg-surface-sunken p-0.5 rounded-full border border-line text-nano">
+                  <button
+                    type="button"
+                    onClick={() => onSetRemoteMode("auto")}
+                    className={cx(
+                      "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
+                      (details?.remoteMode || "auto") === "auto" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
+                    )}
+                  >
+                    Auto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSetRemoteMode("easytier")}
+                    className={cx(
+                      "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
+                      details?.remoteMode === "easytier" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
+                    )}
+                  >
+                    EasyTier
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSetRemoteMode("zerotier")}
+                    className={cx(
+                      "px-2 py-0.5 rounded-full font-semibold transition cursor-pointer select-none",
+                      details?.remoteMode === "zerotier" ? "bg-brand text-surface shadow-xs" : "text-ink-subtle hover:text-ink"
+                    )}
+                  >
+                    ZeroTier
+                  </button>
                 </div>
-                <Chip
-                  size="sm"
-                  tone={
-                    details?.easyTier?.running
-                      ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
-                      : "neutral"
-                  }
-                >
-                  <StatusDot
-                    tone={
-                      details?.easyTier?.running
-                        ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
-                        : "neutral"
-                    }
-                  />
-                  {details?.easyTier?.running
-                    ? (details?.easyTier?.peers_count > 0 ? "Direct P2P" : "Relay")
-                    : t("status_disabled_zt", "Nonaktif")}
-                </Chip>
               </div>
 
-              <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-nano border-t border-line pt-2 text-ink-subtle">
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="shrink-0 text-ink-subtle">Remote ID:</span>
-                  <Mono className="font-semibold text-ink truncate text-[9.5px]">
-                    {details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid || "–"}
-                  </Mono>
-                  {(details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid) && (
-                    <button
-                      type="button"
-                      onClick={() => copyText(details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid || "", "Remote ID")}
-                      className="shrink-0 rounded p-0.5 text-ink-subtle hover:text-ink transition cursor-pointer"
-                      title={t("copy_node_id", "Salin Remote ID")}
-                      aria-label={t("copy_node_id", "Salin Remote ID")}
+              {activeRemoteEngine === "easytier" ? (
+                /* KARTU EASYTIER TUNGGAL */
+                <Card className="flex flex-col gap-2.5 p-3 overflow-hidden">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <IconBadge
+                        icon={Network}
+                        tone={
+                          details?.easyTier?.running
+                            ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
+                            : "neutral"
+                        }
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-label font-semibold text-ink truncate">
+                          {details?.easyTier?.network_name || "EasyTier P2P Mesh"}
+                        </div>
+                        <div className="text-micro text-ink-subtle truncate">
+                          {t("status_label", "Status:")}{" "}
+                          <span className="font-semibold text-ink-muted">
+                            {details?.easyTier?.running
+                              ? (details?.easyTier?.peers_count > 0
+                                  ? `${details.easyTier.peers_count} Node Peer Aktif`
+                                  : "Menghubungkan Relay...")
+                              : t("easytier_status_disconnected", "Terputus")}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <Chip
+                      size="sm"
+                      tone={
+                        details?.easyTier?.running
+                          ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
+                          : "neutral"
+                      }
                     >
-                      <Copy className="size-2.5 text-ink-muted hover:text-ink" />
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center justify-end gap-1 min-w-0 text-right">
-                  <span className="shrink-0 text-ink-subtle">Laptop IP:</span>
-                  <Mono className="text-ink text-[9.5px] truncate">
-                    {details?.easyTier?.virtual_ipv4 || details?.easyTier?.virtual_ip || "–"}
-                  </Mono>
-                </div>
-                {details?.easyTier?.server_peer_ip && (
-                  <div className="col-span-2 flex items-center justify-between text-nano border-t border-line/40 pt-1">
-                    <span className="text-ink-subtle">Server IP:</span>
-                    <Mono className="text-ink font-semibold text-[9.5px]">{details.easyTier.server_peer_ip}</Mono>
+                      <StatusDot
+                        tone={
+                          details?.easyTier?.running
+                            ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
+                            : "neutral"
+                        }
+                      />
+                      {details?.easyTier?.running
+                        ? (details?.easyTier?.peers_count > 0 ? "Direct P2P" : "Relay")
+                        : t("status_disabled_zt", "Nonaktif")}
+                    </Chip>
                   </div>
-                )}
-              </div>
 
-              <div className="flex items-center gap-2 pt-1 min-w-0">
-                {details?.easyTier?.running ? (
-                  <Button
-                    size="sm"
-                    variant="soft"
-                    icon={Network}
-                    className="flex-1 min-w-0"
-                    disabled={isSubmitting}
-                    onClick={onDisconnectEasyTier}
-                  >
-                    {t("easytier_btn_disconnect", "Putuskan EasyTier")}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    icon={Network}
-                    className="flex-1 min-w-0"
-                    disabled={isSubmitting}
-                    onClick={onConnectEasyTier}
-                  >
-                    {t("easytier_btn_connect", "Hubungkan EasyTier")}
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="soft"
-                  icon={Edit2}
-                  className="shrink-0 px-2.5"
-                  onClick={onJoinZeroTier}
-                  title={t("edit_remote_id", "Ubah Remote ID")}
-                  aria-label={t("edit_remote_id", "Ubah Remote ID")}
-                />
-              </div>
-            </Card>
-          </div>
-
-          {/* ZEROTIER REMOTE ACCESS (CADANGAN) */}
-          <div className="flex flex-col gap-2">
-            <SectionLabel trailing={details?.zeroTier?.running ? t("service_active", "Service Aktif") : t("status_offline", "Offline")}>
-              {t("zerotier_p2p_title", "ZeroTier Remote Access (Cadangan)")}
-            </SectionLabel>
-
-            <Card className="flex flex-col gap-2.5 p-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <IconBadge
-                    icon={Network}
-                    tone={
-                      details?.zeroTier?.running && (details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running))
-                        ? "success"
-                        : details?.zeroTier?.running
-                        ? "warning"
-                        : "neutral"
-                    }
-                    size="sm"
-                  />
-                  <div>
-                    <div className="text-label font-semibold text-ink">
-                      {details?.zeroTier?.networkName || (details?.zeroTier?.configuredNwid ? `Network ${details.zeroTier.configuredNwid}` : t("zt_one_net", "ZeroTier One Network"))}
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-nano border-t border-line pt-2 text-ink-subtle">
+                    <div className="flex items-center gap-1 min-w-0">
+                      <span className="shrink-0 text-ink-subtle">Remote ID:</span>
+                      <Mono className="font-semibold text-ink truncate text-[9.5px]">
+                        {details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid || "–"}
+                      </Mono>
+                      {(details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid) && (
+                        <button
+                          type="button"
+                          onClick={() => copyText(details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid || "", "Remote ID")}
+                          className="shrink-0 rounded p-0.5 text-ink-subtle hover:text-ink transition cursor-pointer"
+                          title={t("copy_node_id", "Salin Remote ID")}
+                          aria-label={t("copy_node_id", "Salin Remote ID")}
+                        >
+                          <Copy className="size-2.5 text-ink-muted hover:text-ink" />
+                        </button>
+                      )}
                     </div>
-                    <div className="text-micro text-ink-subtle">
-                      {t("status_label", "Status:")}{" "}
-                      <span className="font-semibold text-ink-muted">
-                        {details?.zeroTier?.configuredNwid && details?.zeroTier?.joined === false
-                          ? t("zt_not_connected", "Belum Terhubung")
-                          : details?.zeroTier?.networkStatus || (details?.zeroTier?.running ? "OK" : t("status_offline", "Offline"))}
-                      </span>
+                    <div className="flex items-center justify-end gap-1 min-w-0 text-right">
+                      <span className="shrink-0 text-ink-subtle">Laptop IP:</span>
+                      <Mono className="text-ink text-[9.5px] truncate">
+                        {details?.easyTier?.virtual_ipv4 || details?.easyTier?.virtual_ip || (details?.easyTier?.running ? "10.126.126.2" : "–")}
+                      </Mono>
                     </div>
+                    {(details?.easyTier?.server_peer_ip || details?.easyTier?.running) && (
+                      <div className="col-span-2 flex items-center justify-between text-nano border-t border-line/40 pt-1">
+                        <span className="text-ink-subtle">Server IP:</span>
+                        <Mono className="text-ink font-semibold text-[9.5px]">
+                          {details?.easyTier?.server_peer_ip || "10.126.126.1"}
+                        </Mono>
+                      </div>
+                    )}
                   </div>
-                </div>
-                <Chip
-                  size="sm"
-                  tone={
-                    details?.zeroTier?.running && (details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running))
-                      ? "success"
-                      : details?.zeroTier?.running
-                      ? "warning"
-                      : "neutral"
-                  }
-                >
-                  <StatusDot
-                    tone={
-                      details?.zeroTier?.running && (details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running))
-                        ? "success"
-                        : details?.zeroTier?.running
-                        ? "warning"
-                        : "neutral"
-                    }
-                  />
-                  {details?.zeroTier?.running
-                    ? details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running)
-                      ? t("status_active_zt", "Aktif")
-                      : t("status_connecting_zt", "Menghubungkan")
-                    : t("status_disabled_zt", "Nonaktif")}
-                </Chip>
-              </div>
 
-              <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-nano border-t border-line pt-2 text-ink-subtle">
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="shrink-0 text-ink-subtle">Node ID:</span>
-                  <Mono className="font-semibold text-ink truncate text-[9.5px]">{details?.zeroTier?.nodeId || "–"}</Mono>
-                  {details?.zeroTier?.nodeId && (
-                    <button
-                      type="button"
-                      onClick={() => copyText(details.zeroTier!.nodeId, "Node ID ZeroTier")}
-                      className="shrink-0 rounded p-0.5 text-ink-subtle hover:text-ink transition cursor-pointer"
-                      title={t("copy_node_id", "Salin Node ID")}
-                      aria-label={t("copy_node_id", "Salin Node ID")}
+                  <div className="flex items-center gap-2 pt-1 w-full min-w-0">
+                    {details?.easyTier?.running ? (
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        icon={Network}
+                        className="flex-1 min-w-0 truncate"
+                        disabled={isSubmitting}
+                        onClick={onDisconnectEasyTier}
+                      >
+                        {t("easytier_btn_disconnect", "Putuskan EasyTier")}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={Network}
+                        className="flex-1 min-w-0 truncate"
+                        disabled={isSubmitting}
+                        onClick={onConnectEasyTier}
+                      >
+                        {t("easytier_btn_connect", "Hubungkan EasyTier")}
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      icon={Edit2}
+                      className="shrink-0 w-8 px-0 flex items-center justify-center"
+                      onClick={onJoinZeroTier}
+                      title={t("edit_remote_id", "Ubah Remote ID")}
+                      aria-label={t("edit_remote_id", "Ubah Remote ID")}
+                    />
+                  </div>
+                </Card>
+              ) : (
+                /* KARTU ZEROTIER TUNGGAL */
+                <Card className="flex flex-col gap-2.5 p-3 overflow-hidden">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <IconBadge
+                        icon={Network}
+                        tone={
+                          details?.zeroTier?.running && (details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running))
+                            ? "success"
+                            : details?.zeroTier?.running
+                            ? "warning"
+                            : "neutral"
+                        }
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-label font-semibold text-ink truncate">
+                          {details?.zeroTier?.networkName || (details?.zeroTier?.configuredNwid ? `Network ${details.zeroTier.configuredNwid}` : t("zt_one_net", "ZeroTier One Network"))}
+                        </div>
+                        <div className="text-micro text-ink-subtle truncate">
+                          {t("status_label", "Status:")}{" "}
+                          <span className="font-semibold text-ink-muted">
+                            {details?.zeroTier?.configuredNwid && details?.zeroTier?.joined === false
+                              ? t("zt_not_connected", "Belum Terhubung")
+                              : details?.zeroTier?.networkStatus || (details?.zeroTier?.running ? "OK" : t("status_offline", "Offline"))}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <Chip
+                      size="sm"
+                      tone={
+                        details?.zeroTier?.running && (details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running))
+                          ? "success"
+                          : details?.zeroTier?.running
+                          ? "warning"
+                          : "neutral"
+                      }
                     >
-                      <Copy className="size-2.5 text-ink-muted hover:text-ink" />
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center justify-end gap-1 min-w-0 text-right">
-                  <span className="shrink-0 text-ink-subtle">Laptop IP:</span>
-                  <Mono className="text-ink text-[9.5px] truncate">{details?.zeroTier?.virtualIp || "–"}</Mono>
-                </div>
-                {details?.zeroTier?.serverVirtualIp && (
-                  <div className="col-span-2 flex items-center justify-between text-nano border-t border-line/40 pt-1">
-                    <span className="text-ink-subtle">Server IP:</span>
-                    <Mono className="text-ink font-semibold text-[9.5px]">{details.zeroTier.serverVirtualIp}</Mono>
+                      <StatusDot
+                        tone={
+                          details?.zeroTier?.running && (details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running))
+                            ? "success"
+                            : details?.zeroTier?.running
+                            ? "warning"
+                            : "neutral"
+                        }
+                      />
+                      {details?.zeroTier?.running
+                        ? details?.zeroTier?.networkStatus === "OK" || (!details?.zeroTier?.configuredNwid && details?.zeroTier?.running)
+                          ? t("status_active_zt", "Aktif")
+                          : t("status_connecting_zt", "Menghubungkan")
+                        : t("status_disabled_zt", "Nonaktif")}
+                    </Chip>
                   </div>
-                )}
-              </div>
 
-              <div className="flex items-center gap-2 pt-1 min-w-0">
-                {details?.zeroTier?.running && details?.zeroTier?.joined !== false ? (
-                  <Button
-                    size="sm"
-                    variant="soft"
-                    icon={Network}
-                    className="flex-1 min-w-0"
-                    disabled={isSubmitting}
-                    onClick={onDisconnectZeroTier}
-                  >
-                    {t("zt_btn_disconnect", "Putuskan ZeroTier")}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    icon={Network}
-                    className="flex-1 min-w-0"
-                    disabled={isSubmitting}
-                    onClick={onConnectZeroTier}
-                  >
-                    {t("zt_btn_connect", "Hubungkan ZeroTier")}
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="soft"
-                  icon={Edit2}
-                  className="shrink-0 px-2.5"
-                  onClick={onJoinZeroTier}
-                  title={t("edit_network_id", "Ubah Network ID")}
-                  aria-label={t("edit_network_id", "Ubah Network ID")}
-                />
-              </div>
-            </Card>
-          </div>
-        </section>
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-nano border-t border-line pt-2 text-ink-subtle">
+                    <div className="flex items-center gap-1 min-w-0">
+                      <span className="shrink-0 text-ink-subtle">Node ID:</span>
+                      <Mono className="font-semibold text-ink truncate text-[9.5px]">{details?.zeroTier?.nodeId || "–"}</Mono>
+                      {details?.zeroTier?.nodeId && (
+                        <button
+                          type="button"
+                          onClick={() => copyText(details.zeroTier!.nodeId, "Node ID ZeroTier")}
+                          className="shrink-0 rounded p-0.5 text-ink-subtle hover:text-ink transition cursor-pointer"
+                          title={t("copy_node_id", "Salin Node ID")}
+                          aria-label={t("copy_node_id", "Salin Node ID")}
+                        >
+                          <Copy className="size-2.5 text-ink-muted hover:text-ink" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-end gap-1 min-w-0 text-right">
+                      <span className="shrink-0 text-ink-subtle">Laptop IP:</span>
+                      <Mono className="text-ink text-[9.5px] truncate">{details?.zeroTier?.virtualIp || "–"}</Mono>
+                    </div>
+                    {details?.zeroTier?.serverVirtualIp && (
+                      <div className="col-span-2 flex items-center justify-between text-nano border-t border-line/40 pt-1">
+                        <span className="text-ink-subtle">Server IP:</span>
+                        <Mono className="text-ink font-semibold text-[9.5px]">{details.zeroTier.serverVirtualIp}</Mono>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1 w-full min-w-0">
+                    {details?.zeroTier?.running && details?.zeroTier?.joined !== false ? (
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        icon={Network}
+                        className="flex-1 min-w-0 truncate"
+                        disabled={isSubmitting}
+                        onClick={onDisconnectZeroTier}
+                      >
+                        {t("zt_btn_disconnect", "Putuskan ZeroTier")}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={Network}
+                        className="flex-1 min-w-0 truncate"
+                        disabled={isSubmitting}
+                        onClick={onConnectZeroTier}
+                      >
+                        {t("zt_btn_connect", "Hubungkan ZeroTier")}
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      icon={Edit2}
+                      className="shrink-0 w-8 px-0 flex items-center justify-center"
+                      onClick={onJoinZeroTier}
+                      title={t("edit_network_id", "Ubah Network ID")}
+                      aria-label={t("edit_network_id", "Ubah Network ID")}
+                    />
+                  </div>
+                </Card>
+              )}
+            </section>
+          );
+        })()}
 
         {/* 3. PILIHAN RUTE JARINGAN (AUTO FAILOVER) */}
         <section aria-label="Rute Jaringan" className="flex flex-col gap-2">

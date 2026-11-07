@@ -966,24 +966,14 @@ def get_dynamic_remote_info(server, config=None):
 
     # 1. Jika mode paksa easytier
     if r_mode == "easytier":
-        if chosen_et_ip:
-            return {
-                "engine": "easytier",
-                "name": "EasyTier Remote (P2P)",
-                "ip": chosen_et_ip,
-                "url": f"http://{chosen_et_ip}",
-                "badge": "P2P"
-            }
-        # Jika belum ada IP EasyTier terdeteksi, gunakan srv_et_vip jika ada
-        if srv_et_vip:
-            return {
-                "engine": "easytier",
-                "name": "EasyTier Remote (P2P)",
-                "ip": srv_et_vip,
-                "url": f"http://{srv_et_vip}",
-                "badge": "P2P"
-            }
-        return None
+        final_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
+        return {
+            "engine": "easytier",
+            "name": "EasyTier Remote (P2P)",
+            "ip": final_ip,
+            "url": f"http://{final_ip}",
+            "badge": "P2P"
+        }
 
     # 2. Jika mode paksa zerotier
     if r_mode == "zerotier":
@@ -998,16 +988,17 @@ def get_dynamic_remote_info(server, config=None):
         return None
 
     # 3. Mode AUTO FAILOVER (Default: EasyTier Utama -> ZeroTier Cadangan)
-    if et_running and chosen_et_ip:
+    if et_running:
+        final_et_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
         return {
             "engine": "easytier",
             "name": "EasyTier Remote (P2P)",
-            "ip": chosen_et_ip,
-            "url": f"http://{chosen_et_ip}",
+            "ip": final_et_ip,
+            "url": f"http://{final_et_ip}",
             "badge": "P2P"
         }
 
-    # Fallback ke ZeroTier
+    # Fallback ke ZeroTier jika EasyTier tidak aktif
     if srv_zt_vip:
         return {
             "engine": "zerotier",

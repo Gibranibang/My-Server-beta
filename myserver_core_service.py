@@ -8,6 +8,9 @@ def get_active_remote_ip(srv, cfg=None):
             return rem_info["ip"]
     except Exception as e:
         logger_manager.log_debug(f"[get_active_remote_ip] Error: {e}")
+    r_mode = (srv.get("remote_mode") or (cfg.get("remote_mode") if cfg else "auto") or "auto").lower()
+    if r_mode == "easytier":
+        return (srv.get("easytier_virtual_ip") or "10.126.126.1").strip()
     return (srv.get("zerotier_virtual_ip") or "").strip()
 
 
@@ -383,7 +386,7 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.2.1"
+APP_VERSION_NUMBER = "4.2.4"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 

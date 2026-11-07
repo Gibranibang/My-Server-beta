@@ -363,25 +363,29 @@ def resolve_smb_host(target_host, server_connections=None, is_domain_route=None,
                 except Exception:
                     pass
 
-    # A. KONDISI 1: RUTE DOMAIN / WAN AKTIF (Dukungan SMB over ZeroTier P2P Dinamis)
+    # A. KONDISI 1: RUTE DOMAIN / WAN AKTIF (Dukungan SMB over Remote P2P EasyTier/ZeroTier Dinamis)
     if is_domain_route:
-        # Cek apakah rute ZeroTier P2P aktif dan sehat (port 445 responsif)
-        if clean_zt and is_port_open(clean_zt, 445, timeout=0.8):
+        # Cek apakah rute P2P (EasyTier atau ZeroTier) aktif dan sehat (port 445 responsif)
+        if clean_zt and is_port_open(clean_zt, 445, timeout=1.2):
             if _cached_resolved_smb_host.get("resolved") != clean_zt:
-                logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif & ZeroTier P2P sehat -> Mengarahkan SMB ke ({clean_zt}:445)")
+                logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif & Remote P2P sehat -> Mengarahkan SMB ke ({clean_zt}:445)")
                 _cached_resolved_smb_host = {"target": clean_h, "resolved": clean_zt, "ts": time.time()}
             return clean_zt
-        # Jika ZeroTier mati, cek apakah ada rute LAN lokal yang kebetulan satu jaringan
+        # Jika ZeroTier/EasyTier probe awal masih negosiasi, gunakan clean_zt langsung karena port 445 publik WAN pasti diblokir ISP
+        if clean_zt:
+            if _cached_resolved_smb_host.get("resolved") != clean_zt:
+                logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif -> Mengarahkan SMB ke Remote P2P ({clean_zt})")
+                _cached_resolved_smb_host = {"target": clean_h, "resolved": clean_zt, "ts": time.time()}
+            return clean_zt
+        # Jika tidak ada remote IP, cek apakah ada rute LAN lokal yang kebetulan satu jaringan
         for cand in lan_candidates:
             if is_port_open(cand, 445, timeout=0.6):
                 if _cached_resolved_smb_host.get("resolved") != cand:
                     logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif namun IP LAN ({cand}:445) terdeteksi lokal -> Menggunakan SMB LAN")
                     _cached_resolved_smb_host = {"target": clean_h, "resolved": cand, "ts": time.time()}
                 return cand
-        # Jika tidak ada jalur SMB yang hidup saat rute domain aktif, jangan kembalikan host domain
-        # (karena port 445 diblokir di WAN dan memicu timeout 8 detik per drive di Windows!)
         logger_manager.log_warning(
-            f"[SMB Host Resolver] Rute Domain aktif namun tidak ada jalur SMB (ZeroTier/LAN) yang aktif. Melewati koneksi port 445 publik."
+            f"[SMB Host Resolver] Rute Domain aktif namun tidak ada jalur SMB (Remote P2P/LAN) yang aktif. Melewati koneksi port 445 publik."
         )
         return None
 
@@ -1203,12 +1207,8 @@ def open_drive_in_explorer(drive_letter="Z:"):
     target_path = f"{clean_drive}\\"
     try:
         if sys.platform == "win32":
-            try:
-                os.startfile(target_path)
-                return True
-            except Exception:
-                subprocess.Popen(["explorer.exe", target_path])
-                return True
+            os.startfile(target_path)
+            return True
         else:
             subprocess.Popen(["explorer.exe", target_path])
             return True

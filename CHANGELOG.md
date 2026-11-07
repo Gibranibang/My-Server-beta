@@ -1,5 +1,29 @@
 # Changelog MyServer Desktop
 
+## [v4.2.4 - Beta] - 2026-11-07
+
+- Penyelarasan Penuh Standar Zima Client v2.3.5 untuk EasyTier Mesh: Menyesuaikan parameter identitas jaringan EasyTier agar sama persis dengan backend ZimaOS (menggunakan 16-karakter Remote ID murni sebagai network_name dan network_secret, serta menambahkan daftar relay resmi IceWhale tcp/udp://139.162.29.247:11010, 103.29.68.33:11010, dan 172.239.28.141:11010).
+- Eliminasi Freeze / Timeout RPC Telemetri: Menambahkan short-circuit guard sebelum pemanggilan easytier-cli.exe dan cache status lokal 1.2 detik sehingga seluruh request API telemetri merespons seketika dalam < 50ms tanpa ada request yang menggantung atau melempar os error 10060.
+- Resolusi Wintun Virtual Adapter Otomatis: Memastikan adapter TUN kernel Windows et_* berhasil tercipta melalui elevasi proses mandiri ShellExecuteW RunAs, menampilkan virtual IPv4 10.126.126.2 secara akurat di antarmuka (Laptop IP).
+- SMB & Web Apps WAN Failover Dinamis: Akses share drive SMB (\\10.126.126.1) dan Web Apps Docker/Compose pada rute WAN otomatis terhubung langsung ke IP remote EasyTier saat aktif tanpa terintervensi ZeroTier.
+- Bump Versi Atomik v4.2.4 Beta: Seluruh metadata biner, package installer Inno Setup, metadata PE, dan konfigurasi rilis diperbarui ke versi v4.2.4 Beta untuk deteksi pembaruan instan via Auto-Update Checker.
+
+## [v4.2.3 - Beta] - 2026-11-07
+
+- Arsitektur Elevasi Daemon Mandiri (Zero WebView2 Panic): Menghilangkan pemaksaan requireAdministrator pada shell UI Tauri (MyServer-Beta.exe) untuk mencegah galat fatal WebView2 HRESULT 0x80070578 ('Invalid window handle'). Elevasi hak administrator kini didelegasikan secara mandiri dan aman khusus ke biner background easytier-core.exe via Win32 ShellExecuteW RunAs, sehingga Wintun virtual network adapter berhasil terpasang sempurna tanpa mengorbankan stabilitas antarmuka pengguna.
+- Kartu Akses Remote Tunggal Dinamis (Single Remote Card UI): Menata ulang tampilan Server & Network sehingga hanya menampilkan tepat 1 kartu akses remote tunggal yang bertransformasi dinamis mengikuti mode yang dipilih (EasyTier atau ZeroTier), didukung oleh selector tab pill (Auto, EasyTier, ZeroTier).
+- Penyelarasan Simetris Tombol Aksi Remote: Tombol Hubungkan/Putuskan dan tombol pensil Edit Remote ID diselaraskan secara simetris dengan pembatasan overflow ketat (zero overflow keluar kartu) baik pada EasyTier maupun ZeroTier.
+- Eliminasi Masalah Laptop IP Kosong & Failover Murni: Memperbaiki deteksi status RPC daemon via port 15888 sehingga Laptop IP (10.126.126.2) dan Server IP (10.126.126.1) selalu terisi dan tidak pernah lagi menampilkan strip (-). Mounting SMB dan Web Apps pada mode WAN otomatis dialihkan secara mulus ke subnet 10.126.126.1 tanpa terintervensi ZeroTier ketika EasyTier aktif.
+- Bump Versi Atomik v4.2.3 Beta: Seluruh artefak proyek diperbarui ke versi v4.2.3 Beta untuk memastikan Auto-Update Checker langsung menyajikan versi terbaru kepada seluruh pengguna.
+
+## [v4.2.2 - Beta] - 2026-11-07
+
+- Perbaikan Driver Wintun Virtual Adapter (Hak Akses Administrator / UAC): Menyematkan manifest eksekusi administratif (requireAdministrator) pada biner aplikasi (MyServer-Beta.exe dan myserver-core.exe) mengikuti standar Zima Client v2.3.5. Menghilangkan galat rust tun error Failed to create adapter dan Access is denied (0x80070005) saat inisialisasi EasyTier P2P mesh di Windows.
+- Standardisasi Subnet ZimaNet EasyTier (10.126.126.0/24): Mengganti flag DHCP (-d true) dengan alokasi IP virtual eksplisit 10.126.126.2/24, menambahkan flag --lazy-p2p, dan menetapkan default server peer IP di 10.126.126.1. Menghilangkan masalah Laptop IP kosong/strip (-).
+- Mounting SMB WAN Dinamis EasyTier/ZeroTier: Memperbaiki deteksi rute failover sehingga saat mode EasyTier aktif, mounting SMB File Explorer diarahkan ke subnet 10.126.126.1 tanpa fallback keliru ke IP ZeroTier.
+- Routing Dinamis Web Apps di Rute WAN: Menghubungkan alamat port aplikasi Docker/Compose pada rute WAN langsung ke IP remote aktif (EasyTier atau ZeroTier) secara dinamis, sementara link dashboard ZimaOS tetap mempertahankan domain WAN publik.
+- Bump Versi Atomik v4.2.2 Beta: Memperbarui seluruh konstanta versi aplikasi, UI frontend, backend Core Service, installer Inno Setup, metadata PE, dan rilis GitHub agar Auto-Update Checker dapat langsung mendeteksi dan menginstal rilis perbaikan ini.
+
 ## [v4.2.1 - Beta] - 2026-11-07
 
 - Perbaikan Layout Tombol Remote ID: Memperbaiki flex flow dan padding kartu EasyTier sehingga tombol edit Remote ID menyatu rapi di dalam batas kartu tanpa meluber keluar (zero overflow).

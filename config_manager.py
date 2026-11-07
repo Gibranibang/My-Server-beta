@@ -988,7 +988,18 @@ def get_dynamic_remote_info(server, config=None):
         return None
 
     # 3. Mode AUTO FAILOVER (Default: EasyTier Utama -> ZeroTier Cadangan)
+    # EasyTier hanya dipromosikan jika daemon aktif DAN server peer terhubung / dapat dijangkau
+    et_healthy = False
     if et_running:
+        try:
+            import easytier_manager
+            mgr = easytier_manager.get_easytier_manager()
+            target_check_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
+            et_healthy = mgr.is_peer_reachable(target_check_ip, timeout=0.25)
+        except Exception:
+            et_healthy = False
+
+    if et_running and et_healthy:
         final_et_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
         return {
             "engine": "easytier",
@@ -998,7 +1009,7 @@ def get_dynamic_remote_info(server, config=None):
             "badge": "P2P"
         }
 
-    # Fallback ke ZeroTier jika EasyTier tidak aktif
+    # Fallback OTOMATIS ke ZeroTier jika EasyTier tidak aktif atau server peer EasyTier tidak merespons
     if srv_zt_vip:
         return {
             "engine": "zerotier",
@@ -1006,6 +1017,17 @@ def get_dynamic_remote_info(server, config=None):
             "ip": srv_zt_vip,
             "url": f"http://{srv_zt_vip}",
             "badge": "Fallback" if et_running else "P2P"
+        }
+
+    # Jika ZeroTier juga tidak ada, tetap kembalikan EasyTier jika daemon aktif
+    if et_running:
+        final_et_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
+        return {
+            "engine": "easytier",
+            "name": "EasyTier Remote (P2P)",
+            "ip": final_et_ip,
+            "url": f"http://{final_et_ip}",
+            "badge": "P2P"
         }
 
     return None

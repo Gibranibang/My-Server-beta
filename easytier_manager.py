@@ -459,8 +459,24 @@ class EasyTierManager:
                     clean = str(ipv4).split("/")[0].strip()
                     if clean and clean != local_ip and not clean.startswith("127."):
                         return clean
-        # Fallback ke default IP ZimaOS di EasyTier / ZimaNet jika peer belum selesai negosiasi
-        return "10.126.126.1"
+        # Jika tidak ada peer aktif di routes atau peers, jangan buat IP fiktif
+        return None
+
+    def is_peer_reachable(self, target_ip=None, timeout=0.25):
+        """Memeriksa apakah peer server EasyTier benar-benar merespons jaringan."""
+        if not self.is_running():
+            return False
+        peer_ip = target_ip or self.get_peer_ip()
+        if not peer_ip:
+            # Uji apakah 10.126.126.1 merespons jika peer_ip belum terisi
+            peer_ip = "10.126.126.1"
+        for port in (80, 445):
+            try:
+                with socket.create_connection((peer_ip, port), timeout=timeout):
+                    return True
+            except Exception:
+                continue
+        return False
 
     def get_summary(self):
         """Mengambil ringkasan telemetri komprehensif untuk antarmuka UI dengan short caching 1.2s."""

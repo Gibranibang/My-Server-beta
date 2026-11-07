@@ -345,6 +345,24 @@ def resolve_smb_host(target_host, server_connections=None, is_domain_route=None,
     if is_domain_route is None:
         is_domain_route = _is_domain_or_wan_host(clean_h)
 
+    # Kumpulkan seluruh kandidat remote P2P (EasyTier & ZeroTier) untuk failover tangguh
+    remote_candidates = []
+    if clean_zt:
+        remote_candidates.append(clean_zt)
+    try:
+        import config_manager
+        cfg = config_manager.load_or_create_config()
+        active_srv = config_manager.get_active_server(cfg)
+        if active_srv:
+            zt_vip = (active_srv.get("zerotier_virtual_ip") or "").strip()
+            et_vip = (active_srv.get("easytier_virtual_ip") or "").strip()
+            if zt_vip and zt_vip not in remote_candidates:
+                remote_candidates.append(zt_vip)
+            if et_vip and et_vip not in remote_candidates:
+                remote_candidates.append(et_vip)
+    except Exception:
+        pass
+
     # Kumpulkan kandidat LAN dari koneksi server untuk fallback
     lan_candidates = []
     if server_connections and isinstance(server_connections, list):
@@ -357,33 +375,38 @@ def resolve_smb_host(target_host, server_connections=None, is_domain_route=None,
                 try:
                     ip_obj = ipaddress.ip_address(h_cand)
                     import zerotier_manager
-                    is_zt = (h_cand == clean_zt) or zerotier_manager.is_zerotier_ip(h_cand)
+                    is_zt = (h_cand in remote_candidates) or zerotier_manager.is_zerotier_ip(h_cand) or h_cand.startswith("10.126.126.")
                     if ip_obj.is_private and not is_zt:
                         lan_candidates.append(h_cand)
                 except Exception:
                     pass
 
-    # A. KONDISI 1: RUTE DOMAIN / WAN AKTIF (Dukungan SMB over Remote P2P EasyTier/ZeroTier Dinamis)
+    # A. KONDISI 1: RUTE DOMAIN / WAN AKTIF (Dukungan SMB over Remote P2P EasyTier/ZeroTier Dinamis & Auto-Failover)
     if is_domain_route:
-        # Cek apakah rute P2P (EasyTier atau ZeroTier) aktif dan sehat (port 445 responsif)
-        if clean_zt and is_port_open(clean_zt, 445, timeout=1.2):
-            if _cached_resolved_smb_host.get("resolved") != clean_zt:
-                logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif & Remote P2P sehat -> Mengarahkan SMB ke ({clean_zt}:445)")
-                _cached_resolved_smb_host = {"target": clean_h, "resolved": clean_zt, "ts": time.time()}
-            return clean_zt
-        # Jika ZeroTier/EasyTier probe awal masih negosiasi, gunakan clean_zt langsung karena port 445 publik WAN pasti diblokir ISP
-        if clean_zt:
-            if _cached_resolved_smb_host.get("resolved") != clean_zt:
-                logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif -> Mengarahkan SMB ke Remote P2P ({clean_zt})")
-                _cached_resolved_smb_host = {"target": clean_h, "resolved": clean_zt, "ts": time.time()}
-            return clean_zt
-        # Jika tidak ada remote IP, cek apakah ada rute LAN lokal yang kebetulan satu jaringan
+        # Cek apakah ada rute Remote P2P (EasyTier atau ZeroTier) yang aktif dan sehat (port 445 responsif)
+        for rem_ip in remote_candidates:
+            if is_port_open(rem_ip, 445, timeout=1.2):
+                if _cached_resolved_smb_host.get("resolved") != rem_ip:
+                    logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif & Remote P2P sehat -> Mengarahkan SMB ke ({rem_ip}:445)")
+                    _cached_resolved_smb_host = {"target": clean_h, "resolved": rem_ip, "ts": time.time()}
+                return rem_ip
+
+        # Jika probe port 445 belum responsif, cek apakah ada rute LAN lokal yang kebetulan satu jaringan
         for cand in lan_candidates:
             if is_port_open(cand, 445, timeout=0.6):
                 if _cached_resolved_smb_host.get("resolved") != cand:
                     logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif namun IP LAN ({cand}:445) terdeteksi lokal -> Menggunakan SMB LAN")
                     _cached_resolved_smb_host = {"target": clean_h, "resolved": cand, "ts": time.time()}
                 return cand
+
+        # Jika seluruh port 445 belum terhubung, fallback ke kandidat remote pertama yang valid
+        if remote_candidates:
+            first_rem = remote_candidates[0]
+            if _cached_resolved_smb_host.get("resolved") != first_rem:
+                logger_manager.log_info(f"[SMB Host Resolver] Rute Domain aktif -> Fallback ke Remote P2P ({first_rem})")
+                _cached_resolved_smb_host = {"target": clean_h, "resolved": first_rem, "ts": time.time()}
+            return first_rem
+
         logger_manager.log_warning(
             f"[SMB Host Resolver] Rute Domain aktif namun tidak ada jalur SMB (Remote P2P/LAN) yang aktif. Melewati koneksi port 445 publik."
         )

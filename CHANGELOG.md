@@ -1,5 +1,13 @@
 # Changelog MyServer Desktop
 
+## [v4.2.5 - Beta] - 2026-11-07
+
+- Perbaikan Klasifikasi Tipe Rute Remote (Eliminasi Salah Deteksi LAN): Memperbaiki helper `classifyRoute` di `HomeView.tsx` agar memprioritaskan deteksi rute Remote P2P (`EasyTier` dan `ZeroTier`, subnet `10.126.126.x`, `172.24.x`, `172.25.x`) sebelum evaluasi subnet LAN, menghilangkan tuntas bug di mana rute EasyTier sebelumnya salah dilabeli sebagai `LAN (EasyTier Remote (P2P))` dengan ikon network.
+- Auto-Failover Tangguh EasyTier -> ZeroTier: Memperbaiki logika deteksi kesehatan EasyTier di `config_manager.py` dan `easytier_manager.py`. Sistem kini memverifikasi apakah server peer EasyTier benar-benar terhubung dan responsif. Jika EasyTier daemon berjalan namun server peer tidak merespons (misal server belum online di EasyTier mesh atau relay terblokir), mode Auto secara cerdas dan otomatis langsung mengalihkan rute remote ke ZeroTier (`172.24.0.1` / `172.25.0.1`).
+- Resolusi Dinamis SMB WAN Multi-Kandidat: Memperbarui `smb_mount_manager.py` agar mengumpulkan seluruh kandidat IP remote (EasyTier & ZeroTier) dan menguji port 445 SMB. Ketika EasyTier tidak merespons, pemasangan share drive SMB pada rute WAN otomatis langsung beralih ke IP ZeroTier yang sehat, memastikan seluruh drive disk Windows File Explorer berhasil terpasang sempurna tanpa error.
+- Web Apps WAN Failover Otomatis: Tautan aplikasi Docker/Compose pada rute WAN kini secara otomatis diarahkan ke IP remote yang benar-benar aktif dan dapat dijangkau (ZeroTier saat EasyTier tidak merespons).
+- Bump Versi Atomik v4.2.5 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
 ## [v4.2.4 - Beta] - 2026-11-07
 
 - Penyelarasan Penuh Standar Zima Client v2.3.5 untuk EasyTier Mesh: Menyesuaikan parameter identitas jaringan EasyTier agar sama persis dengan backend ZimaOS (menggunakan 16-karakter Remote ID murni sebagai network_name dan network_secret, serta menambahkan daftar relay resmi IceWhale tcp/udp://139.162.29.247:11010, 103.29.68.33:11010, dan 172.239.28.141:11010).

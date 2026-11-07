@@ -156,14 +156,34 @@ export default function HomeView({ go }: ViewProps) {
   }, [api, isOnline])
 
   // Helper klasifikasi rute ringkas & ikon: LAN, Remote, WAN
-  const classifyRoute = (r?: { name?: string; url?: string; isZeroTier?: boolean }) => {
+  const classifyRoute = (r?: { name?: string; url?: string; isZeroTier?: boolean; isEasyTier?: boolean; isRemoteDynamic?: boolean }) => {
     const name = (r?.name || "").toLowerCase()
     const url = (r?.url || "").toLowerCase()
-    const isZt = Boolean(r?.isZeroTier) || url.includes("172.24.") || url.includes("10.147.") || name.includes("zerotier")
-    if (isZt) {
+    // Prioritaskan klasifikasi Remote (ZeroTier / EasyTier / Virtual P2P) terlebih dahulu
+    const isRemote =
+      Boolean(r?.isZeroTier) ||
+      Boolean(r?.isEasyTier) ||
+      Boolean(r?.isRemoteDynamic) ||
+      url.includes("172.24.") ||
+      url.includes("172.25.") ||
+      url.includes("10.147.") ||
+      url.includes("10.126.126.") ||
+      name.includes("remote") ||
+      name.includes("zerotier") ||
+      name.includes("easytier") ||
+      name.includes("p2p")
+    if (isRemote) {
       return { type: "Remote" as const, label: "Remote", icon: Wifi, descKey: "route_remote_desc" }
     }
-    const isLan = url.includes("192.168.") || url.includes("10.") || url.includes(".local") || url.includes("127.0.0.1") || url.includes("localhost") || /172\.(1[6-9]|2[0-9]|3[0-1])\./.test(url) || name.includes("lan") || name.includes("lokal")
+    const isLan =
+      url.includes("192.168.") ||
+      (url.includes("10.") && !url.includes("10.126.126.")) ||
+      url.includes(".local") ||
+      url.includes("127.0.0.1") ||
+      url.includes("localhost") ||
+      /172\.(1[6-9]|2[0-9]|3[0-1])\./.test(url) ||
+      name.includes("lan") ||
+      name.includes("lokal")
     if (isLan) {
       return { type: "LAN" as const, label: "LAN", icon: Network, descKey: "route_lan_desc" }
     }

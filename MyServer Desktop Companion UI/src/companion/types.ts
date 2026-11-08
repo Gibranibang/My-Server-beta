@@ -1,4 +1,24 @@
-export type ViewId = "home" | "files" | "backup" | "apps" | "settings" | "power" | "server"
+export type ViewId = "home" | "files" | "backup" | "apps" | "settings" | "power" | "server" | "vm"
+
+export interface VirtualMachine {
+  id: string
+  name: string
+  provider: "instabox" | "custom"
+  status: "running" | "sleeping" | "cooldown" | "stopped"
+  ip: string
+  sshPort: number
+  specs: {
+    cpu: string
+    ram: string
+    storage: string
+  }
+  runtimeMinutes: number // minutes running today
+  maxRuntimeMinutes: number // 480 min (8 hours)
+  idleTimeoutMinutes: number // 30 min
+  cooldownRemainingMinutes?: number
+  antigravityPort?: number
+  lastActive?: string
+}
 
 export type PowerState = "online" | "rebooting" | "offline" | "waking"
 

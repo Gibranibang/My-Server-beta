@@ -386,7 +386,12 @@ import zima_metrics_manager
 
 
 
-APP_VERSION_NUMBER = "4.3.2"
+try:
+    import instabox_manager
+except ImportError:
+    instabox_manager = None
+
+APP_VERSION_NUMBER = "4.4.0"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -21114,6 +21119,22 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json(mgr.get_status_overview())
             else:
                 self._send_json({"running": False, "error": "easytier_manager not available"})
+        elif path == "/api/instabox/vms":
+            if instabox_manager:
+                vms = instabox_manager.InstaBoxManager.list_vms()
+                self._send_json({"status": "ok", "vms": vms})
+            else:
+                self._send_json({"status": "error", "message": "instabox_manager not available"}, status=500)
+        elif path == "/api/instabox/status":
+            vm_id = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("id", [""])[0]
+            if instabox_manager and vm_id:
+                res = instabox_manager.InstaBoxManager.sync_vm_status(vm_id)
+                self._send_json(res)
+            elif instabox_manager:
+                vms = instabox_manager.InstaBoxManager.list_vms()
+                self._send_json({"status": "ok", "vms": vms})
+            else:
+                self._send_json({"status": "error", "message": "instabox_manager not available"}, status=500)
         elif path in ("/api/remote/status", "/api/remote_status"):
             et_status = easytier_manager.get_easytier_manager().get_status_overview() if easytier_manager else {"running": False}
             zt_client = zerotier_manager.ZeroTierClient() if "zerotier_manager" in globals() else None
@@ -28006,6 +28027,70 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 path = "/api/easytier/stop"
             elif ep in ("remote/status", "remote_status"):
                 path = "/api/remote/status"
+
+        # --- Endpoints InstaBox & Antigravity Remote (v4.4.0 Beta) ---
+        if path == "/api/instabox/vms/add":
+            if instabox_manager:
+                new_vm = instabox_manager.InstaBoxManager.add_vm(body)
+                self._send_json({"status": "ok", "vm": new_vm})
+            else:
+                self._send_json({"status": "error", "message": "instabox_manager not available"}, status=500)
+            return
+
+        if path == "/api/instabox/vms/update":
+            vm_id = body.get("id")
+            if instabox_manager and vm_id:
+                upd_vm = instabox_manager.InstaBoxManager.update_vm(vm_id, body)
+                self._send_json({"status": "ok", "vm": upd_vm})
+            else:
+                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+            return
+
+        if path == "/api/instabox/vms/delete":
+            vm_id = body.get("id")
+            if instabox_manager and vm_id:
+                ok = instabox_manager.InstaBoxManager.delete_vm(vm_id)
+                self._send_json({"status": "ok", "success": ok})
+            else:
+                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+            return
+
+        if path == "/api/instabox/wake":
+            vm_id = body.get("id")
+            if instabox_manager and vm_id:
+                res = instabox_manager.InstaBoxManager.resume_vm(vm_id)
+                self._send_json(res)
+            else:
+                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+            return
+
+        if path == "/api/instabox/pause":
+            vm_id = body.get("id")
+            if instabox_manager and vm_id:
+                res = instabox_manager.InstaBoxManager.pause_vm(vm_id)
+                self._send_json(res)
+            else:
+                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+            return
+
+        if path == "/api/instabox/preflight_launch":
+            vm_id = body.get("id")
+            target_port = body.get("target_port") or body.get("port") or 8080
+            if instabox_manager and vm_id:
+                res = instabox_manager.InstaBoxManager.preflight_launch(vm_id, target_port=target_port)
+                self._send_json(res)
+            else:
+                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+            return
+
+        if path == "/api/instabox/smart_reset":
+            vm_id = body.get("id")
+            if instabox_manager and vm_id:
+                res = instabox_manager.InstaBoxManager.smart_anti_cooldown_reset(vm_id)
+                self._send_json(res)
+            else:
+                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+            return
 
         # --- Endpoints EasyTier & Remote Mesh Network ---
         if path in ("/api/easytier/status", "/api/easytier_status"):

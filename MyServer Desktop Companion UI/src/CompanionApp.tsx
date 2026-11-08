@@ -7,7 +7,7 @@ export default function CompanionApp() {
   const [view, setView] = useState<ViewId>(() => {
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search).get("view") as ViewId
-      if (p && ["home", "files", "backup", "apps", "settings", "server", "power"].includes(p)) {
+      if (p && ["home", "files", "backup", "apps", "settings", "server", "power", "vm"].includes(p)) {
         return p
       }
     }

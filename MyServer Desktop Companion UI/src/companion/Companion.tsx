@@ -22,6 +22,7 @@ import HomeView from "./views/HomeView"
 import PowerView from "./views/PowerView"
 import SettingsView from "./views/SettingsView"
 import ServerView from "./views/ServerView"
+import VmManagerView from "./views/VmManagerView"
 import type { ViewProps } from "./views/shared"
 import { getCompanionApi } from "./api"
 
@@ -83,6 +84,7 @@ const VIEWS: Record<ViewId, ComponentType<ViewProps>> = {
   settings: SettingsView,
   power: PowerView,
   server: ServerView,
+  vm: VmManagerView,
 }
 
 function getViewHeader(view: Exclude<ViewId, "home">, t: (k: string, f?: string) => string) {
@@ -116,6 +118,11 @@ function getViewHeader(view: Exclude<ViewId, "home">, t: (k: string, f?: string)
       return {
         title: t("view_server_title", "Server & Network"),
         subtitle: t("view_server_sub", "Access Routes · Accounts · Remote"),
+      }
+    case "vm":
+      return {
+        title: t("view_vm_title", "VM Manager"),
+        subtitle: t("view_vm_sub", "InstaBox & Antigravity Remote"),
       }
   }
 }

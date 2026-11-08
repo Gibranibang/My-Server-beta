@@ -460,7 +460,16 @@ export function createMockApi(): CompanionApi {
 
   let drives = MOCK_DRIVES
 
-  let settings = DEFAULT_SETTINGS
+  let settings = { ...DEFAULT_SETTINGS }
+  if (typeof window !== "undefined") {
+    const p = new URLSearchParams(window.location.search)
+    if (p.get("theme") === "light" || p.get("theme") === "dark") {
+      settings.theme = p.get("theme") as "light" | "dark"
+    }
+    if (p.get("lang") === "id" || p.get("lang") === "en") {
+      settings.language = p.get("lang") as "id" | "en"
+    }
+  }
 
   let syncRequests = 1
 

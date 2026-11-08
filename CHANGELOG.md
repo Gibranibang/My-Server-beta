@@ -1,5 +1,21 @@
 # Changelog MyServer Desktop
 
+## [v4.4.0 - Beta] - 2026-11-08
+
+- Integrasi Sub-sistem Virtual Machine (VM Manager) & Antigravity Remote:
+  - Menambahkan kartu menu ke-5 'VM Manager' pada Home View dengan navigasi scroll vertikal mulus (tanpa layout shift pada header atau footer).
+  - Tampilan dinamis 1:1 sesuai desain SVG asli pengguna (`VM Manager Card.svg` & `VM Manager Card (offline).svg`).
+  - Tampilan adaptif cerdas: Mode Kartu Tunggal (Single Card) jika terhubung 1 VM, dan Mode Accordion jika terhubung 2 atau lebih VM.
+  - Fitur lengkap: Spesifikasi hardware (CPU, RAM, NVMe), pelacak batas waktu nyala continuous (maksimal 8 jam), indikator idle auto-sleep (30 menit), peluncur pre-flight otomatis ("Buka Antigravity Remote" dengan wake otomatis sebelum akses webapp), toggle kontrol daya tidur/bangun VM, dan shortcut terminal SSH.
+  - Dialog modal konfirmasi penghapusan VM dengan proteksi peringatan risiko serta dialog formulir tambah/edit VM yang terintegrasi penuh.
+  - Konsistensi penuh lintas tema Dark/Light, koneksi Online/Offline, dan bahasa ID/EN.
+- Integrasi Backend Core Service & InstaBox Manager (`instabox_manager.py`):
+  - Modul independen REST API v1 (`https://api.instabox.sh/v1`) dengan penanganan idempotency key, token otorisasi Bearer, sinkronisasi status mesin, kontrol status tidur/bangun, serta Smart Anti-Cooldown Guard (pencegahan cooldown wajib melalui reset runtime).
+  - Endpoint backend baru: `/api/instabox/vms`, `/api/instabox/status`, `/api/instabox/wake`, `/api/instabox/pause`, `/api/instabox/preflight_launch`, `/api/instabox/smart_reset`.
+- Perbaikan Mutlak Biner Font Doto Lokal:
+  - Mengarahkan deklarasi `@font-face` di `index.css` langsung ke TrueType biner valid `Doto-Black.ttf` dengan `font-display: block`, mengeliminasi galat decode font gzipped lokal dan memastikan seluruh tampilan LCD footer dan badge dock tampil dengan font dot-matrix asli tanpa fallback serif.
+- Bump Versi Atomik v4.4.0 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
+
 ## [v4.3.2 - Beta] - 2026-11-08
 
 - Penyelarasan Presisi Chip Footer Mode OFFLINE (1:1 Acuan footer.relative (offline).svg):

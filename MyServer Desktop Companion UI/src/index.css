@@ -17,22 +17,20 @@
 
 @font-face {
   font-family: 'Doto';
-  src: url('./fonts/Doto_ROND.woff2') format('woff2'),
-       url('./fonts/Doto-Black.woff2') format('woff2'),
-       url('./fonts/Doto-Black.ttf') format('truetype');
+  src: url('./fonts/Doto-Black.ttf') format('truetype'),
+       url('./fonts/Doto-Black.woff2') format('woff2');
   font-style: normal;
   font-weight: 100 900;
-  font-display: swap;
+  font-display: block;
 }
 
 @font-face {
   font-family: 'Doto:Black';
-  src: url('./fonts/Doto_ROND.woff2') format('woff2'),
-       url('./fonts/Doto-Black.woff2') format('woff2'),
-       url('https://static.figma.com/font/Doto_ROND_wght__1') format('woff2');
+  src: url('./fonts/Doto-Black.ttf') format('truetype'),
+       url('./fonts/Doto-Black.woff2') format('woff2');
   font-style: normal;
   font-weight: 900;
-  font-display: swap;
+  font-display: block;
 }
 
 @font-face {

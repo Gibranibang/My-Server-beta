@@ -1,3 +1,12 @@
+[v4.4.0 - Beta] - 2026-11-08
+- Integrasi Sub-sistem Virtual Machine (VM Manager) & Antigravity Remote:
+  - Penambahan kartu ke-5 VM Manager pada Home View dengan scroll vertikal mulus.
+  - Mode adaptif 1 VM (Card Mode) dan 2+ VM (Accordion Mode) dengan tombol tambah, edit, dan modal konfirmasi hapus.
+  - Fitur spesifikasi hardware, tracker batas 8 jam, idle auto-sleep 30m, pre-flight launch Antigravity Remote, dan terminal SSH.
+- Integrasi Backend Core Service & InstaBox Manager (instabox_manager.py) dengan REST API v1 dan Smart Anti-Cooldown Guard.
+- Perbaikan tuntas biner font lokal Doto di index.css agar selalu merender dot-matrix asli pada seluruh tampilan LCD footer dan dock.
+- Bump Versi Atomik v4.4.0 Beta lintas frontend, backend, installer, dan tauri.
+
 [v4.3.2 - Beta] - 2026-11-08
 - Penyelarasan Presisi Chip Footer Mode OFFLINE (1:1 Acuan footer.relative (offline).svg):
   - Mengubah styling tombol rute jaringan (LAN/WAN) dan tombol akun pengguna (Account/User) saat server offline agar selaras 100% dengan desain footer.relative (offline).svg.

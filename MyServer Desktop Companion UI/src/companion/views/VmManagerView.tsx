@@ -602,6 +602,87 @@ export default function VmManagerView({ go }: ViewProps) {
       notify(`Siklus selesai! Limit 8 jam ${vm.name} berhasil di-reset ke 0.`, "success")
     }, 2500)
   }
+  // Active Auto-Restart Scheduler Worker Loop
+  useEffect(() => {
+    const checkSchedules = () => {
+      const now = Date.now()
+      const nowDate = new Date()
+      const currentHours = String(nowDate.getHours()).padStart(2, "0")
+      const currentMins = String(nowDate.getMinutes()).padStart(2, "0")
+      const currentTimeStr = `${currentHours}:${currentMins}`
+
+      vmsRef.current.forEach((vm) => {
+        if (!vm.autoRestart?.enabled) return
+
+        let shouldTrigger = false
+
+        if (vm.autoRestart.mode === "interval") {
+          const val = vm.autoRestart.intervalValue || 6
+          const unit = vm.autoRestart.intervalUnit || "hours"
+          const multiplierMs = unit === "seconds" ? 1000 : unit === "minutes" ? 60 * 1000 : 3600 * 1000
+          const intervalMs = val * multiplierMs
+          const lastRun = vm.autoRestart.lastRunTimestamp || now
+
+          if (!vm.autoRestart.lastRunTimestamp) {
+            setVms((prev) =>
+              prev.map((item) =>
+                item.id === vm.id
+                  ? {
+                      ...item,
+                      autoRestart: {
+                        ...item.autoRestart!,
+                        lastRunTimestamp: now,
+                      },
+                    }
+                  : item
+              )
+            )
+            return
+          }
+
+          if (now - lastRun >= intervalMs) {
+            shouldTrigger = true
+          }
+        } else if (vm.autoRestart.mode === "clock") {
+          const targetTime = vm.autoRestart.clockTime || "04:00"
+          if (currentTimeStr === targetTime) {
+            const lastRun = vm.autoRestart.lastRunTimestamp || 0
+            if (now - lastRun > 65000) {
+              shouldTrigger = true
+            }
+          }
+        }
+
+        if (shouldTrigger) {
+          const timestampStr = nowDate.toLocaleTimeString()
+          setVms((prev) =>
+            prev.map((item) =>
+              item.id === vm.id
+                ? {
+                    ...item,
+                    autoRestart: {
+                      ...item.autoRestart!,
+                      lastRunTimestamp: now,
+                      lastExecuted: timestampStr,
+                    },
+                  }
+                : item
+            )
+          )
+          notify(`[Auto-Restart] Menjalankan jadwal otomatis untuk ${vm.name} (${timestampStr})`, "info")
+          if (vm.provider === "instabox") {
+            handleImmediateResetCycle(vm)
+          } else {
+            handleTogglePower(vm)
+          }
+        }
+      })
+    }
+
+    const schedTimer = setInterval(checkSchedules, 5000)
+    return () => clearInterval(schedTimer)
+  }, [])
+
 
   const isSingle = vms.length === 1
   const isMultiple = vms.length > 1

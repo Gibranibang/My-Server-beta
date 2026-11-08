@@ -8,6 +8,7 @@ export interface VmAutoRestartSchedule {
   clockTime?: string // "HH:MM" e.g. "04:00"
   resetCycleMode?: "pause_resume" | "cold_restart"
   lastExecuted?: string
+  lastRunTimestamp?: number
 }
 
 export interface VmTelemetry {

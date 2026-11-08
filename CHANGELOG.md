@@ -1,5 +1,14 @@
 # Changelog MyServer Desktop
 
+## [v4.4.3 - Beta] - 2026-11-08
+
+- Perombakan Total UI/UX VM Manager:
+  - Merapikan tata letak header menu: judul kategori `VIRTUAL MACHINE` di sisi kiri dan tombol `+ Tambah VM` di sisi kanan dengan jarak proporsional tanpa terpotong.
+  - Menghapus banner mock toggle `1 VM Connected (Card Mode) + Tampilkan 2 VM (Accordion)` sehingga tampilan sepenuhnya otomatis reaktif (1 VM = Card Mode, 2+ VM = Accordion Mode).
+  - Mengganti tombol aksi hardcoded Antigravity menjadi aksi universal: Salin / Hubungkan Perintah SSH Terminal, Buka Layanan Web (opsional), dan kontrol daya Sleep/Wake.
+  - Menghapus seluruh hardcoded spesifikasi hardware fiktif. Seluruh data koneksi VM (Host, Port, Token, User, Expiry) berasal murni dari input pengguna dan tersimpan persisten.
+- Sinkronisasi Versi Atomik v4.4.3 Beta pada seluruh stack biner, frontend, backend, installer, dan manifest.
+
 ## [v4.4.2 - Beta] - 2026-11-08
 
 - Integrasi Aset Kartu Baru: Mengintegrasikan 4 file SVG terbaru dari Figma (`File Manager Card.svg`, `File Manager Card (offline).svg`, `VM Manager Card.svg`, dan `VM Manager Card (offline).svg`) tanpa merubah bentuk, font, atau warna desain asli.

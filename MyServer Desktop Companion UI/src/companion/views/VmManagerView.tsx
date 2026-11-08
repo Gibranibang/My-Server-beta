@@ -1,15 +1,15 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   AlertTriangle,
   Check,
   ChevronDown,
   ChevronUp,
   Clock,
-  Cpu,
+  Copy,
   ExternalLink,
+  Globe,
   HardDrive,
-  LoaderCircle,
-  MemoryStick,
+  Key,
   Pencil,
   Plus,
   Power,
@@ -17,7 +17,6 @@ import {
   Terminal,
   Trash2,
   X,
-  Zap,
 } from "lucide-react"
 import { getTranslation } from "../i18n"
 import { useCompanion, useNotice } from "../store"
@@ -25,72 +24,86 @@ import { Button, Card, Chip, IconBadge, Mono, StatusDot, cx } from "../ui"
 import { ViewBody, type ViewProps } from "./shared"
 import type { VirtualMachine } from "../types"
 
-const DEFAULT_VMS: VirtualMachine[] = [
+const INITIAL_VMS: VirtualMachine[] = [
   {
-    id: "vm-instabox-primary",
-    name: "InstaBox Dev Server",
+    id: "vm-algitha-instabox",
+    name: "Algitha-VM",
     provider: "instabox",
     status: "running",
-    ip: "159.223.45.110",
+    sshHost: "ssh.instabox.sh",
+    sshUser: "ibssh_s3hsj4qxhbpc43a5xishpolliq",
     sshPort: 2222,
-    specs: {
-      cpu: "4 vCPU AMD EPYC",
-      ram: "8 GB DDR5",
-      storage: "20 GB NVMe",
-    },
+    tokenExpiry: "6d",
+    ip: "ssh.instabox.sh",
+    lastActive: "Just now",
     runtimeMinutes: 184, // 3h 04m elapsed out of 480m (8h limit)
     maxRuntimeMinutes: 480,
     idleTimeoutMinutes: 30,
-    antigravityPort: 8080,
-    lastActive: "Just now",
   },
 ]
-
-const SECOND_VM: VirtualMachine = {
-  id: "vm-instabox-worker",
-  name: "InstaBox Build Worker",
-  provider: "instabox",
-  status: "sleeping",
-  ip: "159.223.45.112",
-  sshPort: 2223,
-  specs: {
-    cpu: "4 vCPU AMD EPYC",
-    ram: "8 GB DDR5",
-    storage: "20 GB NVMe",
-  },
-  runtimeMinutes: 310,
-  maxRuntimeMinutes: 480,
-  idleTimeoutMinutes: 30,
-  antigravityPort: 8082,
-  lastActive: "45m ago",
-}
 
 export default function VmManagerView({ go }: ViewProps) {
   const { isOnline, settings } = useCompanion()
   const t = getTranslation(settings?.language)
   const { notify } = useNotice()
 
-  // State: list of VMs
+  // State: list of VMs with localStorage persistence
   const [vms, setVms] = useState<VirtualMachine[]>(() => {
-    // Check if URL query asks for multi mode
     if (typeof window !== "undefined") {
+      // Allow URL parameter for testing/sandbox
       const params = new URLSearchParams(window.location.search)
       if (params.get("vm_mode") === "multi") {
-        return [DEFAULT_VMS[0], SECOND_VM]
+        return [
+          INITIAL_VMS[0],
+          {
+            id: "vm-worker-instabox",
+            name: "Worker-VM",
+            provider: "instabox",
+            status: "sleeping",
+            sshHost: "ssh.instabox.sh",
+            sshUser: "ibssh_k99asdf0092348a0",
+            sshPort: 2222,
+            tokenExpiry: "4d",
+            ip: "ssh.instabox.sh",
+            lastActive: "45m ago",
+            runtimeMinutes: 310,
+            maxRuntimeMinutes: 480,
+            idleTimeoutMinutes: 30,
+          },
+        ]
       }
+      if (params.get("vm_mode") === "empty") {
+        return []
+      }
+      try {
+        const saved = localStorage.getItem("myserver_vms")
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed)) return parsed
+        }
+      } catch {}
     }
-    return [DEFAULT_VMS[0]]
+    return INITIAL_VMS
   })
 
+  // Save to localStorage whenever vms change
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("myserver_vms", JSON.stringify(vms))
+      } catch {}
+    }
+  }, [vms])
+
   // Accordion state (expanded VM id in multi-mode)
-  const [expandedId, setExpandedId] = useState<string | null>(DEFAULT_VMS[0].id)
+  const [expandedId, setExpandedId] = useState<string | null>(vms[0]?.id || null)
 
   // Modals state
   const [vmToDelete, setVmToDelete] = useState<VirtualMachine | null>(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search)
       if (params.get("vm_modal") === "delete") {
-        return DEFAULT_VMS[0]
+        return vms[0] || null
       }
     }
     return null
@@ -100,7 +113,7 @@ export default function VmManagerView({ go }: ViewProps) {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search)
       if (params.get("vm_modal") === "edit") {
-        return DEFAULT_VMS[0]
+        return vms[0] || null
       }
     }
     return null
@@ -115,64 +128,51 @@ export default function VmManagerView({ go }: ViewProps) {
   })
 
   // Form fields
-  const [formName, setFormName] = useState(editingVm?.name || "InstaBox Cloud VM")
-  const [formIp, setFormIp] = useState(editingVm?.ip || "159.223.45.110")
-  const [formSshPort, setFormSshPort] = useState(editingVm?.sshPort || 2222)
-  const [formAgPort, setFormAgPort] = useState(editingVm?.antigravityPort || 8080)
-  const [formCpu, setFormCpu] = useState(editingVm?.specs.cpu || "4 vCPU AMD EPYC")
-  const [formRam, setFormRam] = useState(editingVm?.specs.ram || "8 GB DDR5")
-  const [formStorage, setFormStorage] = useState(editingVm?.specs.storage || "20 GB NVMe")
+  const [formName, setFormName] = useState("")
+  const [formSshHost, setFormSshHost] = useState("ssh.instabox.sh")
+  const [formSshUser, setFormSshUser] = useState("")
+  const [formSshPort, setFormSshPort] = useState<number | string>(2222)
+  const [formTokenExpiry, setFormTokenExpiry] = useState("6d")
+  const [formWebPort, setFormWebPort] = useState<number | string>("")
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
-  // Pre-flight action state
-  const [preflightVmId, setPreflightVmId] = useState<string | null>(null)
-
-  // Toggle demo mode between 1 VM and 2 VMs
-  const toggleDemoMode = () => {
-    if (vms.length === 1) {
-      setVms([vms[0], SECOND_VM])
-      setExpandedId(vms[0].id)
-      notify(t("vm_accordion_mode_label", "Multiple VMs (Accordion Mode)"), "info")
-    } else {
-      setVms([vms[0]])
-      notify(t("vm_card_mode_label", "1 VM Connected (Card Mode)"), "info")
+  // Copy helper
+  const copyToClipboard = async (text: string, label: string, vmId?: string) => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        const textArea = document.createElement("textarea")
+        textArea.value = text
+        document.body.appendChild(textArea)
+        textArea.select()
+        document.execCommand("copy")
+        document.body.removeChild(textArea)
+      }
+      if (vmId) {
+        setCopiedId(vmId)
+        setTimeout(() => setCopiedId(null), 1800)
+      }
+      notify(`${label} disalin ke papan klip!`, "success")
+    } catch {
+      notify(`Gagal menyalin ${label}.`, "danger")
     }
   }
 
-  // Pre-flight wake and launch Antigravity WebApp
-  const handleLaunchAntigravity = (vm: VirtualMachine) => {
-    if (!isOnline) {
-      notify(t("server_offline_warning", "Server is offline. Cannot reach VM."), "danger")
-      return
-    }
-
-    if (vm.status === "cooldown") {
-      notify(t("vm_preflight_cooldown_err", "VM is in cooldown. Please wait before waking."), "warning")
-      return
-    }
-
-    if (vm.status === "sleeping") {
-      setPreflightVmId(vm.id)
-      notify(t("vm_preflight_waking", "Waking VM from sleep..."), "info")
-
-      setTimeout(() => {
-        setVms((prev) =>
-          prev.map((item) =>
-            item.id === vm.id ? { ...item, status: "running" as const } : item
-          )
-        )
-        setPreflightVmId(null)
-        notify(t("vm_preflight_success", "VM is active! Opening Antigravity Remote..."), "success")
-        window.open(`http://${vm.ip}:${vm.antigravityPort || 8080}`, "_blank")
-      }, 1200)
-    } else {
-      notify(t("vm_preflight_success", "Opening Antigravity Remote..."), "success")
-      window.open(`http://${vm.ip}:${vm.antigravityPort || 8080}`, "_blank")
-    }
+  // Generate full SSH command
+  const getSshCommand = (vm: VirtualMachine) => {
+    const port = vm.sshPort || 2222
+    const user = vm.sshUser ? `${vm.sshUser}@` : ""
+    const host = vm.sshHost || vm.ip || "ssh.instabox.sh"
+    return `ssh -p ${port} ${user}${host}`
   }
 
   // Toggle Power (Wake / Sleep)
   const handleTogglePower = (vm: VirtualMachine) => {
-    if (!isOnline) return
+    if (!isOnline) {
+      notify(t("server_offline_warning", "Server sedang offline."), "warning")
+      return
+    }
     const nextStatus = vm.status === "running" ? "sleeping" : "running"
     setVms((prev) =>
       prev.map((item) =>
@@ -181,19 +181,10 @@ export default function VmManagerView({ go }: ViewProps) {
     )
     notify(
       nextStatus === "running"
-        ? t("wake_vm_btn", "VM Woken Up")
-        : t("sleep_vm_btn", "VM Entered Sleep"),
+        ? `${vm.name}: ${t("wake_vm_btn", "VM Dibangunkan")}`
+        : `${vm.name}: ${t("sleep_vm_btn", "VM Masuk Mode Tidur")}`,
       "neutral"
     )
-  }
-
-  // Copy SSH terminal command
-  const handleCopySsh = (vm: VirtualMachine) => {
-    const cmd = `ssh -p ${vm.sshPort} root@${vm.ip}`
-    if (navigator?.clipboard) {
-      navigator.clipboard.writeText(cmd)
-    }
-    notify(`SSH Command copied: ${cmd}`, "info")
   }
 
   // Delete execution
@@ -201,7 +192,7 @@ export default function VmManagerView({ go }: ViewProps) {
     if (!vmToDelete) return
     const targetId = vmToDelete.id
     setVms((prev) => prev.filter((v) => v.id !== targetId))
-    notify(`${vmToDelete.name} deleted`, "neutral")
+    notify(`${vmToDelete.name} berhasil dihapus.`, "neutral")
     setVmToDelete(null)
   }
 
@@ -209,121 +200,156 @@ export default function VmManagerView({ go }: ViewProps) {
   const handleOpenEdit = (vm: VirtualMachine) => {
     setEditingVm(vm)
     setFormName(vm.name)
-    setFormIp(vm.ip)
-    setFormSshPort(vm.sshPort)
-    setFormAgPort(vm.antigravityPort || 8080)
-    setFormCpu(vm.specs.cpu)
-    setFormRam(vm.specs.ram)
-    setFormStorage(vm.specs.storage)
+    setFormSshHost(vm.sshHost || vm.ip || "ssh.instabox.sh")
+    setFormSshUser(vm.sshUser || "")
+    setFormSshPort(vm.sshPort || 2222)
+    setFormTokenExpiry(vm.tokenExpiry || "6d")
+    setFormWebPort(vm.webPort || "")
   }
 
   // Save Add/Edit
   const handleSaveForm = (e: React.FormEvent) => {
     e.preventDefault()
+    const cleanName = formName.trim()
+    if (!cleanName) {
+      notify("Nama Virtual Machine wajib diisi.", "danger")
+      return
+    }
+
     if (editingVm) {
       setVms((prev) =>
         prev.map((item) =>
           item.id === editingVm.id
             ? {
                 ...item,
-                name: formName,
-                ip: formIp,
-                sshPort: Number(formSshPort),
-                antigravityPort: Number(formAgPort),
-                specs: {
-                  cpu: formCpu,
-                  ram: formRam,
-                  storage: formStorage,
-                },
+                name: cleanName,
+                sshHost: formSshHost.trim() || "ssh.instabox.sh",
+                sshUser: formSshUser.trim(),
+                sshPort: Number(formSshPort) || 2222,
+                tokenExpiry: formTokenExpiry.trim(),
+                webPort: formWebPort ? Number(formWebPort) : undefined,
+                ip: formSshHost.trim() || "ssh.instabox.sh",
               }
             : item
         )
       )
-      notify(t("save_btn", "VM Updated"), "success")
+      notify(`${cleanName} berhasil diperbarui!`, "success")
       setEditingVm(null)
     } else {
       const newVm: VirtualMachine = {
         id: `vm-${Date.now()}`,
-        name: formName || "New InstaBox VM",
+        name: cleanName,
         provider: "instabox",
-        status: "sleeping",
-        ip: formIp || "159.223.45.115",
+        status: "running",
+        sshHost: formSshHost.trim() || "ssh.instabox.sh",
+        sshUser: formSshUser.trim(),
         sshPort: Number(formSshPort) || 2222,
-        antigravityPort: Number(formAgPort) || 8080,
-        specs: {
-          cpu: formCpu || "4 vCPU AMD EPYC",
-          ram: formRam || "8 GB DDR5",
-          storage: formStorage || "20 GB NVMe",
-        },
+        tokenExpiry: formTokenExpiry.trim() || "7d",
+        webPort: formWebPort ? Number(formWebPort) : undefined,
+        ip: formSshHost.trim() || "ssh.instabox.sh",
         runtimeMinutes: 0,
         maxRuntimeMinutes: 480,
         idleTimeoutMinutes: 30,
         lastActive: "Just now",
       }
       setVms((prev) => [...prev, newVm])
-      notify(t("add_vm_btn", "VM Added"), "success")
+      setExpandedId(newVm.id)
+      notify(`${cleanName} berhasil ditambahkan!`, "success")
       setIsAddingVm(false)
     }
   }
 
+  // Open Web Service in browser
+  const handleOpenWeb = (vm: VirtualMachine) => {
+    if (!vm.webPort && !vm.webUrl) return
+    const host = vm.sshHost || vm.ip || "localhost"
+    const targetUrl = vm.webUrl || `http://${host}:${vm.webPort}`
+    window.open(targetUrl, "_blank")
+    notify(`Membuka web service ${targetUrl} di browser…`, "info")
+  }
+
   const isSingle = vms.length === 1
+  const isMultiple = vms.length > 1
 
   return (
     <ViewBody>
-      {/* Top Bar: Section Title + Active Count + Add VM Button */}
-      <div className="flex items-center justify-between">
+      {/* ========================================================= */}
+      {/* 1. TOP HEADER: Clean Title (Left) + Add VM Button (Right) */}
+      {/* ========================================================= */}
+      <div className="flex items-center justify-between pl-1">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-body font-bold text-ink truncate">
-            {t("vm_section_title", "InstaBox Virtual Machines")}
+          <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
+            {t("vm_section_title", "VIRTUAL MACHINES")}
           </span>
-          <Chip tone={isOnline ? "success" : "neutral"} size="sm">
-            {vms.filter((v) => v.status === "running").length}/{vms.length}{" "}
-            {t("vm_status_running", "Active")}
-          </Chip>
+          {vms.length > 0 && (
+            <span className="text-[10px] font-semibold text-ink-subtle">
+              ({vms.length})
+            </span>
+          )}
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingVm(null)
+              setFormName("")
+              setFormSshHost("ssh.instabox.sh")
+              setFormSshUser("")
+              setFormSshPort(2222)
+              setFormTokenExpiry("7d")
+              setFormWebPort("")
+              setIsAddingVm(true)
+            }}
+            className="h-[23px] px-2.5 flex items-center gap-1 rounded-full bg-info-ink/15 hover:bg-info-ink/25 text-info-ink text-[10.5px] font-semibold transition cursor-pointer select-none"
+          >
+            <Plus className="size-3" />
+            <span>{t("add_vm_btn", "Tambah VM")}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ========================================================= */}
+      {/* 2. CASE 0: EMPTY STATE (NO VMS)                           */}
+      {/* ========================================================= */}
+      {vms.length === 0 && (
+        <Card className="flex flex-col items-center justify-center py-8 px-4 text-center gap-2">
+          <div className="size-10 rounded-full bg-surface-sunken flex items-center justify-center text-ink-muted">
+            <Server className="size-5" />
+          </div>
+          <span className="text-body font-bold text-ink">
+            {t("vm_empty_title", "Belum Ada Virtual Machine")}
+          </span>
+          <span className="text-micro text-ink-subtle max-w-[220px]">
+            {t("vm_empty_desc", "Tambahkan InstaBox atau Linux VM Anda untuk mengelola via SSH.")}
+          </span>
           <Button
             size="sm"
             variant="info"
             icon={Plus}
-            disabled={!isOnline}
+            className="mt-2"
             onClick={() => {
               setEditingVm(null)
-              setFormName("InstaBox Dev Server 2")
-              setFormIp("159.223.45.114")
-              setFormSshPort(2224)
-              setFormAgPort(8084)
+              setFormName("Algitha-VM")
+              setFormSshHost("ssh.instabox.sh")
+              setFormSshUser("ibssh_s3hsj4qxhbpc43a5xishpolliq")
+              setFormSshPort(2222)
+              setFormTokenExpiry("6d")
+              setFormWebPort("")
               setIsAddingVm(true)
             }}
           >
-            {t("add_vm_btn", "Tambah VM")}
+            {t("vm_add_first_btn", "Tambah VM Pertama")}
           </Button>
-        </div>
-      </div>
-
-      {/* Mode Switcher pill helper for Demo / Testing */}
-      <div className="flex items-center justify-between rounded-tile bg-surface-sunken/60 px-2.5 py-1 text-nano text-ink-subtle border border-line/60">
-        <span className="font-medium">
-          {isSingle
-            ? t("vm_card_mode_label", "1 VM Connected (Card Mode)")
-            : t("vm_accordion_mode_label", "Multiple VMs (Accordion Mode)")}
-        </span>
-        <button
-          type="button"
-          onClick={toggleDemoMode}
-          className="text-info font-semibold hover:underline cursor-pointer"
-        >
-          {isSingle ? "+ Tampilkan 2 VM (Accordion)" : "Kembali ke 1 VM (Card)"}
-        </button>
-      </div>
+        </Card>
+      )}
 
       {/* ========================================================= */}
-      {/* CASE 1: SINGLE VM MODE (RENDERED AS DIRECT RICH CARD)     */}
+      {/* 3. CASE 1: SINGLE VM MODE (1 RICH CARD)                   */}
       {/* ========================================================= */}
       {isSingle && (
         <Card className="flex flex-col gap-2.5 p-3 relative overflow-hidden">
-          {/* Card Header: Icon, Name, Status, Action Icons */}
+          {/* Card Header: Icon, Name, Provider, Status & Action Icons */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <IconBadge
@@ -344,12 +370,12 @@ export default function VmManagerView({ go }: ViewProps) {
                   {vms[0].name}
                 </span>
                 <span className="text-nano text-ink-subtle truncate">
-                  InstaBox Cloud · {vms[0].ip}
+                  InstaBox Cloud · {vms[0].sshHost || vms[0].ip}:{vms[0].sshPort}
                 </span>
               </div>
             </div>
 
-            {/* Status & Item Actions */}
+            {/* Status Pill & Edit/Delete Icons */}
             <div className="flex items-center gap-1.5 shrink-0">
               <span
                 className={cx(
@@ -373,7 +399,7 @@ export default function VmManagerView({ go }: ViewProps) {
                           ? "warning"
                           : "danger"
                   }
-                  pulse={isOnline && vms[0].status === "running"}
+                  size="xs"
                 />
                 {!isOnline
                   ? "Offline"
@@ -384,155 +410,167 @@ export default function VmManagerView({ go }: ViewProps) {
                       : t("vm_status_cooldown", "Cooldown")}
               </span>
 
-              {/* Edit button */}
               <button
                 type="button"
                 onClick={() => handleOpenEdit(vms[0])}
-                title={t("edit_vm_btn", "Edit VM")}
-                aria-label={t("edit_vm_btn", "Edit VM")}
-                className="rounded-control p-1 text-ink-subtle hover:bg-surface-sunken hover:text-ink transition cursor-pointer"
+                className="p-1 rounded-md text-ink-subtle hover:text-ink hover:bg-surface-sunken transition cursor-pointer"
+                title={t("edit_vm_btn", "Edit")}
               >
                 <Pencil className="size-3.5" />
               </button>
 
-              {/* Delete button */}
               <button
                 type="button"
                 onClick={() => setVmToDelete(vms[0])}
-                title={t("delete_vm_btn", "Hapus VM")}
-                aria-label={t("delete_vm_btn", "Hapus VM")}
-                className="rounded-control p-1 text-ink-subtle hover:bg-danger-soft hover:text-danger-bright transition cursor-pointer"
+                className="p-1 rounded-md text-ink-subtle hover:text-danger-ink hover:bg-danger-soft/50 transition cursor-pointer"
+                title={t("delete_vm_btn", "Hapus")}
               >
                 <Trash2 className="size-3.5" />
               </button>
             </div>
           </div>
 
-          {/* Specs & Hardware Grid */}
-          <div className="grid grid-cols-3 gap-1.5 rounded-tile border border-line bg-surface-sunken/60 p-2 text-caption">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <Cpu className="size-3 text-info shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="text-nano text-ink-subtle uppercase font-semibold">CPU</span>
-                <span className="text-micro font-bold text-ink truncate leading-tight">
-                  {vms[0].specs.cpu.split(" ")[0]} {vms[0].specs.cpu.split(" ")[1]}
+          {/* Connection Details Box (1:1 Sesuai Dashboard SSH InstaBox) */}
+          <div className="rounded-tile bg-surface-sunken/80 border border-line p-2.5 flex flex-col gap-1.5 text-nano">
+            <div className="flex items-center justify-between text-ink-subtle">
+              <span className="font-semibold text-ink">SSH Connection</span>
+              {vms[0].tokenExpiry && (
+                <span className="flex items-center gap-1 text-[10px] text-amber-500 font-medium">
+                  <Clock className="size-3" />
+                  <span>expires in {vms[0].tokenExpiry}</span>
                 </span>
-              </div>
+              )}
             </div>
 
-            <div className="flex items-center gap-1.5 min-w-0">
-              <MemoryStick className="size-3 text-info shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="text-nano text-ink-subtle uppercase font-semibold">RAM</span>
-                <span className="text-micro font-bold text-ink truncate leading-tight">
-                  {vms[0].specs.ram.split(" ")[0]} {vms[0].specs.ram.split(" ")[1]}
-                </span>
-              </div>
+            <div className="flex items-center justify-between gap-1 text-ink-muted">
+              <span className="text-[10px]">Host:</span>
+              <Mono className="text-[10.5px] text-ink truncate select-all">
+                {vms[0].sshHost || vms[0].ip}:{vms[0].sshPort}
+              </Mono>
             </div>
 
-            <div className="flex items-center gap-1.5 min-w-0">
-              <HardDrive className="size-3 text-info shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="text-nano text-ink-subtle uppercase font-semibold">NVMe</span>
-                <span className="text-micro font-bold text-ink truncate leading-tight">
-                  {vms[0].specs.storage.split(" ")[0]} {vms[0].specs.storage.split(" ")[1]}
-                </span>
+            {vms[0].sshUser && (
+              <div className="flex items-center justify-between gap-1 text-ink-muted">
+                <span className="text-[10px]">Token:</span>
+                <Mono className="text-[10.5px] text-ink-muted truncate max-w-[170px] select-all">
+                  {vms[0].sshUser.slice(0, 16)}...
+                </Mono>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Free Tier Runtime & Idle Rules Information */}
-          <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface-sunken/40 p-2">
-            <div className="flex items-center justify-between text-nano font-medium">
-              <span className="text-ink-subtle flex items-center gap-1">
-                <Clock className="size-3 text-info shrink-0" />
-                {t("vm_runtime_remaining", "Sisa Waktu Nyala")}:
+          {/* Runtime & Limits Bar */}
+          <div className="rounded-tile bg-surface-sunken/40 border border-line/60 p-2 flex flex-col gap-1 text-nano">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1 text-ink-subtle">
+                <Clock className="size-3 text-info" />
+                <span>{t("vm_runtime_remaining", "Runtime:")}</span>
               </span>
-              <span className="text-ink font-mono font-semibold">
-                {Math.floor((vms[0].maxRuntimeMinutes - vms[0].runtimeMinutes) / 60)}j{" "}
-                {(vms[0].maxRuntimeMinutes - vms[0].runtimeMinutes) % 60}m / 8j
+              <span className="font-mono text-ink font-semibold">
+                {Math.floor((vms[0].runtimeMinutes || 0) / 60)}j{" "}
+                {(vms[0].runtimeMinutes || 0) % 60}m / 8j
               </span>
             </div>
-
-            {/* Progress bar */}
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-line">
+            <div className="w-full bg-surface-sunken rounded-full h-1 overflow-hidden">
               <div
-                className={cx(
-                  "h-full rounded-full transition-all duration-300",
-                  vms[0].runtimeMinutes > 420
-                    ? "bg-danger"
-                    : vms[0].runtimeMinutes > 300
-                      ? "bg-warning"
-                      : "bg-success"
-                )}
+                className="bg-brand h-full rounded-full transition-all"
                 style={{
-                  width: `${Math.min(100, (vms[0].runtimeMinutes / vms[0].maxRuntimeMinutes) * 100)}%`,
+                  width: `${Math.min(100, (((vms[0].runtimeMinutes || 0) / 480) * 100))}%`,
                 }}
               />
             </div>
-
-            <div className="flex items-center justify-between text-[9px] text-ink-muted">
-              <span>{t("vm_idle_note", "Auto-sleep setelah 30m idle")}</span>
-              <span className="font-mono text-ink-subtle">Port SSH: {vms[0].sshPort}</span>
+            <div className="flex items-center justify-between text-[10px] text-ink-faint">
+              <span>Auto-sleep: 30m idle</span>
+              <span>Port: {vms[0].sshPort}</span>
             </div>
           </div>
 
-          {/* Primary Action Button: Launch Antigravity Remote */}
-          <Button
-            block
-            variant="primary"
-            size="md"
-            icon={preflightVmId === vms[0].id ? LoaderCircle : ExternalLink}
-            disabled={!isOnline}
-            onClick={() => handleLaunchAntigravity(vms[0])}
-          >
-            {preflightVmId === vms[0].id
-              ? t("vm_preflight_waking", "Membangunkan VM...")
-              : t("launch_antigravity_btn", "Buka Antigravity Remote")}
-          </Button>
-
-          {/* Secondary Actions: Wake/Sleep Toggle & SSH Terminal */}
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              size="sm"
-              variant={vms[0].status === "running" ? "soft" : "info"}
-              icon={Power}
+          {/* Action Buttons: Primary Universal SSH Connection */}
+          <div className="flex flex-col gap-1.5 mt-0.5">
+            <button
+              type="button"
               disabled={!isOnline}
-              onClick={() => handleTogglePower(vms[0])}
+              onClick={() => copyToClipboard(getSshCommand(vms[0]), "Perintah SSH", vms[0].id)}
+              className={cx(
+                "w-full h-9 rounded-tile flex items-center justify-center gap-2 font-bold text-caption shadow-sm transition cursor-pointer select-none",
+                !isOnline
+                  ? "bg-surface-sunken text-ink-muted cursor-not-allowed"
+                  : "bg-brand text-brand-ink hover:opacity-90 active:scale-[0.99] shadow-brand/20"
+              )}
             >
-              {vms[0].status === "running"
-                ? t("sleep_vm_btn", "Tidurkan VM")
-                : t("wake_vm_btn", "Bangunkan VM")}
-            </Button>
+              {copiedId === vms[0].id ? (
+                <>
+                  <Check className="size-4" />
+                  <span>Perintah Disalin!</span>
+                </>
+              ) : (
+                <>
+                  <Terminal className="size-4" />
+                  <span>{t("vm_copy_ssh_cmd", "Salin Perintah SSH")}</span>
+                </>
+              )}
+            </button>
 
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={Terminal}
-              disabled={!isOnline}
-              onClick={() => handleCopySsh(vms[0])}
-            >
-              {t("open_ssh_btn", "Terminal SSH")}
-            </Button>
+            {/* Optional Web Service Button (Only when webPort is configured) */}
+            {vms[0].webPort && (
+              <button
+                type="button"
+                disabled={!isOnline}
+                onClick={() => handleOpenWeb(vms[0])}
+                className="w-full h-8 rounded-tile flex items-center justify-center gap-1.5 font-semibold text-micro bg-info-soft text-info-ink hover:bg-info-soft/80 border border-info-line/60 transition cursor-pointer select-none"
+              >
+                <Globe className="size-3.5" />
+                <span>Buka Layanan Web (Port {vms[0].webPort})</span>
+                <ExternalLink className="size-3" />
+              </button>
+            )}
+
+            {/* Secondary Row: Power Toggle */}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="subtle"
+                icon={Power}
+                disabled={!isOnline}
+                onClick={() => handleTogglePower(vms[0])}
+                className="flex-1 justify-center"
+              >
+                {vms[0].status === "running"
+                  ? t("sleep_vm_btn", "Tidurkan VM")
+                  : t("wake_vm_btn", "Bangunkan VM")}
+              </Button>
+
+              <Button
+                size="sm"
+                variant="subtle"
+                icon={Copy}
+                disabled={!isOnline}
+                onClick={() => copyToClipboard(`ssh://${vms[0].sshUser ? `${vms[0].sshUser}@` : ""}${vms[0].sshHost || vms[0].ip}:${vms[0].sshPort}`, "URI SSH")}
+                className="flex-1 justify-center text-nano"
+              >
+                Salin URI
+              </Button>
+            </div>
           </div>
         </Card>
       )}
 
       {/* ========================================================= */}
-      {/* CASE 2: MULTIPLE VMS (RENDERED AS ACCORDION CARDS)        */}
+      {/* 4. CASE 2: MULTIPLE VMS MODE (NATURAL ACCORDION LIST)     */}
       {/* ========================================================= */}
-      {!isSingle && (
+      {isMultiple && (
         <div className="flex flex-col gap-2">
           {vms.map((vm) => {
             const isExpanded = expandedId === vm.id
-            const isPreflight = preflightVmId === vm.id
-
             return (
               <Card
                 key={vm.id}
-                className="flex flex-col overflow-hidden transition-all duration-200"
+                className={cx(
+                  "flex flex-col transition-all overflow-hidden p-0 border",
+                  isExpanded ? "border-brand/40 shadow-sm" : "border-line"
+                )}
               >
-                {/* Accordion Item Header (Click to Expand / Collapse) */}
+                {/* Accordion Header Row */}
                 <div
                   className="flex items-center justify-between p-2.5 cursor-pointer hover:bg-surface-sunken/40 select-none"
                   onClick={() => setExpandedId(isExpanded ? null : vm.id)}
@@ -549,157 +587,138 @@ export default function VmManagerView({ go }: ViewProps) {
                               ? "warning"
                               : "danger"
                       }
-                      size="sm"
+                      size="xs"
                     />
                     <div className="flex flex-col min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-label font-bold text-ink truncate">
-                          {vm.name}
-                        </span>
-                        <span
-                          className={cx(
-                            "inline-flex items-center gap-1 text-[9px] font-semibold rounded-full px-1.5 py-0.2 border",
-                            !isOnline
-                              ? "bg-surface-sunken text-ink-muted border-line"
-                              : vm.status === "running"
-                                ? "bg-success-soft text-success-ink border-success-line/60"
-                                : vm.status === "sleeping"
-                                  ? "bg-warning-soft text-warning-ink border-warning-line/60"
-                                  : "bg-danger-soft text-danger-ink border-danger-line/60"
-                          )}
-                        >
-                          <StatusDot
-                            tone={
-                              !isOnline
-                                ? "neutral"
-                                : vm.status === "running"
-                                  ? "success"
-                                  : vm.status === "sleeping"
-                                    ? "warning"
-                                    : "danger"
-                            }
-                            pulse={isOnline && vm.status === "running"}
-                          />
-                          {!isOnline
-                            ? "Off"
-                            : vm.status === "running"
-                              ? "Active"
-                              : vm.status === "sleeping"
-                                ? "Sleep"
-                                : "Cooldown"}
-                        </span>
-                      </div>
+                      <span className="text-caption font-bold text-ink truncate leading-tight">
+                        {vm.name}
+                      </span>
                       <span className="text-nano text-ink-subtle truncate">
-                        {vm.specs.cpu.split(" ")[0]} {vm.specs.cpu.split(" ")[1]} · {vm.specs.ram}
+                        {vm.sshHost || vm.ip}:{vm.sshPort}
                       </span>
                     </div>
                   </div>
 
-                  {/* Header Trailing: Edit, Delete, Chevron */}
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleOpenEdit(vm)
-                      }}
-                      title={t("edit_vm_btn", "Edit")}
-                      className="rounded p-1 text-ink-subtle hover:bg-surface-sunken hover:text-ink transition cursor-pointer"
-                    >
-                      <Pencil className="size-3" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setVmToDelete(vm)
-                      }}
-                      title={t("delete_vm_btn", "Hapus")}
-                      className="rounded p-1 text-ink-subtle hover:bg-danger-soft hover:text-danger-bright transition cursor-pointer"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
-                    <span className="text-ink-subtle p-0.5">
-                      {isExpanded ? (
-                        <ChevronUp className="size-3.5" />
-                      ) : (
-                        <ChevronDown className="size-3.5" />
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span
+                      className={cx(
+                        "inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5 border",
+                        !isOnline
+                          ? "bg-surface-sunken text-ink-muted border-line"
+                          : vm.status === "running"
+                            ? "bg-success-soft text-success-ink border-success-line/60"
+                            : "bg-warning-soft text-warning-ink border-warning-line/60"
                       )}
+                    >
+                      <StatusDot
+                        tone={
+                          !isOnline
+                            ? "neutral"
+                            : vm.status === "running"
+                              ? "success"
+                              : "warning"
+                        }
+                        size="xs"
+                      />
+                      {vm.status === "running" ? "Active" : "Sleep"}
                     </span>
+
+                    {isExpanded ? (
+                      <ChevronUp className="size-4 text-ink-subtle" />
+                    ) : (
+                      <ChevronDown className="size-4 text-ink-subtle" />
+                    )}
                   </div>
                 </div>
 
                 {/* Accordion Expanded Body */}
                 {isExpanded && (
-                  <div className="flex flex-col gap-2 border-t border-line p-2.5 bg-surface-sunken/30 motion-safe:animate-fade-in">
-                    {/* Specs & Hardware Detail */}
-                    <div className="grid grid-cols-3 gap-1 rounded-tile border border-line bg-surface p-1.5 text-center text-nano">
-                      <div className="flex flex-col">
-                        <span className="text-ink-subtle uppercase text-[8px] font-semibold">CPU</span>
-                        <span className="text-micro font-bold text-ink truncate">
-                          {vm.specs.cpu.split(" ")[0]} {vm.specs.cpu.split(" ")[1]}
-                        </span>
+                  <div className="px-2.5 pb-2.5 pt-1 border-t border-line/60 flex flex-col gap-2 bg-surface-sunken/20">
+                    {/* Connection details */}
+                    <div className="rounded-tile bg-surface-sunken/80 border border-line p-2 flex flex-col gap-1 text-nano">
+                      <div className="flex items-center justify-between text-ink-subtle">
+                        <span className="font-semibold text-ink text-[10.5px]">Connection</span>
+                        {vm.tokenExpiry && (
+                          <span className="flex items-center gap-1 text-[10px] text-amber-500 font-medium">
+                            <Clock className="size-3" />
+                            <span>expires in {vm.tokenExpiry}</span>
+                          </span>
+                        )}
                       </div>
-                      <div className="flex flex-col border-x border-line">
-                        <span className="text-ink-subtle uppercase text-[8px] font-semibold">RAM</span>
-                        <span className="text-micro font-bold text-ink truncate">
-                          {vm.specs.ram}
-                        </span>
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-ink-subtle uppercase text-[8px] font-semibold">NVMe</span>
-                        <span className="text-micro font-bold text-ink truncate">
-                          {vm.specs.storage}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Runtime & Idle info */}
-                    <div className="flex items-center justify-between text-nano text-ink-subtle px-1">
-                      <span className="flex items-center gap-1 font-medium">
-                        <Clock className="size-3 text-info" />
-                        Sisa: {Math.floor((vm.maxRuntimeMinutes - vm.runtimeMinutes) / 60)}j{" "}
-                        {(vm.maxRuntimeMinutes - vm.runtimeMinutes) % 60}m
-                      </span>
-                      <span className="font-mono text-ink">Port: {vm.sshPort}</span>
+                      <Mono className="text-[10.5px] text-ink select-all truncate">
+                        {getSshCommand(vm)}
+                      </Mono>
                     </div>
 
                     {/* Action buttons */}
-                    <Button
-                      block
-                      variant="primary"
-                      size="sm"
-                      icon={isPreflight ? LoaderCircle : ExternalLink}
-                      disabled={!isOnline}
-                      onClick={() => handleLaunchAntigravity(vm)}
-                    >
-                      {isPreflight
-                        ? t("vm_preflight_waking", "Membangunkan VM...")
-                        : t("launch_antigravity_btn", "Buka Antigravity Remote")}
-                    </Button>
-
-                    <div className="grid grid-cols-2 gap-1.5">
+                    <div className="flex items-center gap-1.5 pt-0.5">
                       <Button
                         size="sm"
-                        variant={vm.status === "running" ? "soft" : "info"}
+                        variant="info"
+                        icon={copiedId === vm.id ? Check : Terminal}
+                        disabled={!isOnline}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          copyToClipboard(getSshCommand(vm), "Perintah SSH", vm.id)
+                        }}
+                        className="flex-1 justify-center text-nano"
+                      >
+                        {copiedId === vm.id ? "Disalin!" : "Salin SSH"}
+                      </Button>
+
+                      {vm.webPort && (
+                        <Button
+                          size="sm"
+                          variant="subtle"
+                          icon={Globe}
+                          disabled={!isOnline}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleOpenWeb(vm)
+                          }}
+                          className="flex-1 justify-center text-nano"
+                        >
+                          Web ({vm.webPort})
+                        </Button>
+                      )}
+
+                      <Button
+                        size="sm"
+                        variant="subtle"
                         icon={Power}
                         disabled={!isOnline}
-                        onClick={() => handleTogglePower(vm)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleTogglePower(vm)
+                        }}
+                        className="flex-1 justify-center text-nano"
                       >
-                        {vm.status === "running"
-                          ? t("sleep_vm_btn", "Tidurkan")
-                          : t("wake_vm_btn", "Bangunkan")}
+                        {vm.status === "running" ? "Tidur" : "Bangun"}
                       </Button>
 
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        icon={Terminal}
-                        disabled={!isOnline}
-                        onClick={() => handleCopySsh(vm)}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleOpenEdit(vm)
+                        }}
+                        className="p-1.5 rounded-md text-ink-subtle hover:text-ink hover:bg-surface-sunken transition cursor-pointer"
+                        title={t("edit_vm_btn", "Edit")}
                       >
-                        {t("open_ssh_btn", "SSH")}
-                      </Button>
+                        <Pencil className="size-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setVmToDelete(vm)
+                        }}
+                        className="p-1.5 rounded-md text-ink-subtle hover:text-danger-ink hover:bg-danger-soft/50 transition cursor-pointer"
+                        title={t("delete_vm_btn", "Hapus")}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
                     </div>
                   </div>
                 )}
@@ -710,108 +729,15 @@ export default function VmManagerView({ go }: ViewProps) {
       )}
 
       {/* ========================================================= */}
-      {/* POPUP MODAL 1: CONFIRM DELETE VM                          */}
-      {/* ========================================================= */}
-      {vmToDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 backdrop-blur-xs"
-          onClick={() => setVmToDelete(null)}
-        >
-          <div
-            className="flex w-full max-w-[270px] flex-col gap-3 rounded-card border border-line bg-surface p-3.5 shadow-2xl motion-safe:animate-flyout-in select-none"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header with Danger Icon */}
-            <div className="flex items-start justify-between border-b border-line pb-2">
-              <div className="flex items-center gap-2">
-                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-danger-soft text-danger-bright">
-                  <AlertTriangle className="size-4" />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-label font-bold text-ink">
-                    {t("confirm_delete_vm_title", "Konfirmasi Hapus VM")}
-                  </span>
-                  <span className="text-nano text-ink-subtle">
-                    {t("vm_section_title", "InstaBox Cloud")}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setVmToDelete(null)}
-                className="rounded p-1 text-ink-subtle hover:bg-surface-sunken hover:text-ink transition cursor-pointer"
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="flex flex-col gap-2 text-caption">
-              <p className="text-micro text-ink leading-relaxed">
-                {t(
-                  "confirm_delete_vm_desc",
-                  "Apakah Anda yakin ingin menghapus virtual machine ini secara permanen?"
-                )}
-              </p>
-
-              {/* Target Highlight */}
-              <div className="rounded-tile border border-danger-line/60 bg-danger-soft/30 p-2 text-micro">
-                <div className="font-bold text-ink truncate">{vmToDelete.name}</div>
-                <div className="font-mono text-nano text-ink-subtle">
-                  IP: {vmToDelete.ip} · SSH: {vmToDelete.sshPort}
-                </div>
-              </div>
-
-              <span className="text-nano text-ink-muted leading-tight">
-                {t("delete_vm_confirm_warning", "Kode atau task yang belum tersinkronisasi di VM ini akan hilang.")}
-              </span>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="flex items-center justify-end gap-2 border-t border-line pt-2">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setVmToDelete(null)}
-              >
-                {t("cancel_btn", "Batal")}
-              </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                icon={Trash2}
-                onClick={handleDeleteConfirm}
-              >
-                {t("delete_btn", "Hapus")}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================= */}
-      {/* POPUP MODAL 2: ADD / EDIT VM FORM                         */}
+      {/* 5. MODAL FORM: TAMBAH / EDIT VIRTUAL MACHINE              */}
       {/* ========================================================= */}
       {(isAddingVm || editingVm) && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 backdrop-blur-xs"
-          onClick={() => {
-            setIsAddingVm(false)
-            setEditingVm(null)
-          }}
-        >
-          <div
-            className="flex w-full max-w-[276px] flex-col gap-2.5 rounded-card border border-line bg-surface p-3.5 shadow-2xl motion-safe:animate-flyout-in select-none"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <Card className="w-full max-w-[280px] p-3 flex flex-col gap-2.5 shadow-xl border border-line bg-surface">
+            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-line pb-2">
-              <span className="text-label font-bold text-ink flex items-center gap-1.5">
-                <Server className="size-3.5 text-info" />
-                {editingVm
-                  ? t("edit_vm_modal_title", "Edit Virtual Machine")
-                  : t("add_vm_modal_title", "Tambah Virtual Machine")}
+              <span className="text-caption font-bold text-ink">
+                {editingVm ? "Edit Virtual Machine" : "Tambah Virtual Machine"}
               </span>
               <button
                 type="button"
@@ -819,98 +745,163 @@ export default function VmManagerView({ go }: ViewProps) {
                   setIsAddingVm(false)
                   setEditingVm(null)
                 }}
-                className="rounded p-1 text-ink-subtle hover:bg-surface-sunken hover:text-ink transition cursor-pointer"
+                className="p-1 rounded-md text-ink-subtle hover:text-ink transition cursor-pointer"
               >
-                <X className="size-3.5" />
+                <X className="size-4" />
               </button>
             </div>
 
-            {/* Form */}
-            <form onSubmit={handleSaveForm} className="flex flex-col gap-2">
+            {/* Modal Form */}
+            <form onSubmit={handleSaveForm} className="flex flex-col gap-2 text-nano">
               <div>
-                <label className="block text-nano font-semibold text-ink-subtle mb-0.5">
-                  {t("vm_name_label", "Nama VM")}
+                <label className="block font-semibold text-ink-subtle mb-0.5">
+                  Nama Virtual Machine
                 </label>
                 <input
                   type="text"
+                  required
+                  placeholder="e.g. Algitha-VM"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-micro text-ink placeholder:text-ink-muted focus:border-info focus:outline-none"
-                  required
+                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block font-semibold text-ink-subtle mb-0.5">
+                  Host Gateway SSH
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. ssh.instabox.sh"
+                  value={formSshHost}
+                  onChange={(e) => setFormSshHost(e.target.value)}
+                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5">
                 <div>
-                  <label className="block text-nano font-semibold text-ink-subtle mb-0.5">
-                    {t("vm_ip_label", "Host / IP")}
-                  </label>
-                  <input
-                    type="text"
-                    value={formIp}
-                    onChange={(e) => setFormIp(e.target.value)}
-                    className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-micro text-ink font-mono focus:border-info focus:outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-nano font-semibold text-ink-subtle mb-0.5">
-                    {t("vm_port_label", "Port SSH")}
+                  <label className="block font-semibold text-ink-subtle mb-0.5">
+                    Port SSH
                   </label>
                   <input
                     type="number"
-                    value={formSshPort}
-                    onChange={(e) => setFormSshPort(Number(e.target.value))}
-                    className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-micro text-ink font-mono focus:border-info focus:outline-none"
                     required
+                    placeholder="2222"
+                    value={formSshPort}
+                    onChange={(e) => setFormSshPort(e.target.value)}
+                    className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-ink-subtle mb-0.5">
+                    Masa Berlaku
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="6d / 7d"
+                    value={formTokenExpiry}
+                    onChange={(e) => setFormTokenExpiry(e.target.value)}
+                    className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-nano font-semibold text-ink-subtle mb-0.5">
-                  {t("vm_antigravity_port_label", "Port Antigravity Remote")}
+                <label className="block font-semibold text-ink-subtle mb-0.5">
+                  User / Token SSH
                 </label>
                 <input
-                  type="number"
-                  value={formAgPort}
-                  onChange={(e) => setFormAgPort(Number(e.target.value))}
-                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-micro text-ink font-mono focus:border-info focus:outline-none"
-                  required
+                  type="text"
+                  placeholder="ibssh_s3hsj... (Token sebelum @)"
+                  value={formSshUser}
+                  onChange={(e) => setFormSshUser(e.target.value)}
+                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10.5px]"
                 />
               </div>
 
               <div>
-                <label className="block text-nano font-semibold text-ink-subtle mb-0.5">
-                  {t("vm_template_label", "Spesifikasi VM")}
+                <label className="block font-semibold text-ink-subtle mb-0.5">
+                  Port Web Layanan (Opsional)
                 </label>
                 <input
-                  type="text"
-                  value={formCpu}
-                  onChange={(e) => setFormCpu(e.target.value)}
-                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-micro text-ink focus:border-info focus:outline-none"
+                  type="number"
+                  placeholder="e.g. 8080 (Kosongkan bila tidak ada)"
+                  value={formWebPort}
+                  onChange={(e) => setFormWebPort(e.target.value)}
+                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
                 />
               </div>
 
-              {/* Actions */}
-              <div className="mt-1 flex items-center justify-end gap-2 border-t border-line pt-2">
+              <div className="flex items-center gap-1.5 pt-1 mt-1 border-t border-line">
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant="subtle"
                   type="button"
                   onClick={() => {
                     setIsAddingVm(false)
                     setEditingVm(null)
                   }}
+                  className="flex-1 justify-center"
                 >
                   {t("cancel_btn", "Batal")}
                 </Button>
-                <Button size="sm" variant="info" type="submit">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  type="submit"
+                  className="flex-1 justify-center"
+                >
                   {t("save_btn", "Simpan")}
                 </Button>
               </div>
             </form>
-          </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* 6. MODAL KONFIRMASI HAPUS VM                              */}
+      {/* ========================================================= */}
+      {vmToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <Card className="w-full max-w-[270px] p-3 flex flex-col gap-2.5 shadow-xl border border-danger-line/60 bg-surface">
+            <div className="flex items-center gap-2 text-danger-ink">
+              <div className="size-7 rounded-full bg-danger-soft flex items-center justify-center shrink-0">
+                <AlertTriangle className="size-4" />
+              </div>
+              <span className="text-caption font-bold text-ink">
+                {t("confirm_delete_vm_title", "Konfirmasi Hapus")}
+              </span>
+            </div>
+
+            <p className="text-nano text-ink-muted leading-relaxed">
+              Apakah Anda yakin ingin menghapus{" "}
+              <strong className="text-ink">{vmToDelete.name}</strong>? Tindakan
+              ini akan menghapus konfigurasi koneksi VM dari MyServer.
+            </p>
+
+            <div className="flex items-center gap-1.5 pt-1 border-t border-line">
+              <Button
+                size="sm"
+                variant="subtle"
+                onClick={() => setVmToDelete(null)}
+                className="flex-1 justify-center"
+              >
+                {t("cancel_btn", "Batal")}
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={handleDeleteConfirm}
+                className="flex-1 justify-center"
+              >
+                {t("delete_btn", "Hapus")}
+              </Button>
+            </div>
+          </Card>
         </div>
       )}
     </ViewBody>

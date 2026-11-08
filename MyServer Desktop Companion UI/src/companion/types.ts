@@ -5,19 +5,25 @@ export interface VirtualMachine {
   name: string
   provider: "instabox" | "custom"
   status: "running" | "sleeping" | "cooldown" | "stopped"
-  ip: string
+  sshHost?: string
+  sshUser?: string
   sshPort: number
-  specs: {
-    cpu: string
-    ram: string
-    storage: string
+  ip?: string
+  tokenExpiry?: string
+  webPort?: number
+  webUrl?: string
+  specs?: {
+    cpu?: string
+    ram?: string
+    storage?: string
   }
-  runtimeMinutes: number // minutes running today
-  maxRuntimeMinutes: number // 480 min (8 hours)
-  idleTimeoutMinutes: number // 30 min
+  runtimeMinutes?: number // minutes running today
+  maxRuntimeMinutes?: number // 480 min (8 hours)
+  idleTimeoutMinutes?: number // 30 min
   cooldownRemainingMinutes?: number
   antigravityPort?: number
   lastActive?: string
+  notes?: string
 }
 
 export type PowerState = "online" | "rebooting" | "offline" | "waking"

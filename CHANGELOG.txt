@@ -1,3 +1,8 @@
+[v4.4.3 - Beta] - 2026-11-08
+- Perombakan UI/UX VM Manager: header rapi, hapus banner mock, ganti tombol Antigravity ke aksi SSH universal.
+- Eliminasi seluruh hardcoded data VM fiktif; koneksi SSH InstaBox riil (Host, Port, Token Expiry).
+- Sinkronisasi versi atomik v4.4.3 Beta lintas frontend, backend, tauri, dan installer.
+
 [v4.4.2 - Beta] - 2026-11-08
 - Integrasi 4 kartu SVG baru (File Manager & VM Manager online/offline) sesuai desain Figma.
 - Restorasi penuh sistem animasi retro CRT pada semua slot kartu.

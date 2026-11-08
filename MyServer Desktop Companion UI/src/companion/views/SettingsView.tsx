@@ -137,19 +137,34 @@ export default function SettingsView() {
     setCheckingUpdate(true)
     try {
       const info = await api.checkForUpdate()
-      setUpdateInfo(info)
-      if (info.upToDate) {
+      const parseVer = (v: string) => {
+        const parts = (v || "").match(/\d+/g)
+        return parts ? parts.map(Number) : [0, 0, 0]
+      }
+      const remote = parseVer(info.version)
+      const current = parseVer(activeVersion)
+      const isActuallyNewer =
+        remote[0] > current[0] ||
+        (remote[0] === current[0] && remote[1] > current[1]) ||
+        (remote[0] === current[0] && remote[1] === current[1] && remote[2] > current[2])
+
+      const effectiveInfo: UpdateInfo = {
+        ...info,
+        upToDate: !isActuallyNewer ? true : Boolean(info.upToDate)
+      }
+      setUpdateInfo(effectiveInfo)
+      if (effectiveInfo.upToDate) {
         notify(
           isId
-            ? `MyServer v${info.version} sudah menggunakan versi terbaru!`
-            : `MyServer v${info.version} is already up to date!`,
+            ? `MyServer v${activeVersion} sudah menggunakan versi terbaru!`
+            : `MyServer v${activeVersion} is already up to date!`,
           "neutral"
         )
       } else {
         notify(
           isId
-            ? `Pembaruan Tersedia: MyServer v${info.version}!`
-            : `Update Available: MyServer v${info.version}!`,
+            ? `Pembaruan Tersedia: MyServer v${effectiveInfo.version}!`
+            : `Update Available: MyServer v${effectiveInfo.version}!`,
           "info"
         )
       }

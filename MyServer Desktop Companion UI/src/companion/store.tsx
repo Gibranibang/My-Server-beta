@@ -415,6 +415,18 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
           if (autoCheck && typeof api.checkForUpdate === "function") {
             api.checkForUpdate().then((info) => {
               if (info && !info.upToDate) {
+                const parseVer = (v: string) => {
+                  const parts = (v || "").match(/\d+/g)
+                  return parts ? parts.map(Number) : [0, 0, 0]
+                }
+                const remote = parseVer(info.version)
+                const current = parseVer(APP_VERSION)
+                const isActuallyNewer =
+                  remote[0] > current[0] ||
+                  (remote[0] === current[0] && remote[1] > current[1]) ||
+                  (remote[0] === current[0] && remote[1] === current[1] && remote[2] > current[2])
+
+                if (!isActuallyNewer) return
                 const isId = (loadedSettings?.language || "id") === "id"
                 window.dispatchEvent(
                   new CustomEvent("myserver:notify", {

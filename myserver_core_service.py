@@ -159,6 +159,7 @@ import threading
 
 
 import time
+import uuid
 
 
 
@@ -28084,13 +28085,188 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/instabox/smart_reset":
-            vm_id = body.get("id")
-            if instabox_manager and vm_id:
+            api_key = (body.get("apiKey") or "").strip()
+            machine_id = (body.get("machineId") or "").strip()
+            vm_id = body.get("id") or body.get("vmId")
+            if not machine_id and instabox_manager and vm_id:
+                vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
+                if vm_rec:
+                    machine_id = vm_rec.get("machineId", "")
+                    api_key = api_key or vm_rec.get("apiKey", "")
+
+            if machine_id and api_key:
+                import uuid
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": str(uuid.uuid4())
+                }
+                try:
+                    p_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{machine_id}/pause", data=b"{}", headers=headers, method="POST")
+                    urllib.request.urlopen(p_req, timeout=10)
+                    time.sleep(5)
+                    r_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{machine_id}/resume", data=b"{}", headers=headers, method="POST")
+                    urllib.request.urlopen(r_req, timeout=10)
+                    self._send_json({"success": True, "status": "ok", "message": "Time limit 8 jam berhasil direset ke 0."})
+                    return
+                except Exception as ex:
+                    self._send_json({"success": False, "error": str(ex)})
+                    return
+            elif instabox_manager and vm_id:
                 res = instabox_manager.InstaBoxManager.smart_anti_cooldown_reset(vm_id)
                 self._send_json(res)
+                return
             else:
-                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
-            return
+                self._send_json({"status": "error", "message": "Machine ID / API Key missing"}, status=400)
+                return
+
+        if path == "/api/instabox/sync":
+            api_key = (body.get("apiKey") or "").strip()
+            vm_name = (body.get("vmName") or "").strip()
+            machine_id = (body.get("machineId") or "").strip()
+            vm_id = (body.get("vmId") or "").strip()
+            if not api_key and instabox_manager and vm_id:
+                vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
+                if vm_rec:
+                    api_key = vm_rec.get("apiKey", "")
+                    machine_id = machine_id or vm_rec.get("machineId", "")
+                    vm_name = vm_name or vm_rec.get("name", "")
+
+            if not api_key:
+                self._send_json({"success": False, "error": "API Key InstaBox belum diisi."})
+                return
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+                "User-Agent": "MyServer-Companion/4.4.4"
+            }
+            try:
+                # 1. Fetch machines list from https://api.instabox.sh/v1/machines
+                req = urllib.request.Request("https://api.instabox.sh/v1/machines", headers=headers)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    m_data = json.loads(resp.read().decode())
+                    machines = m_data.get("machines", [])
+                    if not machines:
+                        self._send_json({"success": False, "error": "Tidak ada microVM ditemukan di akun InstaBox ini."})
+                        return
+
+                    target = None
+                    if machine_id:
+                        target = next((m for m in machines if m.get("id") == machine_id), None)
+                    if not target and vm_name:
+                        target = next((m for m in machines if m.get("name", "").strip().lower() == vm_name.strip().lower()), None)
+                    if not target and vm_name:
+                        target = next((m for m in machines if vm_name.strip().lower() in m.get("name", "").strip().lower() or m.get("name", "").strip().lower() in vm_name.strip().lower()), None)
+                    if not target:
+                        target = next((m for m in machines if m.get("state") == "running"), machines[0])
+
+                    mid = target.get("id")
+                    state = target.get("state", "running")
+
+                    # Calculate runtime from runStartedAt
+                    run_started_at = target.get("runStartedAt")
+                    runtime_mins = 0
+                    if run_started_at and state == "running":
+                        try:
+                            import datetime
+                            clean_iso = run_started_at.replace("Z", "+00:00")
+                            dt = datetime.datetime.fromisoformat(clean_iso)
+                            now = datetime.datetime.now(datetime.timezone.utc)
+                            runtime_mins = max(0, min(480, int((now - dt).total_seconds() / 60)))
+                        except Exception:
+                            runtime_mins = 0
+
+                    # 2. Spec fallback for RAM and Disk sizing
+                    spec = target.get("spec") or {}
+                    spec_mem_mib = spec.get("memMiB")
+                    spec_disk_gib = (spec.get("persistentDiskGiB") or 0) + (spec.get("rootDiskGiB") or 0)
+
+                    # 3. Fetch metrics for CPU %, RAM, Disk
+                    metrics_res = {
+                        "cpuPct": None,
+                        "ramUsedBytes": None,
+                        "ramTotalBytes": spec_mem_mib * 1024 * 1024 if spec_mem_mib else None,
+                        "diskUsedBytes": None,
+                        "diskTotalBytes": spec_disk_gib * (1024**3) if spec_disk_gib > 0 else None
+                    }
+                    try:
+                        m_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{mid}/metrics", headers=headers)
+                        with urllib.request.urlopen(m_req, timeout=6) as m_resp:
+                            m_raw = json.loads(m_resp.read().decode())
+                            samples = m_raw.get("metrics", [])
+                            disk_info = m_raw.get("disk", {})
+                            if samples:
+                                latest = samples[-1]
+                                # OpenAPI MachineMetric: cpuUsedPct, memUsed, memTotal, diskUsed, diskTotal
+                                cpu_val = latest.get("cpuUsedPct") if latest.get("cpuUsedPct") is not None else latest.get("cpuPct")
+                                if cpu_val is not None:
+                                    metrics_res["cpuPct"] = round(float(cpu_val), 1)
+
+                                mem_used = latest.get("memUsed") if latest.get("memUsed") is not None else latest.get("memoryUsedBytes")
+                                if mem_used is not None:
+                                    metrics_res["ramUsedBytes"] = mem_used
+
+                                mem_total = latest.get("memTotal") if latest.get("memTotal") is not None else latest.get("memoryTotalBytes")
+                                if mem_total:
+                                    metrics_res["ramTotalBytes"] = mem_total
+
+                                if latest.get("diskUsed") is not None:
+                                    metrics_res["diskUsedBytes"] = latest.get("diskUsed")
+                                if latest.get("diskTotal") is not None:
+                                    metrics_res["diskTotalBytes"] = latest.get("diskTotal")
+
+                            if disk_info and isinstance(disk_info, dict):
+                                filesystems = disk_info.get("filesystems", [])
+                                if filesystems:
+                                    tot_used = sum(fs.get("usedBytes", 0) for fs in filesystems if fs.get("usedBytes"))
+                                    tot_size = sum(fs.get("sizeBytes", 0) for fs in filesystems if fs.get("sizeBytes"))
+                                    if tot_used > 0:
+                                        metrics_res["diskUsedBytes"] = tot_used
+                                    if tot_size > 0:
+                                        metrics_res["diskTotalBytes"] = tot_size
+                                elif disk_info.get("usedBytes"):
+                                    metrics_res["diskUsedBytes"] = disk_info.get("usedBytes")
+                                    if disk_info.get("totalBytes"):
+                                        metrics_res["diskTotalBytes"] = disk_info.get("totalBytes")
+                    except Exception as me:
+                        logger_manager.log_warn(f"[InstaBox] Gagal mengambil metrics VM {mid}: {me}")
+
+                    # 4. Connection Info for host / port / username
+                    conn_host = "ssh.instabox.sh"
+                    conn_port = 2222
+                    conn_user = None
+                    try:
+                        ci_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{mid}/connection-info", headers=headers)
+                        with urllib.request.urlopen(ci_req, timeout=5) as ci_resp:
+                            ci_data = json.loads(ci_resp.read().decode())
+                            conn_host = ci_data.get("host") or conn_host
+                            conn_port = ci_data.get("port") or conn_port
+                            conn_user = ci_data.get("username")
+                    except Exception:
+                        pass
+
+                    self._send_json({
+                        "success": True,
+                        "machineId": mid,
+                        "machineName": target.get("name"),
+                        "state": state,
+                        "runtimeMinutes": runtime_mins,
+                        "maxRuntimeMinutes": target.get("maxRunMinutes", 480),
+                        "idleTimeoutMinutes": int(target.get("autoSuspendAfterSeconds", 1800) / 60),
+                        "screenUrl": f"https://dashboard.instabox.sh/machines/{mid}",
+                        "sshHost": conn_host,
+                        "sshPort": conn_port,
+                        "sshUser": conn_user,
+                        "telemetry": metrics_res
+                    })
+                    return
+            except urllib.error.HTTPError as he:
+                self._send_json({"success": False, "error": f"InstaBox API Error ({he.code}): {he.reason}"})
+                return
+            except Exception as ex:
+                self._send_json({"success": False, "error": f"Koneksi InstaBox gagal: {ex}"})
+                return
 
         # --- Endpoints EasyTier & Remote Mesh Network ---
         if path in ("/api/easytier/status", "/api/easytier_status"):

@@ -126,6 +126,10 @@ export interface CompanionApi {
 
   openExternalBrowser(url: string): Promise<void>
 
+  syncInstaBoxVm(params: { apiKey: string; machineId?: string; vmName?: string; vmId?: string }): Promise<any>
+
+  smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
+
   openFileManager(): Promise<void>
 
   openFileExplorer(): Promise<void>
@@ -719,7 +723,33 @@ export function createMockApi(): CompanionApi {
 
     async openUrl() {},
 
-    async openExternalBrowser() {},
+    async openExternalBrowser(url?: string) {
+      if (typeof window !== "undefined" && url) window.open(url, "_blank")
+    },
+
+    async syncInstaBoxVm(params: any) {
+      return {
+        success: true,
+        machineId: params?.machineId || "m_demo123",
+        machineName: params?.vmName || "InstaBox Cloud VM",
+        state: "running",
+        runtimeMinutes: 184,
+        maxRuntimeMinutes: 480,
+        idleTimeoutMinutes: 30,
+        screenUrl: "https://instabox.sh/app/machines/m_demo",
+        telemetry: {
+          cpuPct: 14,
+          ramUsedBytes: 2576980377,
+          ramTotalBytes: 8589934592,
+          diskUsedBytes: 5583457484,
+          diskTotalBytes: 21474836480,
+        }
+      }
+    },
+
+    async smartResetInstaBox() {
+      return { success: true, message: "Limit 8 jam berhasil direset." }
+    },
 
     async openFileManager() {},
 

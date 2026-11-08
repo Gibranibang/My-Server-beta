@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import {
   AlertTriangle,
   Check,
@@ -23,6 +23,7 @@ import {
 } from "lucide-react"
 import { getTranslation } from "../i18n"
 import { useCompanion, useNotice } from "../store"
+import { getCompanionApi } from "../api"
 import { Button, Card, Chip, IconBadge, Mono, StatusDot, cx } from "../ui"
 import { ViewBody, type ViewProps } from "./shared"
 import type { Tone, VirtualMachine, VmAutoRestartSchedule, VmTelemetry } from "../types"
@@ -46,12 +47,15 @@ const getVmRuntimeTone = (usedPct: number, live: boolean): Tone => {
   return usedPct < 70 ? "success" : usedPct < 85 ? "warning" : "danger"
 }
 
-function VmRuntimeDotBar({ usedPct, tone }: { usedPct: number; tone: Tone }) {
+function VmRuntimeDotBar({ usedPct, tone, live = false }: { usedPct: number; tone: Tone; live?: boolean }) {
   const colStep = 6
   const rowStep = 6
   const r = 2.1
   const totalDots = RUNTIME_DOT_COLS * RUNTIME_DOT_ROWS
-  const totalLit = Math.round((Math.max(0, Math.min(100, usedPct)) / 100) * totalDots)
+  let totalLit = Math.round((Math.max(0, Math.min(100, usedPct)) / 100) * totalDots)
+  if (live && usedPct > 0 && totalLit === 0) {
+    totalLit = 1
+  }
 
   return (
     <svg
@@ -88,6 +92,7 @@ function VmRuntimeDotBar({ usedPct, tone }: { usedPct: number; tone: Tone }) {
 }
 
 export default function VmManagerView({ go }: ViewProps) {
+  const api = getCompanionApi()
   const { isOnline, settings } = useCompanion()
   const t = getTranslation(settings?.language)
   const { notify } = useNotice()
@@ -190,6 +195,61 @@ export default function VmManagerView({ go }: ViewProps) {
       } catch {}
     }
   }, [vms])
+
+  // Periodic InstaBox Sync & Local Runtime Counter
+  useEffect(() => {
+    const syncActiveInstaboxVms = () => {
+      vms.forEach((vm) => {
+        if (vm.provider === "instabox" && vm.apiKey) {
+          api.syncInstaBoxVm({ apiKey: vm.apiKey, machineId: vm.machineId, vmName: vm.name }).then((res: any) => {
+            if (res && res.success) {
+              setVms((prev) =>
+                prev.map((v) =>
+                  v.id === vm.id
+                    ? {
+                        ...v,
+                        machineId: res.machineId || v.machineId,
+                        status: res.state === "running" ? "running" : v.status,
+                        runtimeMinutes: res.runtimeMinutes ?? v.runtimeMinutes,
+                        maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
+                        idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
+                        screenUrl: v.screenUrl || res.screenUrl,
+                        telemetry: res.telemetry || v.telemetry,
+                      }
+                    : v
+                )
+              )
+            }
+          }).catch(() => {})
+        }
+      })
+    }
+
+    syncActiveInstaboxVms()
+    const syncInterval = setInterval(syncActiveInstaboxVms, 30000)
+
+    // Local runtime increment: increment runtime by 1 minute every 60 seconds if running
+    const timerInterval = setInterval(() => {
+      setVms((prev) =>
+        prev.map((vm) => {
+          if (vm.status === "running") {
+            const currentMins = vm.runtimeMinutes || 0
+            const maxMins = vm.maxRuntimeMinutes || 480
+            return {
+              ...vm,
+              runtimeMinutes: Math.min(maxMins, currentMins + 1),
+            }
+          }
+          return vm
+        })
+      )
+    }, 60000)
+
+    return () => {
+      clearInterval(syncInterval)
+      clearInterval(timerInterval)
+    }
+  }, [vms.length])
 
   // Accordion state
   const [expandedId, setExpandedId] = useState<string | null>(vms[0]?.id || null)
@@ -339,6 +399,19 @@ export default function VmManagerView({ go }: ViewProps) {
       return
     }
 
+    let cleanUser = formSshUser.trim()
+    let cleanHost = formSshHost.trim()
+    if (cleanUser.includes("@")) {
+      const parts = cleanUser.split("@")
+      cleanUser = parts[0]
+      if (!cleanHost && parts[1]) {
+        cleanHost = parts[1]
+      }
+    }
+
+    const finalApiKey = formApiKey.trim()
+    const targetId = editingVm ? editingVm.id : `vm-${Date.now()}`
+
     if (editingVm) {
       setVms((prev) =>
         prev.map((item) =>
@@ -347,14 +420,14 @@ export default function VmManagerView({ go }: ViewProps) {
                 ...item,
                 name: cleanName || item.name,
                 provider: addVmTab,
-                sshHost: formSshHost.trim() || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
-                sshUser: formSshUser.trim(),
+                sshHost: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
+                sshUser: cleanUser,
                 sshPort: Number(formSshPort) || (addVmTab === "instabox" ? 2222 : 22),
                 tokenExpiry: formTokenExpiry.trim(),
                 webPort: formWebPort ? Number(formWebPort) : undefined,
                 screenUrl: formScreenUrl.trim() || undefined,
-                apiKey: formApiKey.trim() || undefined,
-                ip: formSshHost.trim() || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
+                apiKey: finalApiKey || undefined,
+                ip: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
               }
             : item
         )
@@ -364,18 +437,18 @@ export default function VmManagerView({ go }: ViewProps) {
     } else {
       const finalName = cleanName || (addVmTab === "instabox" ? "InstaBox-MicroVM" : "Linux-VPS")
       const newVm: VirtualMachine = {
-        id: `vm-${Date.now()}`,
+        id: targetId,
         name: finalName,
         provider: addVmTab,
         status: "running",
-        sshHost: formSshHost.trim() || (addVmTab === "instabox" ? "ssh.instabox.sh" : "127.0.0.1"),
-        sshUser: formSshUser.trim(),
+        sshHost: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : "127.0.0.1"),
+        sshUser: cleanUser,
         sshPort: Number(formSshPort) || (addVmTab === "instabox" ? 2222 : 22),
         tokenExpiry: formTokenExpiry.trim() || (addVmTab === "instabox" ? "7d" : ""),
         webPort: formWebPort ? Number(formWebPort) : undefined,
         screenUrl: formScreenUrl.trim() || undefined,
-        apiKey: formApiKey.trim() || undefined,
-        ip: formSshHost.trim() || (addVmTab === "instabox" ? "ssh.instabox.sh" : "127.0.0.1"),
+        apiKey: finalApiKey || undefined,
+        ip: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : "127.0.0.1"),
         runtimeMinutes: 0,
         maxRuntimeMinutes: addVmTab === "instabox" ? 480 : undefined,
         idleTimeoutMinutes: addVmTab === "instabox" ? 30 : undefined,
@@ -393,22 +466,67 @@ export default function VmManagerView({ go }: ViewProps) {
       notify(`${finalName} berhasil ditambahkan!`, "success")
       setIsAddingVm(false)
     }
+
+    // Trigger immediate InstaBox cloud sync if API Key is configured
+    if (finalApiKey && addVmTab === "instabox") {
+      notify("Menyinkronkan data dengan InstaBox Cloud…", "info")
+      api.syncInstaBoxVm({ apiKey: finalApiKey, vmName: cleanName, machineId: editingVm?.machineId }).then((res: any) => {
+        if (res && res.success) {
+          setVms((current) =>
+            current.map((v) =>
+              v.id === targetId
+                ? {
+                    ...v,
+                    machineId: res.machineId || v.machineId,
+                    status: res.state === "running" ? "running" : "stopped",
+                    runtimeMinutes: res.runtimeMinutes ?? v.runtimeMinutes,
+                    maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
+                    idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
+                    screenUrl: v.screenUrl || res.screenUrl,
+                    sshHost: v.sshHost || res.sshHost,
+                    sshUser: v.sshUser || res.sshUser,
+                    sshPort: v.sshPort || res.sshPort,
+                    telemetry: res.telemetry || v.telemetry,
+                  }
+                : v
+            )
+          )
+          notify(`Terhubung ke InstaBox: ${res.machineName || 'MicroVM'}! Metrik berhasil disinkronkan.`, "success")
+        } else if (res && res.error) {
+          notify(`Peringatan InstaBox: ${res.error}`, "warning")
+        }
+      }).catch((err: any) => {
+        console.warn("InstaBox sync error:", err)
+      })
+    }
   }
 
   // Open Web Service in browser
   const handleOpenWeb = (vm: VirtualMachine) => {
     if (!vm.webPort && !vm.webUrl) return
     const host = vm.sshHost || vm.ip || "localhost"
-    const targetUrl = vm.webUrl || `http://${host}:${vm.webPort}`
-    window.open(targetUrl, "_blank")
+    let targetUrl = vm.webUrl || `http://${host}:${vm.webPort}`
+    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+      targetUrl = `http://${targetUrl}`
+    }
+    void api.openExternalBrowser(targetUrl)
     notify(`Membuka web service ${targetUrl}…`, "info")
   }
 
-  // Open Virtual Screen
+    // Open Virtual Screen
   const handleOpenScreen = (vm: VirtualMachine) => {
-    if (!vm.screenUrl) return
-    window.open(vm.screenUrl, "_blank")
-    notify(`Membuka Layanan Layar Virtual ${vm.name}…`, "info")
+    let targetUrl = (vm.screenUrl || "").trim()
+    if (!targetUrl) {
+      if (vm.machineId) {
+        targetUrl = `https://dashboard.instabox.sh/machines/${vm.machineId}`
+      } else {
+        targetUrl = "https://dashboard.instabox.sh"
+      }
+    } else if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+      targetUrl = `https://${targetUrl}`
+    }
+    void api.openExternalBrowser(targetUrl)
+    notify(`Membuka Layar Virtual: ${targetUrl}`, "info")
   }
 
   // Copy SFTP URI
@@ -463,13 +581,18 @@ export default function VmManagerView({ go }: ViewProps) {
   }
 
   // Immediate 8-hour reset cycle for InstaBox
-  const handleImmediateResetCycle = (vm: VirtualMachine) => {
+  const handleImmediateResetCycle = async (vm: VirtualMachine) => {
     notify(`Memulai siklus reset limit 8 jam untuk ${vm.name}…`, "info")
     setVms((prev) =>
       prev.map((item) =>
         item.id === vm.id ? { ...item, status: "sleeping" } : item
       )
     )
+    if (vm.apiKey) {
+      try {
+        await api.smartResetInstaBox({ apiKey: vm.apiKey, machineId: vm.machineId, vmId: vm.id })
+      } catch {}
+    }
     setTimeout(() => {
       setVms((prev) =>
         prev.map((item) =>
@@ -581,7 +704,7 @@ export default function VmManagerView({ go }: ViewProps) {
         {vm.provider === "instabox" && (
           <div className="rounded-tile bg-surface-sunken/40 border border-line/60 p-2.5 flex flex-col gap-2">
             <div className="w-full px-0.5">
-              <VmRuntimeDotBar usedPct={runtimePct} tone={dotTone} />
+              <VmRuntimeDotBar usedPct={runtimePct} tone={dotTone} live={isRunning} />
             </div>
 
             <div className="flex items-center justify-between text-micro text-ink-subtle">
@@ -669,7 +792,7 @@ export default function VmManagerView({ go }: ViewProps) {
                 <button
                   key={p.port}
                   type="button"
-                  onClick={() => p.url && window.open(p.url, "_blank")}
+                  onClick={() => p.url && void api.openExternalBrowser(p.url)}
                   className="px-1.5 py-0.5 rounded bg-info-soft text-info-ink text-[10px] font-mono hover:bg-info-soft/80 transition cursor-pointer"
                 >
                   {p.port} {p.label ? `(${p.label})` : ""}
@@ -708,7 +831,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
           {/* Action Row 1: Layar Virtual, Web Service, dan SFTP */}
           <div className="flex items-center gap-1.5">
-            {vm.screenUrl ? (
+            {(vm.screenUrl || vm.provider === "instabox") ? (
               <Button
                 size="sm"
                 variant="info"

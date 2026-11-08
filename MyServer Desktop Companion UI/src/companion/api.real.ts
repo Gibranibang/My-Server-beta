@@ -957,6 +957,46 @@ export function createRealApi(): CompanionApi {
 
 
 
+    async syncInstaBoxVm(params: { apiKey: string; machineId?: string; vmName?: string; vmId?: string }) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'instabox/sync', payload: params })
+        } catch (err) {
+          console.warn('[RealApi] syncInstaBoxVm invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['instabox/sync']) {
+          return await api['instabox/sync'](params)
+        }
+      } catch (err) {
+        console.warn('[RealApi] syncInstaBoxVm error:', err)
+      }
+      return { success: false, error: 'Core service unreachable' }
+    },
+
+    async smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string }) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'instabox/smart_reset', payload: params })
+        } catch (err) {
+          console.warn('[RealApi] smartResetInstaBox invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['instabox/smart_reset']) {
+          return await api['instabox/smart_reset'](params)
+        }
+      } catch (err) {
+        console.warn('[RealApi] smartResetInstaBox error:', err)
+      }
+      return { success: false, error: 'Core service unreachable' }
+    },
+
     async openFileExplorer() {
       try {
         const api = await getPyApi()

@@ -1,3 +1,13 @@
+[v4.4.1 - Beta] - 2026-11-08
+- Perbaikan Grid Kontainer Kartu & Eliminasi Total Horizontal Scroll:
+  - Kembalikan dimensi asli v4.3.2 Beta (252x228) tanpa pembungkus ekstra.
+  - Eliminasi total scrollbar horizontal (overflow-x-hidden) dan hilangkan scrollbar native OS (scrollbar-none).
+  - Scrolling vertikal mulus ke kartu VM Manager melalui mouse wheel / trackpad.
+- Rangkaian Animasi CRT Lengkap pada Kartu VM Manager:
+  - Scanlines, tube warmth, slow hum band, hover glitch jitter, dan tracking band pada kartu online & offline.
+  - Konfigurasi organic seed [data-crt-slot="vm"] pada crt-cards.css.
+- Sinkronisasi versi atomik v4.4.1 Beta lintas frontend, backend, tauri, dan installer.
+
 [v4.4.0 - Beta] - 2026-11-08
 - Integrasi Sub-sistem Virtual Machine (VM Manager) & Antigravity Remote:
   - Penambahan kartu ke-5 VM Manager pada Home View dengan scroll vertikal mulus.

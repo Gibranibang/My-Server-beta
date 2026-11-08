@@ -172,3 +172,22 @@
   --crt-jitter-dur: 1.88s;
   --crt-jitter-delay: -0.2s;
 }
+[data-crt-slot="vm"] {
+  --crt-hum-delay: -5.1s;
+  --crt-hum-dur: 7.3s;
+  --crt-warmth-dur: 0.25s;
+  --crt-jitter-dur: 2.1s;
+  --crt-jitter-delay: -0.5s;
+}
+
+/* Zero Layout Mutation: Bulletproof scrollbar elimination */
+nav[aria-label="Fitur MyServer"] {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+nav[aria-label="Fitur MyServer"]::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+

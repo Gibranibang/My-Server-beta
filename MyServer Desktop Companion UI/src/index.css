@@ -359,15 +359,29 @@
 }
 
 @utility scrollbar-none {
-  scrollbar-width: none;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
   &::-webkit-scrollbar {
-    display: none;
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
   }
 }
 
 @utility scrollbar-slim {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line-strong) transparent;
+  &::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border-radius: 9999px;
+  }
 }
 
 /* Soft fade at the scroll edges so content dissolves into the panel instead of clipping. */

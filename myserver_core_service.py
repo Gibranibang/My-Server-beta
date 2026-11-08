@@ -391,7 +391,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.4.0"
+APP_VERSION_NUMBER = "4.4.1"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 

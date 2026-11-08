@@ -1,5 +1,16 @@
 # Changelog MyServer Desktop
 
+## [v4.4.1 - Beta] - 2026-11-08
+
+- Perbaikan Tuntas Grid Kontainer Kartu & Eliminasi Total Horizontal Scroll:
+  - Mengembalikan struktur tata letak murni 1:1 sesuai versi v4.3.2 Beta (`w-[252px] h-[228px]`) tanpa pembungkus ekstra yang menyempitkan lebar kontainer.
+  - Mematikan total scrollbar horizontal (`overflow-x-hidden`) dan menyembunyikan scrollbar OS (`scrollbar-none`) agar kartu tidak terdorong ke kiri dan tidak memunculkan bilah scroll tebal yang memotong elemen kartu.
+  - Navigasi kartu ke bawah (downward scrolling) kini berjalan mulus melalui mouse wheel atau trackpad gesture untuk mengakses kartu ke-5 VM Manager tanpa layout shift.
+- Penyematan Rangkaian Efek CRT Retro Elektronik pada Kartu VM Manager:
+  - Menerapkan CRT electronics suite lengkap (`crt-glitch-content`, `crt-layer-scanlines`, `crt-hum-wrapper`, `crt-layer-vignette`, dan `crt-tracking-band`) pada kartu VM Manager online dan offline.
+  - Menambahkan konfigurasi timing seed organik `[data-crt-slot="vm"]` pada `crt-cards.css` sehingga kartu VM Manager memiliki animasi hover glitch jitter, tube warmth, tracking band flash, dan scanline hum yang serasi dengan 4 kartu lainnya.
+- Sinkronisasi Versi Atomik v4.4.1 Beta pada seluruh biner, frontend, backend, installer, dan tauri.
+
 ## [v4.4.0 - Beta] - 2026-11-08
 
 - Integrasi Sub-sistem Virtual Machine (VM Manager) & Antigravity Remote:

@@ -289,17 +289,15 @@ export default function HomeView({ go }: ViewProps) {
         {/* 1:1 Official Figma div.flex.svg Header Lockup with dynamic V{APP_VERSION} */}
         <HeaderLogo isOnline={isOnline} />
         <div className="h-[10px] shrink-0" aria-hidden />
-        <div id="home-cards-scroll" className="w-[252px] h-[228px] overflow-y-auto scrollbar-slim select-none pr-0.5">
-          <SkeuoMatrixGrid
-            isOnline={isOnline}
-            go={go}
-            onOpenExplorer={() => {
-              api.openFileManager()
-              notify("Membuka Windows File Explorer...", "info")
-            }}
-            safeT={safeT}
-          />
-        </div>
+        <SkeuoMatrixGrid
+          isOnline={isOnline}
+          go={go}
+          onOpenExplorer={() => {
+            api.openFileManager()
+            notify("Membuka Windows File Explorer...", "info")
+          }}
+          safeT={safeT}
+        />
         <div className="h-[9.19px] shrink-0" aria-hidden />
 
         <FooterStatus

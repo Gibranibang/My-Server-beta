@@ -1,5 +1,19 @@
 # Changelog MyServer Desktop
 
+## [v4.4.4 - Beta] - 2026-11-08
+
+- Redesain Kartu VM Manager Sesuai Standar UI Resmi & LED Dot Matrix Bar:
+  - Mengadopsi style dot matrix LED SVG 42 kolom x 3 baris dari File Manager (`FilesView.tsx`) untuk visualisasi progres batas waktu 8 jam InstaBox secara proporsional dan dinamis (hijau <70%, kuning 70-85%, merah >85%).
+  - Mempertahankan 100% tata letak shell menu luar VM Manager dari v4.4.3 Beta tanpa perubahan, hanya meredesain bagian dalam kartu informasi VM.
+  - Menghilangkan seluruh hardcoded telemetri fiktif; CPU, RAM, dan Disk kini hanya menampilkan nilai riil atau tanda strip (`—`) jika data belum tersedia/offline.
+  - Membersihkan seluruh data privasi dari repositori: inisialisasi state murni kosong (Empty State) dan modal form selalu bersih dari hardcoded token.
+- Fitur Jadwal Auto-Restart Seluruh VM & Reset Limit 8 Jam InstaBox:
+  - Tombol aksi seragam dan bersih: `Jadwal Auto-Restart` pada semua kartu VM.
+  - Penjadwalan fleksibel berdasarkan interval (detik, menit, jam) atau jam tertentu (HH:MM).
+  - Khusus InstaBox: Integrasi siklus resmi (Pause -> 5 detik -> Resume) untuk mereset timer batas waktu 8 jam kembali ke 0 tanpa terkena penalti cooldown 20 menit, dilengkapi tombol aksi langsung `Reset Limit 8 Jam Sekarang`.
+  - Untuk VM Linux/VPS manual: Mengeksekusi restart sistem (`sudo reboot`) via terminal/SSH.
+- Sinkronisasi Versi Atomik v4.4.4 Beta pada seluruh stack biner, frontend, backend, installer, dan manifest.
+
 ## [v4.4.3 - Beta] - 2026-11-08
 
 - Perombakan Total UI/UX VM Manager:

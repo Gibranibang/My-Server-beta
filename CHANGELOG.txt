@@ -1,3 +1,10 @@
+[v4.4.4 - Beta] - 2026-11-08
+- Redesain Kartu VM Manager: LED dot-matrix bar 42x3 style File Manager untuk runtime 8 jam InstaBox.
+- Isolasi desain: 100% tata letak luar menu VM Manager tetap konsisten tanpa perubahan layout.
+- Anti-hardcoding telemetri riil (CPU/RAM/Disk murni dinamis/strip jika offline) & zero data pribadi.
+- Fitur universal 'Jadwal Auto-Restart': interval/jam tertentu, opsi reset limit 8 jam InstaBox & reboot VPS.
+- Sinkronisasi versi atomik v4.4.4 Beta lintas frontend, backend, tauri, dan installer.
+
 [v4.4.3 - Beta] - 2026-11-08
 - Perombakan UI/UX VM Manager: header rapi, hapus banner mock, ganti tombol Antigravity ke aksi SSH universal.
 - Eliminasi seluruh hardcoded data VM fiktif; koneksi SSH InstaBox riil (Host, Port, Token Expiry).

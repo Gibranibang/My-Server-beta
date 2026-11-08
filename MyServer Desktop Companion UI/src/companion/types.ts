@@ -1,5 +1,32 @@
 export type ViewId = "home" | "files" | "backup" | "apps" | "settings" | "power" | "server" | "vm"
 
+export interface VmAutoRestartSchedule {
+  enabled: boolean
+  mode: "interval" | "clock"
+  intervalValue?: number
+  intervalUnit?: "seconds" | "minutes" | "hours"
+  clockTime?: string // "HH:MM" e.g. "04:00"
+  resetCycleMode?: "pause_resume" | "cold_restart"
+  lastExecuted?: string
+}
+
+export interface VmTelemetry {
+  cpuPct?: number | null
+  ramUsedBytes?: number | null
+  ramTotalBytes?: number | null
+  diskUsedBytes?: number | null
+  diskTotalBytes?: number | null
+  netUpKbs?: number | null
+  netDownKbs?: number | null
+  updatedAt?: string
+}
+
+export interface VmPublishedPort {
+  port: number
+  label?: string
+  url?: string
+}
+
 export interface VirtualMachine {
   id: string
   name: string
@@ -12,6 +39,12 @@ export interface VirtualMachine {
   tokenExpiry?: string
   webPort?: number
   webUrl?: string
+  screenUrl?: string
+  apiKey?: string
+  publishedPorts?: VmPublishedPort[]
+  telemetry?: VmTelemetry
+  autoRestart?: VmAutoRestartSchedule
+  meshIp?: string
   specs?: {
     cpu?: string
     ram?: string
@@ -21,7 +54,6 @@ export interface VirtualMachine {
   maxRuntimeMinutes?: number // 480 min (8 hours)
   idleTimeoutMinutes?: number // 30 min
   cooldownRemainingMinutes?: number
-  antigravityPort?: number
   lastActive?: string
   notes?: string
 }

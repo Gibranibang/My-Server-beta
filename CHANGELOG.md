@@ -1,5 +1,13 @@
 # Changelog MyServer Desktop
 
+## [v4.4.2 - Beta] - 2026-11-08
+
+- Integrasi Aset Kartu Baru: Mengintegrasikan 4 file SVG terbaru dari Figma (`File Manager Card.svg`, `File Manager Card (offline).svg`, `VM Manager Card.svg`, dan `VM Manager Card (offline).svg`) tanpa merubah bentuk, font, atau warna desain asli.
+- Restorasi Penuh Animasi Retro CRT: Memulihkan efek visual scanline, tube warmth vignette, CRT jitter glitch, dan horizontal tracking band pada semua slot kartu.
+- Restorasi Tombol "..." File Manager: Memfungsikan kembali tombol 3 titik pada kartu File Manager untuk membuka sub-menu Storage & Files, sementara klik pada bodi kartu tetap membuka File Explorer native.
+- Penyelarasan Frame Auto Layout 1:1 Figma: Mengunci dimensi Auto Layout kartu 284x236 (padding horizontal 16px, vertikal 8px) serta menyelaraskan frame footer status dan header flyout shell (Node 83:292 & 134-17822) dengan clearance aman ~21px.
+- Sinkronisasi Versi Atomik v4.4.2 Beta pada seluruh biner, frontend, backend, installer, dan tauri manifest.
+
 ## [v4.4.1 - Beta] - 2026-11-08
 
 - Perbaikan Tuntas Grid Kontainer Kartu & Eliminasi Total Horizontal Scroll:

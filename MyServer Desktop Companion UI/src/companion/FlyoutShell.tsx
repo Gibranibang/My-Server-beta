@@ -109,12 +109,19 @@ function TransitionOverlay() {
 export function FlyoutHeader({
   leading,
   trailing,
+  className,
 }: {
   leading: ReactNode
   trailing: ReactNode
+  className?: string
 }) {
   return (
-    <header className="flex h-[48px] shrink-0 items-center justify-between gap-[6.71px] px-[10.08px] pt-1.5 pb-1">
+    <header
+      className={cx(
+        "flex h-[43.68px] shrink-0 items-center justify-between gap-[6.71px] px-[10.08px] py-[10.08px] box-border",
+        className,
+      )}
+    >
       <div className="flex min-w-0 flex-1 items-center">{leading}</div>
       <div className="flex shrink-0 items-center gap-[1.68px]">{trailing}</div>
     </header>
@@ -381,7 +388,7 @@ export function FooterStatus({
   }
 
   return (
-    <footer className={cx("relative shrink-0 w-full z-10 px-0 pt-0", showNoticePill ? "pb-0" : "pb-[10px] mt-[9.19px]", className)}>
+    <footer className={cx("relative shrink-0 w-full z-10 box-border", showNoticePill ? "h-[96.88px] pt-[8.5px] pb-[18.38px] px-[16px] flex flex-col justify-start items-center" : "pb-[10px] mt-[9.19px]", className)}>
       <div
         className="relative w-[252px] h-[70px] mx-auto rounded-[10px] border-2 border-[#DDD] shadow-[4px_4px_4px_0px_rgba(0,0,0,0.15)] bg-[#F6F6F6] px-[7px] pt-[6.5px] pb-[6px] flex flex-col justify-between items-start overflow-hidden select-none"
       >
@@ -562,7 +569,7 @@ export default function FlyoutShell({
   return (
     <section
       aria-label="MyServer flyout"
-      className="relative isolate flex h-[410px] w-[286.26px] shrink-0 flex-col overflow-hidden rounded-[16px] border border-line bg-surface select-none shadow-panel motion-safe:animate-flyout-in"
+      className="relative isolate flex h-[412px] w-[286.26px] shrink-0 flex-col overflow-hidden rounded-[16px] border border-line bg-surface select-none shadow-panel motion-safe:animate-flyout-in"
     >
       <GridTexture />
       <TopGlow />

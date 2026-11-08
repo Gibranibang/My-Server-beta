@@ -233,15 +233,15 @@ export default function HomeView({ go }: ViewProps) {
 
   if (homeLoading || isInitialLoading) {
     return (
-      <div className="flex flex-col items-center px-[16px] pt-0 pb-0 w-full overflow-hidden">
+      <div className="flex flex-col items-center px-0 pt-0 pb-0 w-full overflow-hidden">
         {/* Cold-Start Header Skeleton */}
         <div className="flex h-[33.59px] w-[252px] shrink-0 items-center justify-between pr-0.5">
           <div className="h-6 w-28 rounded bg-surface-sunken animate-pulse" />
           <div className="h-3 w-10 rounded bg-surface-sunken animate-pulse" />
         </div>
-        <div className="h-[10px] shrink-0" aria-hidden />
+        <div className="h-[6px] shrink-0" aria-hidden />
         {/* Cold-Start 4 Feature Cards Grid Skeleton */}
-        <div className="w-[252px] h-[225.5px] mx-auto grid grid-cols-2 gap-x-[8px] gap-y-[5.5px]">
+        <div className="w-[284px] h-[236px] px-[16px] py-[8px] mx-auto grid grid-cols-2 gap-x-[8px] gap-y-[8px] justify-center">
           {[1, 2, 3, 4].map((i) => (
             <div
               key={i}
@@ -285,10 +285,11 @@ export default function HomeView({ go }: ViewProps) {
 
   return (
     <>
-      <div className="flex flex-col items-center px-[16px] pt-0 pb-0 w-full select-none">
-        {/* 1:1 Official Figma div.flex.svg Header Lockup with dynamic V{APP_VERSION} */}
-        <HeaderLogo isOnline={isOnline} />
-        <div className="h-[10px] shrink-0" aria-hidden />
+      <div className="flex flex-col items-center px-0 pt-0 pb-0 w-full select-none">
+        {/* 1:1 Official Figma div.flex.svg Header Lockup with dynamic V{APP_VERSION} (Frame 83:546) */}
+        <div className="-mt-[4.3px] mb-[2px]">
+          <HeaderLogo isOnline={isOnline} />
+        </div>
         <SkeuoMatrixGrid
           isOnline={isOnline}
           go={go}
@@ -298,7 +299,6 @@ export default function HomeView({ go }: ViewProps) {
           }}
           safeT={safeT}
         />
-        <div className="h-[9.19px] shrink-0" aria-hidden />
 
         <FooterStatus
         title={

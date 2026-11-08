@@ -1,3 +1,10 @@
+[v4.4.2 - Beta] - 2026-11-08
+- Integrasi 4 kartu SVG baru (File Manager & VM Manager online/offline) sesuai desain Figma.
+- Restorasi penuh sistem animasi retro CRT pada semua slot kartu.
+- Restorasi fungsi tombol '...' 3 titik File Manager untuk navigasi sub-menu Storage & Files.
+- Penyelarasan Auto Layout frame 1:1 Figma (Node 83:292) dengan bottom clearance terverifikasi ~21px.
+- Sinkronisasi versi atomik v4.4.2 Beta lintas frontend, backend, tauri, dan installer.
+
 [v4.4.1 - Beta] - 2026-11-08
 - Perbaikan Grid Kontainer Kartu & Eliminasi Total Horizontal Scroll:
   - Kembalikan dimensi asli v4.3.2 Beta (252x228) tanpa pembungkus ekstra.

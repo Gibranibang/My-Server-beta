@@ -382,11 +382,17 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
             effective = { ...loaded, theme: qTheme as any }
           } else {
             const cached = localStorage.getItem("myserver_theme")
-            if (cached && (!loaded || !loaded.theme)) {
-              effective = { ...loaded, theme: cached as any }
-            } else if (loaded?.theme) {
+            if (cached === "light" || cached === "dark") {
+              effective = { ...loaded, theme: cached }
+              if (loaded?.theme !== cached) {
+                void api.saveSettings({ ...effective, theme: cached })
+              }
+            } else if (loaded?.theme === "light" || loaded?.theme === "dark") {
               localStorage.setItem("myserver_theme", loaded.theme)
             }
+          }
+          if (effective?.theme) {
+            document.documentElement.setAttribute("data-theme", effective.theme)
           }
           if (qLang === "id" || qLang === "en") {
             effective = { ...effective, language: qLang as any }

@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.4.6"
+APP_VERSION_NUMBER = "4.4.7"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -2953,7 +2953,7 @@ def generate_autologin_js(username, password, access_token="", refresh_token="")
 
 
 
-def run_app_window(url, title=None, width=1150, height=750, target_server_id=None):
+def run_app_window(url, title=None, width=1150, height=750, target_server_id=None, target_vm_id=None):
 
 
 
@@ -3135,6 +3135,16 @@ def run_app_window(url, title=None, width=1150, height=750, target_server_id=Non
 
 
 
+            if target_vm_id:
+                profile_dir = os.path.abspath(
+                    os.path.join(
+                        base_dir,
+                        "data",
+                        "vms",
+                        _sanitize_profile_folder_name(target_vm_id),
+                        "webview_profile",
+                    )
+                )
             os.makedirs(profile_dir, exist_ok=True)
 
 
@@ -3697,7 +3707,7 @@ def probe_url_endpoint(target_url, timeout=1.2):
 
 
 
-def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=None):
+def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=None, vm_id=None, force_window=False):
 
 
 
@@ -3793,7 +3803,7 @@ def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=N
 
 
 
-    if open_mode == "browser":
+    if open_mode == "browser" and not force_window:
 
 
 
@@ -3914,30 +3924,13 @@ def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=N
 
 
         if getattr(sys, "frozen", False):
-
-
-
-
-
-
-
             cmd = [sys.executable, "--window", clean_u, "--title", win_title]
-
-
-
-
-
-
-
         else:
-
-
-
-
-
-
-
             cmd = [sys.executable, os.path.abspath(__file__), "--window", clean_u, "--title", win_title]
+        if server_id:
+            cmd.extend(["--server-id", str(server_id)])
+        if vm_id:
+            cmd.extend(["--vm-id", str(vm_id)])
 
 
 
@@ -21121,6 +21114,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json(mgr.get_status_overview())
             else:
                 self._send_json({"running": False, "error": "easytier_manager not available"})
+        elif path in ("/api/vms", "/api/vms/load"):
+            cfg = config_manager.load_or_create_config()
+            self._send_json({"status": "ok", "vms": cfg.get("vms", [])})
         elif path == "/api/instabox/vms":
             if instabox_manager:
                 vms = instabox_manager.InstaBoxManager.list_vms()
@@ -27608,9 +27604,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 "language": str(cfg.get("language", "en")),
-
-
-
+                "theme": str(cfg.get("theme", "dark")) if str(cfg.get("theme", "")).lower() in ("dark", "light") else "dark",
                 "dpapiActive": bool(config_manager.is_dpapi_supported()),
 
 
@@ -28028,6 +28022,39 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 path = "/api/easytier/stop"
             elif ep in ("remote/status", "remote_status"):
                 path = "/api/remote/status"
+
+        # --- Endpoints Persisten VM & Layar Virtual Terisolasi (v4.4.7 Beta) ---
+        if path in ("/api/vms", "/api/vms/load"):
+            cfg = config_manager.load_or_create_config()
+            if "vms" in body and isinstance(body.get("vms"), list):
+                cfg["vms"] = body["vms"]
+                config_manager.save_config(cfg)
+                self._send_json({"status": "ok", "success": True, "vms": cfg["vms"]})
+            else:
+                self._send_json({"status": "ok", "vms": cfg.get("vms", [])})
+            return
+
+        if path == "/api/vms/save":
+            cfg = config_manager.load_or_create_config()
+            vms_list = body.get("vms")
+            if isinstance(vms_list, list):
+                cfg["vms"] = vms_list
+                config_manager.save_config(cfg)
+                self._send_json({"status": "ok", "success": True})
+            else:
+                self._send_json({"status": "error", "message": "Invalid vms list"}, status=400)
+            return
+
+        if path == "/api/vm/open_window":
+            target_url = (body.get("url") or "").strip()
+            win_title = (body.get("title") or body.get("name") or "MyServer VM Screen").strip()
+            vm_id = (body.get("vmId") or body.get("id") or "vm_default").strip()
+            if target_url:
+                success, msg = spawn_app_window(target_url, win_title, vm_id=vm_id, force_window=True)
+                self._send_json({"success": success, "message": msg, "url": target_url, "title": win_title, "vmId": vm_id})
+            else:
+                self._send_json({"success": False, "message": "URL layar virtual kosong"}, status=400)
+            return
 
         # --- Endpoints InstaBox & Antigravity Remote (v4.4.0 Beta) ---
         if path == "/api/instabox/vms/add":
@@ -31345,6 +31372,221 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 
 
 
+
+_vm_daemon_state = {
+    "last_keepalive": {},
+    "last_heartbeat": {},
+}
+
+def _instabox_api_action(api_key, machine_id, action):
+    req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/{action}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Idempotency-Key": str(uuid.uuid4()),
+        "User-Agent": f"MyServer-Companion/{APP_VERSION_NUMBER}",
+    }
+    req = urllib.request.Request(req_url, data=b"{}", headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        return json.loads(resp.read().decode("utf-8") or "{}")
+
+def vm_power_scheduler_loop():
+    """
+    Daemon latar belakang 24/7 untuk menjaga VM InstaBox & Manual SSH:
+    1. Always-On (keepAliveEnabled): Membangunkan VM tidur seketika, mengirim heartbeat anti-idle,
+       dan mereset siklus 8 jam sebelum batas 450 menit (7.5 jam).
+    2. Auto-On (autoOn): Menyalakan VM sesuai jadwal jam tertentu (clock) atau jeda setelah mati (after_off).
+    3. Auto-Restart (autoRestart): Menjalankan siklus restart otomatis sesuai interval atau jam tertentu.
+    """
+    time.sleep(8.0)
+    while True:
+        try:
+            cfg = config_manager.load_or_create_config()
+            vms = cfg.get("vms", [])
+            if isinstance(vms, list) and len(vms) > 0:
+                now_ts = time.time()
+                now_ms = int(now_ts * 1000)
+                now_dt = datetime.datetime.now()
+                curr_hhmm = f"{now_dt.hour:02d}:{now_dt.minute:02d}"
+                curr_day_js = (now_dt.weekday() + 1) % 7  # 0=Sun, 1=Mon, ..., 6=Sat
+                changed = False
+
+                for vm in vms:
+                    if not isinstance(vm, dict):
+                        continue
+                    vm_id = str(vm.get("id") or "")
+                    provider = str(vm.get("provider") or "instabox")
+                    api_key = str(vm.get("apiKey") or "").strip()
+                    mid = str(vm.get("machineId") or "").strip()
+                    if not mid:
+                        ssh_u = str(vm.get("sshUser") or "").strip()
+                        if ssh_u.startswith("m_"):
+                            mid = ssh_u
+
+                    # Sinkronisasi status & Keep-Alive untuk InstaBox
+                    last_ka = _vm_daemon_state["last_keepalive"].get(vm_id, 0.0)
+                    if provider == "instabox" and api_key and (now_ts - last_ka >= 45.0):
+                        _vm_daemon_state["last_keepalive"][vm_id] = now_ts
+                        try:
+                            headers = {
+                                "Authorization": f"Bearer {api_key}",
+                                "Accept": "application/json",
+                                "User-Agent": f"MyServer-Companion/{APP_VERSION_NUMBER}",
+                            }
+                            req = urllib.request.Request("https://api.instabox.sh/v1/machines", headers=headers)
+                            with urllib.request.urlopen(req, timeout=10) as resp:
+                                m_data = json.loads(resp.read().decode("utf-8") or "{}")
+                                machines = m_data.get("machines", [])
+                                target = None
+                                if mid:
+                                    target = next((m for m in machines if m.get("id") == mid), None)
+                                if not target and machines:
+                                    target = machines[0]
+                                if target:
+                                    mid = target.get("id") or mid
+                                    if mid and not vm.get("machineId"):
+                                        vm["machineId"] = mid
+                                        changed = True
+                                    state = target.get("state", "running")
+                                    real_status = "running" if state == "running" else "sleeping"
+                                    if vm.get("status") != real_status:
+                                        vm["status"] = real_status
+                                        if real_status != "running" and not vm.get("sleepingSince"):
+                                            vm["sleepingSince"] = now_ms
+                                        elif real_status == "running":
+                                            vm.pop("sleepingSince", None)
+                                        changed = True
+
+                                    # Hitung runtimeMinutes dari runStartedAt
+                                    run_started = target.get("runStartedAt")
+                                    runtime_mins = int(vm.get("runtimeMinutes") or 0)
+                                    if run_started and real_status == "running":
+                                        try:
+                                            dt = datetime.datetime.fromisoformat(run_started.replace("Z", "+00:00"))
+                                            runtime_mins = max(0, min(480, int((datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() / 60)))
+                                            vm["runtimeMinutes"] = runtime_mins
+                                        except Exception:
+                                            pass
+
+                                    # 1. Always-On (keepAliveEnabled)
+                                    if vm.get("keepAliveEnabled"):
+                                        if real_status != "running" and mid:
+                                            logger_manager.log_info(f"[VMDaemon] Always-On aktif: membangunkan VM InstaBox {vm.get('name')} ({mid})")
+                                            _instabox_api_action(api_key, mid, "resume")
+                                            vm["status"] = "running"
+                                            vm.pop("sleepingSince", None)
+                                            changed = True
+                                        elif real_status == "running" and mid:
+                                            if runtime_mins >= 450:
+                                                logger_manager.log_info(f"[VMDaemon] Always-On 8h guard: mereset siklus runtime VM {vm.get('name')} ({mid})")
+                                                _instabox_api_action(api_key, mid, "suspend")
+                                                time.sleep(5.0)
+                                                _instabox_api_action(api_key, mid, "resume")
+                                                vm["runtimeMinutes"] = 0
+                                                changed = True
+                                            else:
+                                                # Anti-idle heartbeat setiap 10 menit (600 detik)
+                                                last_hb = _vm_daemon_state["last_heartbeat"].get(vm_id, 0.0)
+                                                if now_ts - last_hb >= 600.0:
+                                                    _vm_daemon_state["last_heartbeat"][vm_id] = now_ts
+                                                    try:
+                                                        ci_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{mid}/connection-info", headers=headers)
+                                                        with urllib.request.urlopen(ci_req, timeout=6) as ci_resp:
+                                                            ci_data = json.loads(ci_resp.read().decode("utf-8") or "{}")
+                                                            c_host = ci_data.get("host") or vm.get("sshHost") or "ssh.instabox.sh"
+                                                            c_port = int(ci_data.get("port") or vm.get("sshPort") or 2222)
+                                                        with socket.create_connection((c_host, c_port), timeout=4.0) as s:
+                                                            s.settimeout(2.0)
+                                                            try:
+                                                                _ = s.recv(64)
+                                                            except Exception:
+                                                                pass
+                                                    except Exception:
+                                                        pass
+                        except Exception as e_ka:
+                            logger_manager.log_debug(f"[VMDaemon] InstaBox sync/keepalive warning ({vm.get('name')}): {e_ka}")
+
+                    # 2. Auto-On Scheduler
+                    auto_on = vm.get("autoOn")
+                    if isinstance(auto_on, dict) and auto_on.get("enabled") and vm.get("status") != "running":
+                        should_wake = False
+                        mode_on = auto_on.get("mode", "clock")
+                        last_trig = int(auto_on.get("lastTriggeredAt") or 0)
+                        if mode_on == "clock":
+                            target_hhmm = str(auto_on.get("clockTime") or "07:00")
+                            active_days = auto_on.get("days")
+                            if not isinstance(active_days, list) or len(active_days) == 0:
+                                active_days = [0, 1, 2, 3, 4, 5, 6]
+                            if curr_hhmm == target_hhmm and curr_day_js in active_days and (now_ms - last_trig > 65000):
+                                should_wake = True
+                        elif mode_on == "after_off":
+                            sleep_since = int(vm.get("sleepingSince") or 0)
+                            if sleep_since <= 0:
+                                vm["sleepingSince"] = now_ms
+                                changed = True
+                            else:
+                                d_val = max(1, int(auto_on.get("delayValue") or 30))
+                                d_unit = str(auto_on.get("delayUnit") or "minutes")
+                                mult = 1000 if d_unit == "seconds" else (3600000 if d_unit == "hours" else 60000)
+                                delay_ms = d_val * mult
+                                if (now_ms - sleep_since >= delay_ms) and (now_ms - last_trig > max(15000, delay_ms // 2)):
+                                    should_wake = True
+
+                        if should_wake:
+                            auto_on["lastTriggeredAt"] = now_ms
+                            vm["status"] = "running"
+                            vm.pop("sleepingSince", None)
+                            changed = True
+                            if provider == "instabox" and api_key and mid:
+                                try:
+                                    logger_manager.log_info(f"[VMDaemon] Auto-On mengeksekusi nyala otomatis untuk {vm.get('name')} ({mid})")
+                                    _instabox_api_action(api_key, mid, "resume")
+                                except Exception as e_on:
+                                    logger_manager.log_warn(f"[VMDaemon] Auto-On gagal membangunkan {vm.get('name')}: {e_on}")
+
+                    # 3. Auto-Restart Scheduler
+                    auto_res = vm.get("autoRestart")
+                    if isinstance(auto_res, dict) and auto_res.get("enabled") and vm.get("status") == "running":
+                        should_restart = False
+                        mode_res = auto_res.get("mode", "interval")
+                        last_run = int(auto_res.get("lastRunTimestamp") or 0)
+                        if mode_res == "interval":
+                            if last_run <= 0:
+                                auto_res["lastRunTimestamp"] = now_ms
+                                changed = True
+                            else:
+                                i_val = max(1, int(auto_res.get("intervalValue") or 6))
+                                i_unit = str(auto_res.get("intervalUnit") or "hours")
+                                mult = 1000 if i_unit == "seconds" else (60000 if i_unit == "minutes" else 3600000)
+                                if now_ms - last_run >= i_val * mult:
+                                    should_restart = True
+                        elif mode_res == "clock":
+                            t_hhmm = str(auto_res.get("clockTime") or "04:00")
+                            if curr_hhmm == t_hhmm and (now_ms - last_run > 65000):
+                                should_restart = True
+
+                        if should_restart:
+                            auto_res["lastRunTimestamp"] = now_ms
+                            auto_res["lastExecuted"] = now_dt.strftime("%H:%M:%S")
+                            changed = True
+                            if provider == "instabox" and api_key and mid:
+                                try:
+                                    logger_manager.log_info(f"[VMDaemon] Auto-Restart mengeksekusi siklus reset untuk {vm.get('name')} ({mid})")
+                                    _instabox_api_action(api_key, mid, "suspend")
+                                    time.sleep(5.0)
+                                    _instabox_api_action(api_key, mid, "resume")
+                                    vm["runtimeMinutes"] = 0
+                                except Exception as e_res:
+                                    logger_manager.log_warn(f"[VMDaemon] Auto-Restart gagal pada {vm.get('name')}: {e_res}")
+
+                if changed:
+                    config_manager.save_config(cfg)
+        except Exception as e:
+            logger_manager.log_debug(f"[VMDaemon] Loop warning: {e}")
+        time.sleep(20.0)
+
+
 def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
@@ -31777,6 +32019,9 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
     t_syncthing.start()
+
+    t_vm_daemon = threading.Thread(target=vm_power_scheduler_loop, daemon=True)
+    t_vm_daemon.start()
 
 
 
@@ -32266,6 +32511,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--window", type=str, default="", help="Buka jendela aplikasi PyWebView untuk URL ini")
     parser.add_argument("--server-id", type=str, default="", help="Target Server ID untuk profil dan kredensial")
+    parser.add_argument("--vm-id", type=str, default="", help="Target VM ID untuk isolasi sesi WebView2")
 
 
 
@@ -32313,7 +32559,7 @@ if __name__ == "__main__":
 
 
 
-        run_app_window(args.window, args.title, target_server_id=getattr(args, 'server_id', None) or None)
+        run_app_window(args.window, args.title, target_server_id=getattr(args, 'server_id', None) or None, target_vm_id=getattr(args, 'vm_id', None) or None)
 
 
 

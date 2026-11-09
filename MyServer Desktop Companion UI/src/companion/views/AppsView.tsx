@@ -24,6 +24,43 @@ import { Button, Card, Chip, IconBadge, Mono, StatusDot, cx } from "../ui"
 import { ViewBody } from "./shared"
 import type { WebApp } from "../types"
 
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().trim()
+  if (!h || h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local") || h.endsWith(".lan")) {
+    return true
+  }
+  if (/^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h) || /^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\./.test(h)) {
+    return true
+  }
+  return false
+}
+
+export function resolveWebAppIconCandidates(rawUrl?: string, explicitIcon?: string): string[] {
+  const candidates: string[] = []
+  if (explicitIcon && explicitIcon.trim()) {
+    candidates.push(explicitIcon.trim())
+  }
+  const clean = (rawUrl || "").trim()
+  if (!clean) return candidates
+  try {
+    const withProto = /^https?:\/\//i.test(clean) ? clean : `https://${clean}`
+    const parsed = new URL(withProto)
+    const originFavicon = `${parsed.origin}/favicon.ico`
+    if (!candidates.includes(originFavicon)) {
+      candidates.push(originFavicon)
+    }
+    if (parsed.hostname && !isPrivateOrLocalHost(parsed.hostname)) {
+      const gFavicon = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(parsed.hostname)}&sz=64`
+      const ddgFavicon = `https://icons.duckduckgo.com/ip3/${encodeURIComponent(parsed.hostname)}.ico`
+      if (!candidates.includes(gFavicon)) candidates.push(gFavicon)
+      if (!candidates.includes(ddgFavicon)) candidates.push(ddgFavicon)
+    }
+  } catch {
+    // ignore invalid URL while typing
+  }
+  return candidates
+}
+
 function getAppFallbackVisuals(name: string): {
   icon: LucideIcon
   tone: "info" | "warning" | "violet" | "success"
@@ -93,7 +130,11 @@ export default function AppsView() {
   const t = getTranslation(settings?.language)
   const { notify } = useNotice()
 
-  const [filter, setFilter] = useState<"all" | "active" | "zima" | "custom">("all")
+  const [filter, setFilter] = useState<"all" | "active" | "zima" | "custom">(() =>
+    typeof window !== "undefined" && window.location.search.includes("apps_tab=custom")
+      ? "custom"
+      : "all",
+  )
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -105,7 +146,7 @@ export default function AppsView() {
   const [url, setUrl] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({})
+  const [failedIconIdx, setFailedIconIdx] = useState<Record<string, number>>({})
 
   const safeWebApps = useMemo(() => (Array.isArray(webApps) ? webApps : []), [webApps])
 
@@ -392,7 +433,10 @@ export default function AppsView() {
             {filteredApps.map((app) => {
               const fallback = getAppFallbackVisuals(app.name)
               const isDeleting = deletingId === app.id
-              const hasCustomIcon = Boolean(app.icon && !brokenImages[app.id])
+              const iconCandidates = resolveWebAppIconCandidates(app.url, app.icon)
+              const currentCandidateIdx = failedIconIdx[app.id] ?? 0
+              const activeIconUrl = iconCandidates[currentCandidateIdx] || ""
+              const hasCustomIcon = Boolean(activeIconUrl)
 
               // Status penentuan (Running vs Exited vs Custom)
               const isRunning =
@@ -407,11 +451,14 @@ export default function AppsView() {
                         {hasCustomIcon ? (
                           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface/80 p-0.5 border border-ink-subtle/15 shrink-0">
                             <img
-                              src={app.icon}
+                              src={activeIconUrl}
                               alt={app.name}
-                              className="h-full w-full object-contain"
+                              className="h-full w-full object-contain rounded-xs"
                               onError={() =>
-                                setBrokenImages((prev) => ({ ...prev, [app.id]: true }))
+                                setFailedIconIdx((prev) => ({
+                                  ...prev,
+                                  [app.id]: (prev[app.id] ?? 0) + 1,
+                                }))
                               }
                             />
                           </div>

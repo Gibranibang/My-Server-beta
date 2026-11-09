@@ -1,5 +1,26 @@
 # Changelog MyServer Desktop
 
+## [v4.4.7 - Beta] - 2026-11-09
+
+- Perbaikan Menyeluruh Fitur "Tetap Nyala" (Always-On) & "Auto-Restart" + Daemon Latar Belakang 24/7:
+  - Memperbaiki bug ReferenceError (`vmsRef is not defined`) dan *stale closure* pada `VmManagerView.tsx` yang sebelumnya membuat penjadwal otomatis berhenti berfungsi.
+  - Mengaktifkan tombol "Tetap Nyala" pada VM InstaBox yang sedang tidur kini langsung membangunkan VM seketika (*instant wake*).
+  - Menambahkan thread daemon latar belakang 24/7 (`vm_power_scheduler_loop`) di `myserver_core_service.py` agar fitur Always-On, Auto-On, dan Auto-Restart tetap berjalan meskipun jendela UI ditutup ke System Tray.
+- Fitur Baru Tombol & Penjadwal "Auto-On" (Nyala Otomatis) dengan Tata Letak Grid Aksi 3x2 Simetris:
+  - Menambahkan tombol `Auto-On` pada Grid Aksi 3x2 (`Layar Virtual | SFTP`, `Auto-On | Auto-Restart`, `Bangunkan/Tidurkan | Tetap Nyala`).
+  - Mendukung 2 mode penjadwalan: Mode Jam Tertentu (`HH:MM` beserta pilihan hari aktif) dan Mode Jeda Setelah Mati (`X` detik/menit/jam setelah VM mati atau tertidur).
+- Tombol Hapus VM & Modal Konfirmasi Penghapusan:
+  - Menambahkan tombol Hapus VM (`Trash2`) di samping tombol Edit (`Pencil`) pada baris header setiap kartu VM, dilengkapi popup modal konfirmasi penghapusan dwibahasa (`ID/ENG`).
+  - Memastikan seluruh kartu VM selalu berstatus tertutup rapi (*minimized*) secara default saat menu dibuka.
+- Pilihan Target Pembukaan Layar Virtual & Isolasi Sesi Login Multi-Akun InstaBox:
+  - Menambahkan opsi pembukaan Layar Virtual melalui **Jendela MyServer (Sesi Terisolasi)** atau **Browser Bawaan**, dilengkapi kotak centang pengingat pilihan per-VM.
+  - Setiap VM memiliki direktori profil WebView2 terpisah (`data/vms/<vm_id>/webview_profile`) sehingga pengguna dapat login ke banyak akun InstaBox berbeda secara bersamaan tanpa saling ter-logout.
+- Resolusi Ikon Otomatis (Auto-Favicon) untuk Custom Web Apps:
+  - Aplikasi web kustom di menu `Apps` kini otomatis mengambil dan menampilkan ikon situs (*favicon*) dari URL aplikasi terkait dengan fallback berlapis ke ikon vektor standar.
+- Perbaikan Persistensi Preferensi Mode Light/Dark Lintas Reboot:
+  - Memperbaiki endpoint `/api/load_settings` di `myserver_core_service.py` dan sinkronisasi tema di `api.real.ts` serta `store.tsx` agar pilihan Light Mode atau Dark Mode tersimpan permanen di `config.json` dan tidak ter-reset saat laptop dinyalakan ulang.
+
+
 ## [v4.4.6 - Beta] - 2026-11-09
 
 - Fitur Khusus "Tetap Nyala" (Always-On) Khusus InstaBox Cloud:

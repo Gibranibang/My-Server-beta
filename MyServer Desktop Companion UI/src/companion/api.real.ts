@@ -568,8 +568,11 @@ export function createRealApi(): CompanionApi {
           const s = await api.load_settings()
 
           if (s) {
-
-            currentSettings = { ...DEFAULT_SETTINGS, ...s }
+            const cachedTheme = typeof window !== "undefined" ? localStorage.getItem("myserver_theme") : null
+            const resolvedTheme = (s.theme === "light" || s.theme === "dark")
+              ? s.theme
+              : (cachedTheme === "light" || cachedTheme === "dark" ? cachedTheme : DEFAULT_SETTINGS.theme)
+            currentSettings = { ...DEFAULT_SETTINGS, ...s, theme: resolvedTheme }
 
             return currentSettings
 
@@ -1035,6 +1038,70 @@ export function createRealApi(): CompanionApi {
         console.warn('[RealApi] pauseInstaBoxVm error:', err)
       }
       return { success: false, error: 'Core service unreachable' }
+    },
+
+    async loadVms() {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          const res = await invoke('call_core_api', { endpoint: 'vms/load', payload: {} })
+          if (res && Array.isArray(res.vms)) return res.vms
+        } catch (err) {
+          console.warn('[RealApi] loadVms invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['vms/load']) {
+          const res = await api['vms/load']({})
+          if (res && Array.isArray(res.vms)) return res.vms
+        }
+      } catch (err) {
+        console.warn('[RealApi] loadVms error:', err)
+      }
+      return []
+    },
+
+    async saveVms(vms: any[]) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'vms/save', payload: { vms } })
+        } catch (err) {
+          console.warn('[RealApi] saveVms invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['vms/save']) {
+          return await api['vms/save']({ vms })
+        }
+      } catch (err) {
+        console.warn('[RealApi] saveVms error:', err)
+      }
+      return { status: 'error' }
+    },
+
+    async openVmWindow(vmId: string, title: string, url: string) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          await invoke('call_core_api', { endpoint: 'vm/open_window', payload: { vmId, title, url } })
+          return
+        } catch (err) {
+          console.warn('[RealApi] openVmWindow invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['vm/open_window']) {
+          await api['vm/open_window']({ vmId, title, url })
+          return
+        }
+      } catch (err) {
+        console.warn('[RealApi] openVmWindow error:', err)
+      }
+      await this.openUrl(url, title)
     },
 
     async openFileExplorer() {

@@ -1,4 +1,4 @@
-import type { Drive, Metrics, PowerState, Settings, ServerDetails, WebApp, SyncthingFullStatus, SyncthingFolderTask, SyncthingConfigData } from "./types"
+import type { Drive, Metrics, PowerState, Settings, ServerDetails, WebApp, SyncthingFullStatus, SyncthingFolderTask, SyncthingConfigData, VirtualMachine } from "./types"
 
 import { APP_VERSION, APP_CHANNEL } from "./version"
 
@@ -133,6 +133,12 @@ export interface CompanionApi {
   wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
 
   pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
+
+  loadVms?(): Promise<VirtualMachine[]>
+
+  saveVms?(vms: VirtualMachine[]): Promise<any>
+
+  openVmWindow?(vmId: string, title: string, url: string): Promise<void>
 
   openFileManager(): Promise<void>
 
@@ -761,6 +767,18 @@ export function createMockApi(): CompanionApi {
 
     async pauseInstaBoxVm() {
       return { status: "ok", message: "VM berhasil di-pause (mock)." }
+    },
+
+    async loadVms() {
+      return []
+    },
+
+    async saveVms() {
+      return { status: "ok", success: true }
+    },
+
+    async openVmWindow(_vmId: string, title: string, url: string) {
+      await this.openUrl(url, title)
     },
 
     async openFileManager() {},

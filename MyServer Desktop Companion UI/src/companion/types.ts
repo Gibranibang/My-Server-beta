@@ -7,8 +7,20 @@ export interface VmAutoRestartSchedule {
   intervalUnit?: "seconds" | "minutes" | "hours"
   clockTime?: string // "HH:MM" e.g. "04:00"
   resetCycleMode?: "pause_resume" | "cold_restart"
+  resetMode?: "pause_resume" | "cold_restart"
   lastExecuted?: string
   lastRunTimestamp?: number
+}
+
+export interface VmAutoOnSchedule {
+  enabled: boolean
+  mode: "clock" | "after_off"
+  clockTime?: string // "HH:MM" e.g. "07:00"
+  days?: number[] // 0=Sun..6=Sat
+  delayValue?: number // e.g. 30
+  delayUnit?: "seconds" | "minutes" | "hours"
+  lastTriggered?: string
+  lastTriggeredTimestamp?: number
 }
 
 export interface VmTelemetry {
@@ -33,6 +45,7 @@ export interface VirtualMachine {
   name: string
   provider: "instabox" | "custom"
   status: "running" | "sleeping" | "cooldown" | "stopped"
+  machineId?: string
   sshHost?: string
   sshUser?: string
   sshPort: number
@@ -41,10 +54,13 @@ export interface VirtualMachine {
   webPort?: number
   webUrl?: string
   screenUrl?: string
+  screenOpenTarget?: "window" | "browser" | "ask"
   apiKey?: string
   publishedPorts?: VmPublishedPort[]
   telemetry?: VmTelemetry
   autoRestart?: VmAutoRestartSchedule
+  autoOn?: VmAutoOnSchedule
+  sleepingSince?: number
   keepAliveEnabled?: boolean
   meshIp?: string
   specs?: {

@@ -1,3 +1,11 @@
+[v4.4.7 - Beta] - 2026-11-09
+- Perbaikan Always-On & Auto-Restart 24/7: memperbaiki ReferenceError vmsRef di VmManagerView, wake instan saat Always-On diaktifkan pada VM sleeping, serta daemon latar belakang vm_power_scheduler_loop di myserver_core_service.py.
+- Fitur Auto-On & Grid Aksi 3x2 Simetris (Opsi A): penjadwalan nyala otomatis pada Jam Tertentu (HH:MM + hari aktif) dan Jeda Setelah Mati (detik/menit/jam setelah mati).
+- Tombol Hapus VM (Trash2) & Default Minimized: seluruh kartu VM (1 VM maupun banyak VM) default tertutup rapi (collapsed) dengan tombol Edit dan Hapus VM di baris header serta modal konfirmasi dwibahasa (ID/ENG).
+- Target Pembukaan Layar Virtual & Isolasi Sesi Multi-VM: opsi buka di Jendela Baru MyServer (dengan folder sesi WebView2 terisolasi per-VM di data/vms/<vm_id>/webview_profile untuk login multi-akun InstaBox) atau Browser Bawaan.
+- Auto-Favicon Custom Web Apps: pengambilan ikon otomatis dari URL aplikasi web kustom di menu Apps beserta fallback ikon vektor.
+- Persistensi Tema Light/Dark Mode: memperbaiki /api/load_settings agar mengembalikan preferensi theme dari config.json sehingga mode terang/gelap bertahan setelah restart laptop.
+
 [v4.4.6 - Beta] - 2026-11-09
 - Fitur 'Tetap Nyala' (Always-On) khusus InstaBox: anti-sleep heartbeat 15 menit & koordinasi Smart Reset batas 8 jam.
 - Proteksi mutlak logika Auto-Restart VM Umum (Manual SSH) tetap murni tanpa intervensi.

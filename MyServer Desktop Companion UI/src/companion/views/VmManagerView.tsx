@@ -28,7 +28,7 @@ import { useCompanion, useNotice } from "../store"
 import { getCompanionApi } from "../api"
 import { Button, Card, Chip, IconBadge, Mono, StatusDot, cx } from "../ui"
 import { ViewBody, type ViewProps } from "./shared"
-import type { Tone, VirtualMachine, VmAutoRestartSchedule, VmTelemetry } from "../types"
+import type { Tone, VirtualMachine, VmAutoOnSchedule, VmAutoRestartSchedule, VmTelemetry } from "../types"
 
 const INITIAL_VMS: VirtualMachine[] = []
 
@@ -190,29 +190,50 @@ export default function VmManagerView({ go }: ViewProps) {
     return INITIAL_VMS
   })
 
-  // Save to localStorage whenever vms change
+  const vmsRef = useRef<VirtualMachine[]>(vms)
+  vmsRef.current = vms
+
+  // Load from backend config.json on mount (or sync existing localStorage VMs to backend)
+  useEffect(() => {
+    if (api.loadVms) {
+      api.loadVms().then((remoteVms) => {
+        if (Array.isArray(remoteVms) && remoteVms.length > 0 && vmsRef.current.length === 0) {
+          setVms(remoteVms)
+        } else if (vmsRef.current.length > 0 && (!Array.isArray(remoteVms) || remoteVms.length === 0)) {
+          void api.saveVms?.(vmsRef.current)
+        }
+      }).catch(() => {})
+    }
+  }, [])
+
+  // Save to localStorage and backend config.json whenever vms change
   useEffect(() => {
     if (typeof window !== "undefined") {
       try {
         localStorage.setItem("myserver_vms", JSON.stringify(vms))
       } catch {}
     }
+    if (api.saveVms) {
+      void api.saveVms(vms).catch(() => {})
+    }
   }, [vms])
 
   // Periodic InstaBox Sync & Local Runtime Counter
   useEffect(() => {
     const syncActiveInstaboxVms = () => {
-      vms.forEach((vm) => {
+      vmsRef.current.forEach((vm) => {
         if (vm.provider === "instabox" && vm.apiKey) {
-          api.syncInstaBoxVm({ apiKey: vm.apiKey, machineId: vm.machineId, vmName: vm.name }).then((res: any) => {
+          const mid = vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined)
+          api.syncInstaBoxVm({ apiKey: vm.apiKey, machineId: mid, vmName: vm.name, vmId: vm.id }).then((res: any) => {
             if (res && res.success) {
               setVms((prev) =>
                 prev.map((v) =>
                   v.id === vm.id
                     ? {
                         ...v,
-                        machineId: res.machineId || v.machineId,
+                        machineId: res.machineId || v.machineId || mid,
                         status: res.state === "running" ? "running" : (res.state ? "sleeping" : v.status),
+                        sleepingSince: res.state !== "running" ? (v.sleepingSince || Date.now()) : undefined,
                         runtimeMinutes: res.runtimeMinutes ?? v.runtimeMinutes,
                         maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
                         idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
@@ -230,14 +251,23 @@ export default function VmManagerView({ go }: ViewProps) {
 
     syncActiveInstaboxVms()
 
-    // 15-minute anti-sleep heartbeat & continuous runtime guard for InstaBox VMs with keepAliveEnabled
+    // Continuous anti-sleep heartbeat & immediate wake guard for InstaBox VMs with keepAliveEnabled
     const keepAlivePing = () => {
-      vms.forEach((vm) => {
+      vmsRef.current.forEach((vm) => {
         if (vm.provider === "instabox" && vm.keepAliveEnabled && isOnline) {
-          if (vm.status === "sleeping" && vm.apiKey && vm.machineId) {
-            api.wakeInstaBoxVm({ apiKey: vm.apiKey, machineId: vm.machineId }).catch(() => {})
+          const mid = vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined)
+          if (vm.status === "sleeping") {
+            api.wakeInstaBoxVm({ apiKey: vm.apiKey, machineId: mid, vmId: vm.id }).then((res: any) => {
+              if (!res || res.status !== "error") {
+                setVms((prev) =>
+                  prev.map((item) =>
+                    item.id === vm.id ? { ...item, status: "running", sleepingSince: undefined } : item
+                  )
+                )
+              }
+            }).catch(() => {})
           }
-          if (vm.status === "running" && (vm.runtimeMinutes || 0) >= 420) {
+          if (vm.status === "running" && (vm.runtimeMinutes || 0) >= 450) {
             handleImmediateResetCycle(vm)
           }
         }
@@ -274,8 +304,57 @@ export default function VmManagerView({ go }: ViewProps) {
     }
   }, [vms.length])
 
-  // Accordion state
+  // Accordion state (All VM cards start minimized by default)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  // Modal Auto-On Scheduler state
+  const [autoOnVm, setAutoOnVm] = useState<VirtualMachine | null>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get("vm_modal") === "autoon" || params.get("vm_modal") === "autoon_delay") {
+        return vms[0] || null
+      }
+    }
+    return null
+  })
+  const [autoOnEnabled, setAutoOnEnabled] = useState<boolean>(true)
+  const [autoOnMode, setAutoOnMode] = useState<"clock" | "after_off">(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get("vm_modal") === "autoon_delay") return "after_off"
+    }
+    return "clock"
+  })
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get("scroll") === "bottom") {
+        setTimeout(() => {
+          document.querySelectorAll(".overflow-y-auto").forEach((el) => {
+            ;(el as HTMLElement).scrollTop = (el as HTMLElement).scrollHeight
+          })
+        }, 350)
+      }
+    }
+  }, [])
+  const [autoOnClockTime, setAutoOnClockTime] = useState<string>("07:00")
+  const [autoOnDays, setAutoOnDays] = useState<number[]>([1, 2, 3, 4, 5, 6, 0])
+  const [autoOnDelayVal, setAutoOnDelayVal] = useState<number | string>(30)
+  const [autoOnDelayUnit, setAutoOnDelayUnit] = useState<"seconds" | "minutes" | "hours">("minutes")
+
+  // Modal Virtual Screen Target Selector state
+  const [screenPromptVm, setScreenPromptVm] = useState<VirtualMachine | null>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get("vm_modal") === "screen") {
+        return vms[0] || null
+      }
+    }
+    return null
+  })
+  const [rememberScreenTarget, setRememberScreenTarget] = useState<boolean>(false)
+  const [formScreenOpenTarget, setFormScreenOpenTarget] = useState<"window" | "browser" | "ask">("ask")
 
   // Modals state
   const [vmToDelete, setVmToDelete] = useState<VirtualMachine | null>(() => {
@@ -457,30 +536,37 @@ export default function VmManagerView({ go }: ViewProps) {
     setFormTokenExpiry(vm.tokenExpiry || "")
     setFormWebPort(vm.webPort || "")
     setFormScreenUrl(vm.screenUrl || "")
+    setFormScreenOpenTarget(vm.screenOpenTarget || "ask")
     setFormApiKey(vm.apiKey || "")
   }
 
-  // Dedicated Always-On Toggle for InstaBox
-  const handleToggleKeepAlive = (vm: VirtualMachine) => {
+  // Dedicated Always-On Toggle for InstaBox (Immediately wakes sleeping VM!)
+  const handleToggleKeepAlive = async (vm: VirtualMachine) => {
     const nextVal = !vm.keepAliveEnabled
     const updatedVms = vms.map((v) => {
       if (v.id === vm.id) {
         const nextAutoRestart: VmAutoRestartSchedule = v.autoRestart ? {
           ...v.autoRestart,
           enabled: true,
-          resetMode: "pause_resume",
+          resetCycleMode: "pause_resume",
         } : {
           enabled: true,
           mode: "interval",
           intervalValue: 6,
           intervalUnit: "hours",
-          resetMode: "pause_resume",
+          resetCycleMode: "pause_resume",
         }
+
+        // Jika Always-On 24/7 diaktifkan, nonaktifkan Auto-On mode jeda (after_off) agar tidak bentrok
+        const nextAutoOn = (nextVal && v.autoOn?.enabled && v.autoOn.mode === "after_off")
+          ? { ...v.autoOn, enabled: false }
+          : v.autoOn
 
         return {
           ...v,
           keepAliveEnabled: nextVal,
           autoRestart: nextVal ? nextAutoRestart : v.autoRestart,
+          autoOn: nextAutoOn,
         }
       }
       return v
@@ -488,10 +574,75 @@ export default function VmManagerView({ go }: ViewProps) {
     setVms(updatedVms)
     notify(
       nextVal
-        ? (language === "id" ? `${vm.name}: Fitur Tetap Nyala diaktifkan` : `${vm.name}: Always-On enabled`)
+        ? (language === "id" ? `${vm.name}: Fitur Tetap Nyala 24/7 diaktifkan` : `${vm.name}: Always-On 24/7 enabled`)
         : (language === "id" ? `${vm.name}: Fitur Tetap Nyala dinonaktifkan` : `${vm.name}: Always-On disabled`),
       "info"
     )
+    // Jika VM sedang tidur saat Always-On diaktifkan, langsung bangunkan sekarang juga!
+    if (nextVal && vm.status === "sleeping") {
+      await handleTogglePower({ ...vm, keepAliveEnabled: true })
+    }
+  }
+
+  // Open Auto-On Schedule Modal
+  const handleOpenAutoOn = (vm: VirtualMachine) => {
+    setAutoOnVm(vm)
+    if (vm.autoOn) {
+      setAutoOnEnabled(vm.autoOn.enabled)
+      setAutoOnMode(vm.autoOn.mode || "clock")
+      setAutoOnClockTime(vm.autoOn.clockTime || "07:00")
+      setAutoOnDays(vm.autoOn.days && vm.autoOn.days.length > 0 ? vm.autoOn.days : [1, 2, 3, 4, 5, 6, 0])
+      setAutoOnDelayVal(vm.autoOn.delayValue || 30)
+      setAutoOnDelayUnit(vm.autoOn.delayUnit || "minutes")
+    } else {
+      setAutoOnEnabled(true)
+      setAutoOnMode("clock")
+      setAutoOnClockTime("07:00")
+      setAutoOnDays([1, 2, 3, 4, 5, 6, 0])
+      setAutoOnDelayVal(30)
+      setAutoOnDelayUnit("minutes")
+    }
+  }
+
+  const handleToggleAutoOnDay = (dayIndex: number) => {
+    setAutoOnDays((prev) =>
+      prev.includes(dayIndex)
+        ? (prev.length > 1 ? prev.filter((d) => d !== dayIndex) : prev)
+        : [...prev, dayIndex]
+    )
+  }
+
+  const handleSaveAutoOn = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!autoOnVm) return
+    const nextAutoOn: VmAutoOnSchedule = {
+      enabled: autoOnEnabled,
+      mode: autoOnMode,
+      clockTime: autoOnClockTime || "07:00",
+      days: autoOnDays,
+      delayValue: Math.max(1, Number(autoOnDelayVal) || 30),
+      delayUnit: autoOnDelayUnit,
+    }
+    const disableKeepAlive = autoOnEnabled && autoOnMode === "after_off" && autoOnVm.keepAliveEnabled
+    setVms((prev) =>
+      prev.map((item) =>
+        item.id === autoOnVm.id
+          ? {
+              ...item,
+              autoOn: nextAutoOn,
+              keepAliveEnabled: disableKeepAlive ? false : item.keepAliveEnabled,
+              sleepingSince: item.status !== "running" ? (item.sleepingSince || Date.now()) : undefined,
+            }
+          : item
+      )
+    )
+    notify(
+      language === "id"
+        ? `Jadwal Auto-On ${autoOnVm.name} berhasil disimpan!`
+        : `Auto-On schedule for ${autoOnVm.name} saved!`,
+      "success"
+    )
+    setAutoOnVm(null)
   }
 
   // Save Add/Edit
@@ -530,6 +681,7 @@ export default function VmManagerView({ go }: ViewProps) {
                 tokenExpiry: formTokenExpiry.trim(),
                 webPort: formWebPort ? Number(formWebPort) : undefined,
                 screenUrl: formScreenUrl.trim() || undefined,
+                screenOpenTarget: formScreenOpenTarget,
                 apiKey: finalApiKey || undefined,
                 ip: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
               }
@@ -566,7 +718,6 @@ export default function VmManagerView({ go }: ViewProps) {
         },
       }
       setVms((prev) => [...prev, newVm])
-      setExpandedId(newVm.id)
       notify(language === "id" ? `${finalName} berhasil ditambahkan!` : `${finalName} added successfully!`, "success")
       setIsAddingVm(false)
     }
@@ -617,20 +768,61 @@ export default function VmManagerView({ go }: ViewProps) {
     notify(language === "id" ? `Membuka web service ${targetUrl}…` : `Opening web service ${targetUrl}…`, "info")
   }
 
-    // Open Virtual Screen
-  const handleOpenScreen = (vm: VirtualMachine) => {
+  const resolveVmScreenUrl = (vm: VirtualMachine): string => {
     let targetUrl = (vm.screenUrl || "").trim()
+    const mid = vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : "")
     if (!targetUrl) {
-      if (vm.machineId) {
-        targetUrl = `https://dashboard.instabox.sh/machines/${vm.machineId}`
+      if (mid) {
+        targetUrl = `https://dashboard.instabox.sh/machines/${mid}`
       } else {
         targetUrl = "https://dashboard.instabox.sh"
       }
     } else if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
       targetUrl = `https://${targetUrl}`
     }
-    void api.openExternalBrowser(targetUrl)
-    notify(language === "id" ? `Membuka Layar Virtual: ${targetUrl}` : `Opening Virtual Screen: ${targetUrl}`, "info")
+    return targetUrl
+  }
+
+  const executeOpenScreenTarget = (vm: VirtualMachine, targetMode: "window" | "browser", remember: boolean) => {
+    const targetUrl = resolveVmScreenUrl(vm)
+    if (remember) {
+      setVms((prev) =>
+        prev.map((item) => (item.id === vm.id ? { ...item, screenOpenTarget: targetMode } : item))
+      )
+    }
+    if (targetMode === "window") {
+      const winTitle = `${vm.name} - Virtual Screen`
+      if (api.openVmWindow) {
+        void api.openVmWindow(vm.id, winTitle, targetUrl)
+      } else {
+        void api.openUrl(targetUrl, winTitle)
+      }
+      notify(
+        language === "id"
+          ? `Membuka Jendela Terisolasi untuk ${vm.name} (Sesi Login Mandiri)`
+          : `Opening Isolated Window for ${vm.name} (Dedicated Login Session)`,
+        "info"
+      )
+    } else {
+      void api.openExternalBrowser(targetUrl)
+      notify(
+        language === "id"
+          ? `Membuka Layar Virtual di Browser Bawaan: ${vm.name}`
+          : `Opening Virtual Screen in Default Browser: ${vm.name}`,
+        "info"
+      )
+    }
+    setScreenPromptVm(null)
+  }
+
+  // Open Virtual Screen (Checks preference or opens Target Selector Modal)
+  const handleOpenScreen = (vm: VirtualMachine) => {
+    if (vm.screenOpenTarget === "window" || vm.screenOpenTarget === "browser") {
+      executeOpenScreenTarget(vm, vm.screenOpenTarget, false)
+      return
+    }
+    setRememberScreenTarget(false)
+    setScreenPromptVm(vm)
   }
 
   // Copy SFTP URI
@@ -715,7 +907,54 @@ export default function VmManagerView({ go }: ViewProps) {
       const currentMins = String(nowDate.getMinutes()).padStart(2, "0")
       const currentTimeStr = `${currentHours}:${currentMins}`
 
+      const currentDay = nowDate.getDay()
       vmsRef.current.forEach((vm) => {
+        // 1. Evaluasi Jadwal Auto-On (Ketika VM sedang sleeping / stopped)
+        if (vm.autoOn?.enabled && vm.status !== "running") {
+          let shouldWake = false
+          if (vm.autoOn.mode === "clock") {
+            const targetClock = vm.autoOn.clockTime || "07:00"
+            const activeDays = vm.autoOn.days || [0, 1, 2, 3, 4, 5, 6]
+            const lastTrig = vm.autoOn.lastTriggeredTimestamp || 0
+            if (activeDays.includes(currentDay) && currentTimeStr === targetClock && now - lastTrig > 65000) {
+              shouldWake = true
+            }
+          } else if (vm.autoOn.mode === "after_off") {
+            const val = vm.autoOn.delayValue || 30
+            const unit = vm.autoOn.delayUnit || "minutes"
+            const multMs = unit === "seconds" ? 1000 : unit === "minutes" ? 60000 : 3600000
+            const sleepStart = vm.sleepingSince || now
+            if (now - sleepStart >= val * multMs) {
+              shouldWake = true
+            }
+          }
+          if (shouldWake) {
+            setVms((prev) =>
+              prev.map((item) =>
+                item.id === vm.id
+                  ? {
+                      ...item,
+                      status: "running",
+                      sleepingSince: undefined,
+                      autoOn: {
+                        ...item.autoOn!,
+                        lastTriggered: nowDate.toLocaleTimeString(),
+                        lastTriggeredTimestamp: now,
+                      },
+                    }
+                  : item
+              )
+            )
+            notify(
+              language === "id"
+                ? `[Auto-On] Membangunkan ${vm.name} sesuai jadwal otomatis!`
+                : `[Auto-On] Waking up ${vm.name} per automatic schedule!`,
+              "success"
+            )
+            return
+          }
+        }
+
         if (!vm.autoRestart?.enabled) return
 
         let shouldTrigger = false
@@ -788,8 +1027,8 @@ export default function VmManagerView({ go }: ViewProps) {
   }, [])
 
 
-  const isSingle = vms.length === 1
-  const isMultiple = vms.length > 1
+  const isSingle = false
+  const isMultiple = vms.length > 0
 
   // Helper renderer for Inner Card Informasi VM
   const renderVmCardContent = (vm: VirtualMachine, inAccordion: boolean) => {
@@ -906,11 +1145,21 @@ export default function VmManagerView({ go }: ViewProps) {
               </Mono>
             </div>
 
-            <div className="flex items-center justify-between text-nano text-ink-faint border-t border-line/40 pt-1">
-              <span>{vm.keepAliveEnabled ? t("vm_always_on_disabled", "Auto-sleep: Nonaktif") : "Auto-sleep: 30m idle"}</span>
-              {vm.autoRestart?.enabled && (
-                <span className="text-info font-medium">{t("vm_autorestart_active")}</span>
-              )}
+            <div className="flex items-center justify-between gap-1 text-nano text-ink-faint border-t border-line/40 pt-1">
+              <span className="truncate">
+                {vm.keepAliveEnabled
+                  ? t("vm_always_on_disabled", "Auto-sleep: Nonaktif")
+                  : vm.autoOn?.enabled
+                    ? vm.autoOn.mode === "clock"
+                      ? `Auto-On: ${vm.autoOn.clockTime || "07:00"}`
+                      : `Auto-On: +${vm.autoOn.delayValue || 30}${vm.autoOn.delayUnit === "seconds" ? "s" : vm.autoOn.delayUnit === "hours" ? "h" : "m"}`
+                    : "Auto-sleep: 30m idle"}
+              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {vm.autoRestart?.enabled && (
+                  <span className="text-info font-medium">{t("vm_autorestart_active")}</span>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1014,86 +1263,111 @@ export default function VmManagerView({ go }: ViewProps) {
             )}
           </button>
 
-          {/* Action Grid 2x2: Layar Virtual, SFTP, Auto-Restart, Daya VM */}
+          {/* Action Grid 3x2 Simetris (Opsi A): Layar Virtual | SFTP, Auto-On | Auto-Restart, Daya | Always-On */}
           <div className="grid grid-cols-2 gap-1.5 w-full mt-1">
-            {/* 1. Layar Virtual */}
+            {/* Baris 1, Kolom 1: Layar Virtual */}
             <Button
               size="sm"
               variant="subtle"
               icon={Monitor}
-              iconClassName="size-4 shrink-0 text-info-ink"
+              iconClassName="size-3.5 shrink-0 text-info-ink"
               onClick={() => handleOpenScreen(vm)}
-              className="h-8 justify-center text-[11px] font-semibold px-2 text-ink"
+              className="h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 text-ink min-w-0"
             >
-              {t("vm_screen_btn")}
+              <span className="truncate">{t("vm_screen_btn")}</span>
             </Button>
 
-            {/* 2. SFTP */}
+            {/* Baris 1, Kolom 2: SFTP */}
             <Button
               size="sm"
               variant="subtle"
               icon={Folder}
-              iconClassName="size-4 shrink-0 text-ink"
+              iconClassName="size-3.5 shrink-0 text-ink"
               onClick={() => handleCopySftp(vm)}
-              className="h-8 justify-center text-[11px] font-semibold px-2 text-ink"
+              className="h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 text-ink min-w-0"
             >
-              {t("vm_sftp_btn")}
+              <span className="truncate">{t("vm_sftp_btn")}</span>
             </Button>
 
-            {/* 3. Auto-Restart */}
+            {/* Baris 2, Kolom 1: Auto-On (Jadwal Nyala Otomatis) */}
             <Button
               size="sm"
-              variant="subtle"
-              icon={RotateCcw}
-              iconClassName="size-4 shrink-0 text-ink"
-              onClick={() => handleOpenSchedule(vm)}
-              className="h-8 justify-center text-[11px] font-semibold px-2 text-ink"
+              variant={vm.autoOn?.enabled ? "info" : "subtle"}
+              icon={Clock}
+              iconClassName={cx("size-3.5 shrink-0", vm.autoOn?.enabled ? "text-info-ink" : "text-ink")}
+              onClick={() => handleOpenAutoOn(vm)}
+              className={cx(
+                "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
+                vm.autoOn?.enabled
+                  ? "border-info-line/70 bg-info-soft/50 text-info-ink"
+                  : "text-ink"
+              )}
             >
-              {t("vm_autorestart_btn")}
+              <span className="truncate">{t("vm_autoon_btn", "Auto-On")}</span>
             </Button>
 
-            {/* 4. Daya (Tidurkan / Bangunkan) */}
+            {/* Baris 2, Kolom 2: Auto-Restart */}
+            <Button
+              size="sm"
+              variant={vm.autoRestart?.enabled ? "info" : "subtle"}
+              icon={RotateCcw}
+              iconClassName={cx("size-3.5 shrink-0", vm.autoRestart?.enabled ? "text-info-ink" : "text-ink")}
+              onClick={() => handleOpenSchedule(vm)}
+              className={cx(
+                "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
+                vm.autoRestart?.enabled
+                  ? "border-info-line/70 bg-info-soft/50 text-info-ink"
+                  : "text-ink"
+              )}
+            >
+              <span className="truncate">{t("vm_autorestart_btn")}</span>
+            </Button>
+
+            {/* Baris 3, Kolom 1: Daya (Tidurkan / Bangunkan) */}
             <Button
               size="sm"
               variant="subtle"
               icon={powerBusyVmId === vm.id ? LoaderCircle : Power}
-              iconClassName={cx("size-4 shrink-0", vm.status === "running" ? "text-warning-ink" : "text-success-ink")}
+              iconClassName={cx("size-3.5 shrink-0", vm.status === "running" ? "text-warning-ink" : "text-success-ink")}
               disabled={!isOnline || powerBusyVmId === vm.id}
               onClick={() => handleTogglePower(vm)}
               className={cx(
-                "h-8 justify-center text-[11px] font-semibold px-2 transition-colors",
+                "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
+                vm.provider !== "instabox" && "col-span-2",
                 vm.status === "running"
                   ? "text-warning-ink hover:border-warning-line/80"
                   : "text-success-ink hover:border-success-line/80"
               )}
             >
-              {powerBusyVmId === vm.id
-                ? t("vm_processing", "Memproses...")
-                : vm.status === "running"
-                  ? t("vm_power_sleep", "Tidurkan")
-                  : t("vm_power_wake", "Bangunkan")}
+              <span className="truncate">
+                {powerBusyVmId === vm.id
+                  ? t("vm_processing", "Memproses...")
+                  : vm.status === "running"
+                    ? t("vm_power_sleep", "Tidurkan")
+                    : t("vm_power_wake", "Bangunkan")}
+              </span>
             </Button>
-          </div>
 
-          {/* 5. Khusus InstaBox: Tombol Tetap Nyala (Always-On) */}
-          {vm.provider === "instabox" && (
-            <Button
-              size="sm"
-              variant={vm.keepAliveEnabled ? "info" : "subtle"}
-              icon={Zap}
-              iconClassName="size-4 shrink-0"
-              disabled={!isOnline}
-              onClick={() => handleToggleKeepAlive(vm)}
-              className={cx(
-                "w-full h-8 justify-center text-[11px] font-semibold px-2.5 transition-colors mt-0.5",
-                vm.keepAliveEnabled
-                  ? "border-amber-500/60 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
-                  : "text-ink"
-              )}
-            >
-              {vm.keepAliveEnabled ? t("vm_always_on_active") : t("vm_always_on_btn")}
-            </Button>
-          )}
+            {/* Baris 3, Kolom 2: Always-On (Khusus InstaBox) */}
+            {vm.provider === "instabox" && (
+              <Button
+                size="sm"
+                variant={vm.keepAliveEnabled ? "info" : "subtle"}
+                icon={Zap}
+                iconClassName={cx("size-3.5 shrink-0", vm.keepAliveEnabled ? "text-amber-500" : "text-ink")}
+                disabled={!isOnline}
+                onClick={() => handleToggleKeepAlive(vm)}
+                className={cx(
+                  "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
+                  vm.keepAliveEnabled
+                    ? "border-amber-500/60 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
+                    : "text-ink"
+                )}
+              >
+                <span className="truncate">{t("vm_always_on_btn")}</span>
+              </Button>
+            )}
+          </div>
 
           {/* Web App Button (if webPort/webUrl configured) */}
           {(vm.webPort || vm.webUrl) && (
@@ -1246,7 +1520,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0">
                     <button
                       type="button"
                       title={language === "id" ? "Edit VM" : "Edit VM"}
@@ -1257,6 +1531,18 @@ export default function VmManagerView({ go }: ViewProps) {
                       className="p-1 rounded text-ink-subtle hover:text-ink hover:bg-surface-sunken transition cursor-pointer"
                     >
                       <Pencil className="size-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      title={language === "id" ? "Hapus VM" : "Delete VM"}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setVmToDelete(vm)
+                      }}
+                      className="p-1 rounded text-ink-subtle hover:text-danger-ink hover:bg-danger-soft/50 transition cursor-pointer"
+                    >
+                      <Trash2 className="size-3.5" />
                     </button>
 
                     <span
@@ -1529,6 +1815,21 @@ export default function VmManagerView({ go }: ViewProps) {
                 </>
               )}
 
+              <div>
+                <label className="block font-semibold text-ink-subtle mb-0.5">
+                  {t("vm_screen_target_label", "Mode Buka Layar Virtual")}
+                </label>
+                <select
+                  value={formScreenOpenTarget}
+                  onChange={(e) => setFormScreenOpenTarget(e.target.value as any)}
+                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px]"
+                >
+                  <option value="ask">{t("vm_screen_target_ask", "Tanyakan Setiap Membuka")}</option>
+                  <option value="window">{t("vm_screen_target_window", "Jendela MyServer (Sesi Terisolasi)")}</option>
+                  <option value="browser">{t("vm_screen_target_browser", "Browser Bawaan")}</option>
+                </select>
+              </div>
+
               <div className="flex items-center gap-1.5 pt-1 mt-1 border-t border-line">
                 <Button
                   size="sm"
@@ -1739,6 +2040,250 @@ export default function VmManagerView({ go }: ViewProps) {
       )}
 
       {/* ========================================================= */}
+      {/* 6.5 MODAL JADWAL NYALA OTOMATIS (AUTO-ON)                 */}
+      {/* ========================================================= */}
+      {autoOnVm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <Card className="w-full max-w-[305px] p-3 flex flex-col gap-2.5 shadow-xl border border-line bg-surface max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-line pb-2">
+              <div className="flex flex-col min-w-0">
+                <span className="text-caption font-bold text-ink">
+                  {t("vm_autoon_modal_title", "Jadwal Nyala Otomatis (Auto-On)")}
+                </span>
+                <span className="text-nano text-ink-subtle truncate">
+                  {autoOnVm.name}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAutoOnVm(null)}
+                className="p-1 rounded-md text-ink-subtle hover:text-ink transition cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAutoOn} className="flex flex-col gap-2 text-nano">
+              {/* Toggle Aktifkan Auto-On */}
+              <label className="flex items-center gap-2 cursor-pointer select-none p-1.5 rounded bg-surface-sunken/60 border border-line/60">
+                <input
+                  type="checkbox"
+                  checked={autoOnEnabled}
+                  onChange={(e) => setAutoOnEnabled(e.target.checked)}
+                  className="rounded border-line text-brand focus:ring-0"
+                />
+                <span className="font-semibold text-ink text-micro">
+                  {t("vm_autoon_enable", "Aktifkan Jadwal Auto-On")}
+                </span>
+              </label>
+
+              {/* Pilihan Mode: Jam Tertentu (HH:MM) vs Jeda Setelah Mati */}
+              <div className="flex flex-col gap-1">
+                <span className="text-ink-subtle font-semibold">{t("vm_sched_mode", "Mode Penjadwalan")}:</span>
+                <div className="grid grid-cols-2 gap-1 text-nano">
+                  <button
+                    type="button"
+                    onClick={() => setAutoOnMode("clock")}
+                    className={cx(
+                      "py-1 px-1.5 rounded border text-center transition cursor-pointer truncate",
+                      autoOnMode === "clock"
+                        ? "bg-info-soft border-info-line text-info-ink font-semibold"
+                        : "bg-surface-sunken border-line text-ink-subtle"
+                    )}
+                  >
+                    {t("vm_autoon_mode_clock", "Jam Tertentu (HH:MM)")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAutoOnMode("after_off")}
+                    className={cx(
+                      "py-1 px-1.5 rounded border text-center transition cursor-pointer truncate",
+                      autoOnMode === "after_off"
+                        ? "bg-info-soft border-info-line text-info-ink font-semibold"
+                        : "bg-surface-sunken border-line text-ink-subtle"
+                    )}
+                  >
+                    {t("vm_autoon_mode_delay", "Jeda Setelah Mati")}
+                  </button>
+                </div>
+              </div>
+
+              {autoOnMode === "clock" ? (
+                <div className="flex flex-col gap-2">
+                  <div>
+                    <label className="block text-ink-subtle font-semibold mb-0.5">
+                      {t("vm_autoon_clock_label", "Jam Nyala Otomatis (HH:MM):")}
+                    </label>
+                    <input
+                      type="time"
+                      value={autoOnClockTime}
+                      onChange={(e) => setAutoOnClockTime(e.target.value)}
+                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-ink-subtle font-semibold mb-1">
+                      {t("vm_autoon_days_label", "Hari Aktif:")}
+                    </label>
+                    <div className="grid grid-cols-7 gap-1">
+                      {[
+                        { idx: 1, id: "Sen", en: "Mon" },
+                        { idx: 2, id: "Sel", en: "Tue" },
+                        { idx: 3, id: "Rab", en: "Wed" },
+                        { idx: 4, id: "Kam", en: "Thu" },
+                        { idx: 5, id: "Jum", en: "Fri" },
+                        { idx: 6, id: "Sab", en: "Sat" },
+                        { idx: 0, id: "Min", en: "Sun" },
+                      ].map((d) => {
+                        const active = autoOnDays.includes(d.idx)
+                        return (
+                          <button
+                            key={d.idx}
+                            type="button"
+                            onClick={() => handleToggleAutoOnDay(d.idx)}
+                            className={cx(
+                              "py-1 rounded border text-[9.5px] font-semibold transition cursor-pointer text-center",
+                              active
+                                ? "bg-brand text-brand-ink border-brand"
+                                : "bg-surface-sunken text-ink-subtle border-line"
+                            )}
+                          >
+                            {language === "id" ? d.id : d.en}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-ink-subtle font-semibold">
+                    {t("vm_autoon_delay_label", "Nyalakan Setelah Mati Selama:")}
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      value={autoOnDelayVal}
+                      onChange={(e) => setAutoOnDelayVal(e.target.value)}
+                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono"
+                    />
+                    <select
+                      value={autoOnDelayUnit}
+                      onChange={(e) => setAutoOnDelayUnit(e.target.value as any)}
+                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                    >
+                      <option value="seconds">{language === "id" ? "Detik" : "Seconds"}</option>
+                      <option value="minutes">{t("vm_sched_minutes", "Menit")}</option>
+                      <option value="hours">{t("vm_sched_hours", "Jam")}</option>
+                    </select>
+                  </div>
+                  <div className="rounded-md bg-surface-sunken/80 border border-line p-2 text-[10px] text-ink-subtle leading-relaxed">
+                    {t("vm_autoon_conflict_note")}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-1.5 pt-1 mt-1 border-t border-line">
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  type="button"
+                  onClick={() => setAutoOnVm(null)}
+                  className="flex-1 justify-center"
+                >
+                  {t("cancel_btn", "Batal")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  type="submit"
+                  className="flex-1 justify-center"
+                >
+                  {t("vm_sched_save", "Simpan Jadwal")}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* 6.8 MODAL PILIHAN TARGET BUKA VIRTUAL SCREEN (ISOLASI VM) */}
+      {/* ========================================================= */}
+      {screenPromptVm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <Card className="w-full max-w-[305px] p-3 flex flex-col gap-2.5 shadow-xl border border-line bg-surface">
+            <div className="flex items-center justify-between border-b border-line pb-2">
+              <div className="flex flex-col min-w-0">
+                <span className="text-caption font-bold text-ink">
+                  {t("vm_screen_modal_title", "Buka Layar Virtual")}
+                </span>
+                <span className="text-nano text-ink-subtle truncate">
+                  {screenPromptVm.name}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScreenPromptVm(null)}
+                className="p-1 rounded-md text-ink-subtle hover:text-ink transition cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {/* Opsi 1: Jendela Baru MyServer (Terisolasi Per-VM) */}
+              <button
+                type="button"
+                onClick={() => executeOpenScreenTarget(screenPromptVm, "window", rememberScreenTarget)}
+                className="w-full text-left p-2.5 rounded-tile border border-info-line/70 bg-info-soft/30 hover:bg-info-soft/50 transition cursor-pointer flex flex-col gap-1"
+              >
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="text-micro font-bold text-ink flex items-center gap-1.5">
+                    <Monitor className="size-3.5 text-info-ink shrink-0" />
+                    <span>{t("vm_screen_target_window", "Jendela MyServer (Sesi Terisolasi)")}</span>
+                  </span>
+                </div>
+                <span className="inline-flex w-fit items-center rounded-full bg-info-soft px-1.5 py-0.5 text-[9px] font-bold text-info-ink border border-info-line/50">
+                  {t("vm_screen_isolated_badge", "Isolasi Multi-Akun")}
+                </span>
+                <span className="text-[10px] text-ink-subtle leading-snug">
+                  {t("vm_screen_isolated_desc")}
+                </span>
+              </button>
+
+              {/* Opsi 2: Browser Bawaan */}
+              <button
+                type="button"
+                onClick={() => executeOpenScreenTarget(screenPromptVm, "browser", rememberScreenTarget)}
+                className="w-full text-left p-2.5 rounded-tile border border-line bg-surface-sunken/70 hover:bg-surface-sunken transition cursor-pointer flex flex-col gap-1"
+              >
+                <span className="text-micro font-bold text-ink flex items-center gap-1.5">
+                  <ExternalLink className="size-3.5 text-ink-subtle shrink-0" />
+                  <span>{t("vm_screen_target_browser", "Browser Bawaan")}</span>
+                </span>
+                <span className="text-[10px] text-ink-subtle leading-snug">
+                  {t("vm_screen_browser_desc")}
+                </span>
+              </button>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none pt-0.5 text-nano text-ink-subtle">
+                <input
+                  type="checkbox"
+                  checked={rememberScreenTarget}
+                  onChange={(e) => setRememberScreenTarget(e.target.checked)}
+                  className="rounded border-line text-brand focus:ring-0"
+                />
+                <span>{t("vm_screen_remember_choice", "Ingat pilihan ini untuk VM ini")}</span>
+              </label>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ========================================================= */}
       {/* 7. MODAL KONFIRMASI HAPUS VM                              */}
       {/* ========================================================= */}
       {vmToDelete && (
@@ -1754,9 +2299,19 @@ export default function VmManagerView({ go }: ViewProps) {
             </div>
 
             <p className="text-nano text-ink-muted leading-relaxed">
-              Apakah Anda yakin ingin menghapus{" "}
-              <strong className="text-ink">{vmToDelete.name}</strong>? Tindakan
-              ini akan menghapus konfigurasi koneksi VM dari MyServer.
+              {language === "id" ? (
+                <>
+                  Apakah Anda yakin ingin menghapus{" "}
+                  <strong className="text-ink">{vmToDelete.name}</strong>? Tindakan
+                  ini akan menghapus konfigurasi koneksi VM dari MyServer.
+                </>
+              ) : (
+                <>
+                  Are you sure you want to delete{" "}
+                  <strong className="text-ink">{vmToDelete.name}</strong>? This action
+                  will remove the VM connection configuration from MyServer.
+                </>
+              )}
             </p>
 
             <div className="flex items-center gap-1.5 pt-1 border-t border-line">

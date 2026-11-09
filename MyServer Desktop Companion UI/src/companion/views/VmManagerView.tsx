@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from "react"
 import {
   AlertTriangle,
+  ArrowLeftRight,
+  Laptop,
   Check,
   ChevronDown,
   ChevronUp,
@@ -100,85 +102,31 @@ export default function VmManagerView({ go }: ViewProps) {
   const t = getTranslation(language)
   const { notify } = useNotice()
 
+  // v4.5.0 Beta: Active Server tracking for filtering & scoping
+  const [activeServerId, setActiveServerId] = useState<string>("")
+  const [activeServerName, setActiveServerName] = useState<string>("Server")
+  const [formScope, setFormScope] = useState<"server" | "local">("server")
+
+  // Load server details on mount & sync active server
+  useEffect(() => {
+    const loadServerInfo = () => {
+      api.getServerDetails?.().then((d) => {
+        if (d?.serverId) {
+          setActiveServerId(d.serverId)
+        }
+        if (d?.serverName) {
+          setActiveServerName(d.serverName)
+        }
+      }).catch(() => {})
+    }
+    loadServerInfo()
+    window.addEventListener("myserver:refresh", loadServerInfo)
+    return () => window.removeEventListener("myserver:refresh", loadServerInfo)
+  }, [])
+
   // State: list of VMs with localStorage persistence
   const [vms, setVms] = useState<VirtualMachine[]>(() => {
     if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("vm_mode") === "single_test") {
-        return [
-          {
-            id: "vm-test-instabox",
-            name: "Debian-Dev-Node",
-            provider: "instabox",
-            status: "running",
-            sshHost: "ssh.instabox.sh",
-            sshUser: "ibssh_demoexampleuser012345",
-            sshPort: 2222,
-            tokenExpiry: "6d",
-            ip: "ssh.instabox.sh",
-            lastActive: "Just now",
-            screenUrl: "https://instabox.sh/app/machines/m_demo",
-            runtimeMinutes: 184, // 3h 04m / 8h
-            maxRuntimeMinutes: 480,
-            idleTimeoutMinutes: 30,
-            telemetry: {
-              cpuPct: 14,
-              ramUsedBytes: 2576980377, // ~2.4 GB
-              ramTotalBytes: 8589934592, // 8.0 GB
-              diskUsedBytes: 5583457484, // ~5.2 GB
-              diskTotalBytes: 21474836480, // 20.0 GB
-            },
-          },
-        ]
-      }
-      if (params.get("vm_mode") === "multi_test") {
-        return [
-          {
-            id: "vm-test-instabox-1",
-            name: "Debian-Dev-Node",
-            provider: "instabox",
-            status: "running",
-            sshHost: "ssh.instabox.sh",
-            sshUser: "ibssh_demoexampleuser012345",
-            sshPort: 2222,
-            tokenExpiry: "6d",
-            ip: "ssh.instabox.sh",
-            screenUrl: "https://instabox.sh/app/machines/m_demo",
-            runtimeMinutes: 184,
-            maxRuntimeMinutes: 480,
-            idleTimeoutMinutes: 30,
-            telemetry: {
-              cpuPct: 14,
-              ramUsedBytes: 2576980377,
-              ramTotalBytes: 8589934592,
-              diskUsedBytes: 5583457484,
-              diskTotalBytes: 21474836480,
-            },
-          },
-          {
-            id: "vm-test-custom-2",
-            name: "Ubuntu-Worker-VPS",
-            provider: "custom",
-            status: "running",
-            sshHost: "vps.example.com",
-            sshUser: "root",
-            sshPort: 22,
-            ip: "vps.example.com",
-            webPort: 8080,
-            screenUrl: "http://vps.example.com:6080/vnc.html",
-            telemetry: {
-              cpuPct: 6,
-              ramUsedBytes: 1288490188,
-              ramTotalBytes: 4294967296,
-              diskUsedBytes: 8589934592,
-              diskTotalBytes: 42949672960,
-            },
-          },
-        ]
-      }
-      if (params.get("vm_mode") === "empty") {
-        return []
-      }
       try {
         const saved = localStorage.getItem("myserver_vms")
         if (saved) {
@@ -192,6 +140,22 @@ export default function VmManagerView({ go }: ViewProps) {
 
   const vmsRef = useRef<VirtualMachine[]>(vms)
   vmsRef.current = vms
+
+  // v4.5.0 Beta: Filter VMs by Active Server & Calculate Smart Grouping
+  const visibleVms = useMemo(() => {
+    return vms.filter((v) => {
+      if (v.scope === "server") {
+        return !activeServerId || v.serverId === activeServerId
+      }
+      return true
+    })
+  }, [vms, activeServerId])
+
+  const serverVms = useMemo(() => visibleVms.filter((v) => v.scope === "server"), [visibleVms])
+  const localVms = useMemo(() => visibleVms.filter((v) => v.scope !== "server"), [visibleVms])
+  const showGroupHeaders = serverVms.length > 0 && localVms.length > 0
+  const isSingle = visibleVms.length === 1 && !showGroupHeaders
+  const isMultiple = visibleVms.length > 1 || showGroupHeaders
 
   // Load from backend config.json on mount (or sync existing localStorage VMs to backend)
   useEffect(() => {
@@ -308,93 +272,43 @@ export default function VmManagerView({ go }: ViewProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   // Modal Auto-On Scheduler state
-  const [autoOnVm, setAutoOnVm] = useState<VirtualMachine | null>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("vm_modal") === "autoon" || params.get("vm_modal") === "autoon_delay") {
-        return vms[0] || null
-      }
-    }
-    return null
-  })
+  const [autoOnVm, setAutoOnVm] = useState<VirtualMachine | null>(null)
   const [autoOnEnabled, setAutoOnEnabled] = useState<boolean>(true)
-  const [autoOnMode, setAutoOnMode] = useState<"clock" | "after_off">(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("vm_modal") === "autoon_delay") return "after_off"
-    }
-    return "clock"
-  })
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("scroll") === "bottom") {
-        setTimeout(() => {
-          document.querySelectorAll(".overflow-y-auto").forEach((el) => {
-            ;(el as HTMLElement).scrollTop = (el as HTMLElement).scrollHeight
-          })
-        }, 350)
-      }
-    }
-  }, [])
+  const [autoOnMode, setAutoOnMode] = useState<"clock" | "after_off">("clock")
   const [autoOnClockTime, setAutoOnClockTime] = useState<string>("07:00")
   const [autoOnDays, setAutoOnDays] = useState<number[]>([1, 2, 3, 4, 5, 6, 0])
   const [autoOnDelayVal, setAutoOnDelayVal] = useState<number | string>(30)
   const [autoOnDelayUnit, setAutoOnDelayUnit] = useState<"seconds" | "minutes" | "hours">("minutes")
 
   // Modal Virtual Screen Target Selector state
-  const [screenPromptVm, setScreenPromptVm] = useState<VirtualMachine | null>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("vm_modal") === "screen") {
-        return vms[0] || null
-      }
-    }
-    return null
-  })
+  const [screenPromptVm, setScreenPromptVm] = useState<VirtualMachine | null>(null)
   const [rememberScreenTarget, setRememberScreenTarget] = useState<boolean>(false)
   const [formScreenOpenTarget, setFormScreenOpenTarget] = useState<"window" | "browser" | "ask">("ask")
 
   // Modals state
-  const [vmToDelete, setVmToDelete] = useState<VirtualMachine | null>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("vm_modal") === "delete") {
-        return vms[0] || null
-      }
-    }
-    return null
-  })
-
-  const [editingVm, setEditingVm] = useState<VirtualMachine | null>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("vm_modal") === "edit") {
-        return vms[0] || null
-      }
-    }
-    return null
-  })
-
-  const [isAddingVm, setIsAddingVm] = useState<boolean>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      return params.get("vm_modal") === "add"
-    }
-    return false
-  })
+  const [vmToDelete, setVmToDelete] = useState<VirtualMachine | null>(null)
+  const [editingVm, setEditingVm] = useState<VirtualMachine | null>(null)
+  const [isAddingVm, setIsAddingVm] = useState<boolean>(false)
 
   // Modal Auto-Restart Scheduler state
-  const [schedulingVm, setSchedulingVm] = useState<VirtualMachine | null>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      if (params.get("vm_modal") === "schedule") {
-        return vms[0] || null
-      }
+  const [schedulingVm, setSchedulingVm] = useState<VirtualMachine | null>(null)
+
+  // Sync form fields when editingVm changes
+  useEffect(() => {
+    if (editingVm) {
+      setFormScope(editingVm.scope || "server")
+      setFormName(editingVm.name || "")
+      setAddVmTab(editingVm.provider === "instabox" ? "instabox" : "manual")
+      setFormSshHost(editingVm.sshHost || editingVm.ip || "")
+      setFormSshUser(editingVm.sshUser || "")
+      setFormSshPort(editingVm.sshPort || 2222)
+      setFormTokenExpiry(editingVm.tokenExpiry || "")
+      setFormWebPort(editingVm.webPort || "")
+      setFormScreenUrl(editingVm.screenUrl || "")
+      setFormScreenOpenTarget(editingVm.screenOpenTarget || "ask")
+      setFormApiKey(editingVm.apiKey || "")
     }
-    return null
-  })
+  }, [editingVm])
 
   // Modal 2-Tab state: "instabox" | "manual"
   const [addVmTab, setAddVmTab] = useState<"instabox" | "manual">("instabox")
@@ -516,6 +430,35 @@ export default function VmManagerView({ go }: ViewProps) {
     }
   }
 
+  // v4.5.0 Beta: 1-Click Migration between Local & Server
+  const handleMigrateVm = (vm: VirtualMachine) => {
+    const isCurrentlyServer = vm.scope === "server"
+    const nextScope: "server" | "local" = isCurrentlyServer ? "local" : "server"
+    const nextServerId = nextScope === "server" ? activeServerId : undefined
+    const nextServerName = nextScope === "server" ? activeServerName : undefined
+
+    setVms((prev) =>
+      prev.map((item) =>
+        item.id === vm.id
+          ? {
+              ...item,
+              scope: nextScope,
+              serverId: nextServerId,
+              serverName: nextServerName,
+            }
+          : item
+      )
+    )
+
+    const targetLabel = nextScope === "server" ? `${activeServerName}` : (language === "id" ? "Perangkat Ini (Lokal)" : "This Device (Local)")
+    notify(
+      language === "id"
+        ? `${vm.name} ${t("vm_migrated_notice", "berhasil dipindahkan ke")} ${targetLabel}!`
+        : `${vm.name} ${t("vm_migrated_notice", "migrated to")} ${targetLabel}!`,
+      "success"
+    )
+  }
+
   // Delete execution
   const handleDeleteConfirm = () => {
     if (!vmToDelete) return
@@ -528,6 +471,7 @@ export default function VmManagerView({ go }: ViewProps) {
   // Open Edit Modal
   const handleOpenEdit = (vm: VirtualMachine) => {
     setEditingVm(vm)
+    setFormScope(vm.scope || 'local')
     setAddVmTab(vm.provider === "instabox" ? "instabox" : "manual")
     setFormName(vm.name)
     setFormSshHost(vm.sshHost || vm.ip || "")
@@ -673,6 +617,9 @@ export default function VmManagerView({ go }: ViewProps) {
           item.id === editingVm.id
             ? {
                 ...item,
+                scope: formScope,
+                serverId: formScope === "server" ? (item.serverId || activeServerId) : undefined,
+                serverName: formScope === "server" ? (item.serverName || activeServerName) : undefined,
                 name: cleanName || item.name,
                 provider: addVmTab,
                 sshHost: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
@@ -697,6 +644,9 @@ export default function VmManagerView({ go }: ViewProps) {
         name: finalName,
         provider: addVmTab,
         status: "running",
+        scope: formScope,
+        serverId: formScope === "server" ? activeServerId : undefined,
+        serverName: formScope === "server" ? activeServerName : undefined,
         sshHost: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : "127.0.0.1"),
         sshUser: cleanUser,
         sshPort: Number(formSshPort) || (addVmTab === "instabox" ? 2222 : 22),
@@ -1027,8 +977,6 @@ export default function VmManagerView({ go }: ViewProps) {
   }, [])
 
 
-  const isSingle = false
-  const isMultiple = vms.length > 0
 
   // Helper renderer for Inner Card Informasi VM
   const renderVmCardContent = (vm: VirtualMachine, inAccordion: boolean) => {
@@ -1103,6 +1051,7 @@ export default function VmManagerView({ go }: ViewProps) {
                       : t("vm_status_cooldown", "Cooldown")}
               </span>
 
+              {/* 1-Click Migration Button */}
               <button
                 type="button"
                 onClick={() => handleOpenEdit(vm)}
@@ -1110,15 +1059,6 @@ export default function VmManagerView({ go }: ViewProps) {
                 title={t("edit_vm_btn", "Edit")}
               >
                 <Pencil className="size-3.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setVmToDelete(vm)}
-                className="p-1 rounded-md text-ink-subtle hover:text-danger-ink hover:bg-danger-soft/50 transition cursor-pointer"
-                title={t("delete_vm_btn", "Hapus")}
-              >
-                <Trash2 className="size-3.5" />
               </button>
             </div>
           </div>
@@ -1388,6 +1328,111 @@ export default function VmManagerView({ go }: ViewProps) {
     )
   }
 
+  const renderAccordionCard = (vm: VirtualMachine) => {
+    const isExpanded = expandedId === vm.id
+    return (
+      <Card
+        key={vm.id}
+        className={cx(
+          "flex flex-col transition-all overflow-hidden p-0 border",
+          isExpanded ? "border-brand/40 shadow-sm" : "border-line"
+        )}
+      >
+        {/* Accordion Header Row */}
+        <div
+          className="flex items-center justify-between p-2.5 cursor-pointer hover:bg-surface-sunken/40 select-none"
+          onClick={() => setExpandedId(isExpanded ? null : vm.id)}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <IconBadge
+              icon={vm.scope === "server" ? Server : Laptop}
+              tone={
+                !isOnline
+                  ? "neutral"
+                  : vm.status === "running"
+                    ? "success"
+                    : vm.status === "sleeping"
+                      ? "warning"
+                      : "danger"
+              }
+              size="xs"
+            />
+            <div className="flex flex-col min-w-0">
+              <span className="text-caption font-bold text-ink truncate leading-tight">
+                {vm.name}
+              </span>
+              <span className="text-nano text-ink-subtle truncate">
+                {vm.sshHost || vm.ip}:{vm.sshPort}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              title={language === "id" ? "Edit VM" : "Edit VM"}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleOpenEdit(vm)
+              }}
+              className="p-1 rounded text-ink-subtle hover:text-ink hover:bg-surface-sunken transition cursor-pointer"
+            >
+              <Pencil className="size-3.5" />
+            </button>
+
+            <span
+              className={cx(
+                "inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5 border",
+                !isOnline
+                  ? "bg-surface-sunken text-ink-muted border-line"
+                  : vm.status === "running"
+                    ? "bg-success-soft text-success-ink border-success-line/60"
+                    : "bg-warning-soft text-warning-ink border-warning-line/60"
+              )}
+            >
+              <StatusDot
+                tone={
+                  !isOnline
+                    ? "neutral"
+                    : vm.status === "running"
+                      ? "success"
+                      : "warning"
+                }
+                size="xs"
+              />
+              {!isOnline
+                ? "Offline"
+                : vm.status === "running"
+                  ? (language === "id" ? "Aktif" : "Active")
+                  : (language === "id" ? "Tidur" : "Sleep")}
+            </span>
+
+            <ChevronDown
+              className={cx(
+                "size-4 text-ink-subtle transition-transform duration-250 ease-out",
+                isExpanded && "rotate-180"
+              )}
+            />
+          </div>
+        </div>
+
+        {/* Smooth Animated Accordion Body using CSS Grid */}
+        <div
+          className={cx(
+            "grid transition-all duration-250 ease-out",
+            isExpanded ? "grid-rows-[1fr] opacity-100 border-t border-line/60" : "grid-rows-[0fr] opacity-0"
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="px-3 pb-3 pt-1 flex flex-col gap-2 bg-surface-sunken/20">
+              {renderVmCardContent(vm, true)}
+            </div>
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
   return (
     <ViewBody>
       {/* ========================================================= */}
@@ -1472,142 +1517,70 @@ export default function VmManagerView({ go }: ViewProps) {
       {/* ========================================================= */}
       {isSingle && (
         <Card className="flex flex-col gap-2.5 p-3 relative overflow-hidden">
-          {renderVmCardContent(vms[0], false)}
+          {renderVmCardContent(visibleVms[0], false)}
         </Card>
       )}
 
       {/* ========================================================= */}
-      {/* 4. CASE 2: MULTIPLE VMS MODE (NATURAL ACCORDION LIST)     */}
+      {/* 4. CASE 2: CONDITIONAL SMART GROUPING & MULTIPLE VMS      */}
       {/* ========================================================= */}
       {isMultiple && (
         <div className="flex flex-col gap-2">
-          {vms.map((vm) => {
-            const isExpanded = expandedId === vm.id
-            return (
-              <Card
-                key={vm.id}
-                className={cx(
-                  "flex flex-col transition-all overflow-hidden p-0 border",
-                  isExpanded ? "border-brand/40 shadow-sm" : "border-line"
-                )}
-              >
-                {/* Accordion Header Row */}
-                <div
-                  className="flex items-center justify-between p-2.5 cursor-pointer hover:bg-surface-sunken/40 select-none"
-                  onClick={() => setExpandedId(isExpanded ? null : vm.id)}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <IconBadge
-                      icon={Server}
-                      tone={
-                        !isOnline
-                          ? "neutral"
-                          : vm.status === "running"
-                            ? "success"
-                            : vm.status === "sleeping"
-                              ? "warning"
-                              : "danger"
-                      }
-                      size="xs"
-                    />
-                    <div className="flex flex-col min-w-0">
-                      <span className="text-caption font-bold text-ink truncate leading-tight">
-                        {vm.name}
+          {showGroupHeaders ? (
+            <>
+              {/* GROUP 1: SERVER VMS (Only shown when server has VMs) */}
+              {serverVms.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between px-1 pt-0.5">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Server className="size-3 text-brand shrink-0" />
+                      <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
+                        {t("vm_group_server")}: {activeServerName}
                       </span>
-                      <span className="text-nano text-ink-subtle truncate">
-                        {vm.sshHost || vm.ip}:{vm.sshPort}
+                      <span className="text-[9.5px] font-bold text-brand">
+                        ({serverVms.length})
                       </span>
                     </div>
+
                   </div>
-
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      type="button"
-                      title={language === "id" ? "Edit VM" : "Edit VM"}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleOpenEdit(vm)
-                      }}
-                      className="p-1 rounded text-ink-subtle hover:text-ink hover:bg-surface-sunken transition cursor-pointer"
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
-
-                    <button
-                      type="button"
-                      title={language === "id" ? "Hapus VM" : "Delete VM"}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setVmToDelete(vm)
-                      }}
-                      className="p-1 rounded text-ink-subtle hover:text-danger-ink hover:bg-danger-soft/50 transition cursor-pointer"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-
-                    <span
-                      className={cx(
-                        "inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5 border",
-                        !isOnline
-                          ? "bg-surface-sunken text-ink-muted border-line"
-                          : vm.status === "running"
-                            ? "bg-success-soft text-success-ink border-success-line/60"
-                            : "bg-warning-soft text-warning-ink border-warning-line/60"
-                      )}
-                    >
-                      <StatusDot
-                        tone={
-                          !isOnline
-                            ? "neutral"
-                            : vm.status === "running"
-                              ? "success"
-                              : "warning"
-                        }
-                        size="xs"
-                      />
-                      {!isOnline
-                        ? "Offline"
-                        : vm.status === "running"
-                          ? (language === "id" ? "Aktif" : "Active")
-                          : (language === "id" ? "Tidur" : "Sleep")}
-                    </span>
-
-                    <ChevronDown
-                      className={cx(
-                        "size-4 text-ink-subtle transition-transform duration-250 ease-out",
-                        isExpanded && "rotate-180"
-                      )}
-                    />
-                  </div>
+                  {serverVms.map(renderAccordionCard)}
                 </div>
+              )}
 
-                {/* Smooth Animated Accordion Body using CSS Grid */}
-                <div
-                  className={cx(
-                    "grid transition-all duration-250 ease-out",
-                    isExpanded ? "grid-rows-[1fr] opacity-100 border-t border-line/60" : "grid-rows-[0fr] opacity-0"
-                  )}
-                >
-                  <div className="overflow-hidden">
-                    <div className="px-3 pb-3 pt-1 flex flex-col gap-2 bg-surface-sunken/20">
-                      {renderVmCardContent(vm, true)}
+              {/* GROUP 2: LOCAL VMS (Only shown when local has VMs) */}
+              {localVms.length > 0 && (
+                <div className="flex flex-col gap-1.5 mt-1 pt-1.5 border-t border-line/60">
+                  <div className="flex items-center justify-between px-1 pt-0.5">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Laptop className="size-3 text-ink-muted shrink-0" />
+                      <span className="text-[10px] font-bold tracking-wider text-ink-muted uppercase truncate">
+                        {t("vm_group_local")}
+                      </span>
+                      <span className="text-[9.5px] font-bold text-ink-subtle">
+                        ({localVms.length})
+                      </span>
                     </div>
+
                   </div>
+                  {localVms.map(renderAccordionCard)}
                 </div>
-              </Card>
-            )
-          })}
+              )}
+            </>
+          ) : (
+            /* CLEAN UNIFIED LIST: No headers when server has 0 VMs or only 1 group exists! */
+            visibleVms.map(renderAccordionCard)
+          )}
         </div>
       )}
 
       {/* ========================================================= */}
-      {/* 5. MODAL FORM: TAMBAH / EDIT VIRTUAL MACHINE (2-TAB)       */}
+      {/* 7. MODAL KONFIRMASI HAPUS VM                              */}
       {/* ========================================================= */}
       {(isAddingVm || editingVm) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
-          <Card className="w-full max-w-[300px] p-3 flex flex-col gap-2.5 shadow-xl border border-line bg-surface max-h-[90vh] overflow-y-auto">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-line pb-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-hidden">
+          <Card className="w-full max-w-[305px] p-0 flex flex-col shadow-xl border border-line bg-surface max-h-[88vh] overflow-hidden">
+            {/* Pinned Modal Header */}
+            <div className="flex items-center justify-between border-b border-line px-3 py-2 shrink-0 bg-surface z-10">
               <span className="text-caption font-bold text-ink">
                 {editingVm
                   ? editingVm.provider === "instabox"
@@ -1627,6 +1600,9 @@ export default function VmManagerView({ go }: ViewProps) {
               </button>
             </div>
 
+            {/* Scrollable Modal Content - SINGLE SCROLLBAR */}
+            <div className="p-2.5 overflow-y-auto flex flex-col gap-1.5 flex-1 min-h-0">
+
             {/* Modal 2-Tab Selector - Filtered: Only shown when adding new VM, hidden during edit */}
             {!editingVm && (
               <div className="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-surface-sunken border border-line text-nano">
@@ -1634,7 +1610,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   type="button"
                   onClick={() => setAddVmTab("instabox")}
                   className={cx(
-                    "py-1 rounded font-semibold transition cursor-pointer text-center",
+                    "py-0.5 rounded font-semibold transition cursor-pointer text-center text-[10px]",
                     addVmTab === "instabox"
                       ? "bg-brand text-brand-ink font-semibold shadow-xs"
                       : "text-ink-subtle hover:text-ink"
@@ -1646,7 +1622,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   type="button"
                   onClick={() => setAddVmTab("manual")}
                   className={cx(
-                    "py-1 rounded font-semibold transition cursor-pointer text-center",
+                    "py-0.5 rounded font-semibold transition cursor-pointer text-center text-[10px]",
                     addVmTab === "manual"
                       ? "bg-brand text-brand-ink font-semibold shadow-xs"
                       : "text-ink-subtle hover:text-ink"
@@ -1657,12 +1633,47 @@ export default function VmManagerView({ go }: ViewProps) {
               </div>
             )}
 
+            {/* Target Location Selector (Fitur 1 v4.5.0 Beta): Server vs Lokal */}
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[9.5px] font-semibold text-ink-muted">
+                {t("vm_scope_label", "Target Lokasi:")}
+              </label>
+              <div className="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-surface-sunken border border-line text-nano">
+                <button
+                  type="button"
+                  onClick={() => setFormScope("server")}
+                  className={cx(
+                    "py-0.5 px-1.5 rounded font-semibold transition cursor-pointer flex items-center justify-center gap-1 truncate text-[10px]",
+                    formScope === "server"
+                      ? "bg-brand text-brand-ink font-semibold shadow-xs"
+                      : "text-ink-subtle hover:text-ink"
+                  )}
+                >
+                  <Server className="size-2.5 shrink-0" />
+                  <span className="truncate">{activeServerName || t("vm_scope_server", "Server")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormScope("local")}
+                  className={cx(
+                    "py-0.5 px-1.5 rounded font-semibold transition cursor-pointer flex items-center justify-center gap-1 truncate text-[10px]",
+                    formScope === "local"
+                      ? "bg-brand text-brand-ink font-semibold shadow-xs"
+                      : "text-ink-subtle hover:text-ink"
+                  )}
+                >
+                  <Laptop className="size-2.5 shrink-0" />
+                  <span className="truncate">{t("vm_scope_local", "Lokal")}</span>
+                </button>
+              </div>
+            </div>
+
             {/* Modal Form */}
-            <form onSubmit={handleSaveForm} className="flex flex-col gap-2 text-nano">
+            <form onSubmit={handleSaveForm} className="flex flex-col gap-1.5 text-nano">
               {addVmTab === "instabox" ? (
                 <>
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       InstaBox API Key (ibk_...)
                     </label>
                     <input
@@ -1670,17 +1681,17 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. ibk_examplekey..."
                       value={formApiKey}
                       onChange={(e) => setFormApiKey(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10.5px]"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10px] h-6.5"
                     />
-                    <span className="text-[10px] text-ink-faint block mt-0.5">
+                    <span className="text-[9px] text-ink-faint block truncate">
                       {language === "id"
-                        ? "Dapatkan dari menu Settings di web InstaBox untuk auto-connect."
-                        : "Obtain from InstaBox web Settings for automatic connection."}
+                        ? "Dapatkan dari Settings di web InstaBox."
+                        : "From InstaBox web Settings."}
                     </span>
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       {language === "id" ? "Nama Virtual Machine (Opsional)" : "Virtual Machine Name (Optional)"}
                     </label>
                     <input
@@ -1688,12 +1699,12 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. Linux-Dev-Server"
                       value={formName}
                       onChange={(e) => setFormName(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       {language === "id" ? "Token SSH Sementara (Opsional)" : "Temporary SSH Token (Optional)"}
                     </label>
                     <input
@@ -1701,12 +1712,12 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. ibssh_exampletoken..."
                       value={formSshUser}
                       onChange={(e) => setFormSshUser(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10.5px]"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10px] h-6.5"
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       {language === "id" ? "URL Layar Virtual / Web Console (Opsional)" : "Virtual Screen / Web Console URL (Optional)"}
                     </label>
                     <input
@@ -1714,14 +1725,14 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. https://instabox.sh/app/machines/..."
                       value={formScreenUrl}
                       onChange={(e) => setFormScreenUrl(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                     />
                   </div>
                 </>
               ) : (
                 <>
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       {language === "id" ? "Nama Virtual Machine" : "Virtual Machine Name"}
                     </label>
                     <input
@@ -1730,12 +1741,12 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. Ubuntu-VPS"
                       value={formName}
                       onChange={(e) => setFormName(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       Host Gateway / IP
                     </label>
                     <input
@@ -1744,13 +1755,13 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. 192.168.1.100 atau vps.example.com"
                       value={formSshHost}
                       onChange={(e) => setFormSshHost(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-1.5">
                     <div>
-                      <label className="block font-semibold text-ink-subtle mb-0.5">
+                      <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                         {language === "id" ? "Port SSH" : "SSH Port"}
                       </label>
                       <input
@@ -1759,11 +1770,11 @@ export default function VmManagerView({ go }: ViewProps) {
                         placeholder="22"
                         value={formSshPort}
                         onChange={(e) => setFormSshPort(e.target.value)}
-                        className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                        className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                       />
                     </div>
                     <div>
-                      <label className="block font-semibold text-ink-subtle mb-0.5">
+                      <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                         {language === "id" ? "Masa Berlaku" : "Token Expiry"}
                       </label>
                       <input
@@ -1771,13 +1782,13 @@ export default function VmManagerView({ go }: ViewProps) {
                         placeholder="e.g. 30d atau Permanent"
                         value={formTokenExpiry}
                         onChange={(e) => setFormTokenExpiry(e.target.value)}
-                        className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                        className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       {language === "id" ? "User SSH" : "SSH User"}
                     </label>
                     <input
@@ -1785,25 +1796,25 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. root atau ubuntu"
                       value={formSshUser}
                       onChange={(e) => setFormSshUser(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10.5px]"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10px] h-6.5"
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       {language === "id" ? "Port Web Layanan (Opsional)" : "Web Service Port (Optional)"}
                     </label>
                     <input
                       type="number"
-                      placeholder="e.g. 8080 (Kosongkan bila tidak ada)"
+                      placeholder="e.g. 8080"
                       value={formWebPort}
                       onChange={(e) => setFormWebPort(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-ink-subtle mb-0.5">
+                    <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                       {language === "id" ? "URL Layar Virtual (Opsional)" : "Virtual Screen URL (Optional)"}
                     </label>
                     <input
@@ -1811,28 +1822,28 @@ export default function VmManagerView({ go }: ViewProps) {
                       placeholder="e.g. http://192.168.1.100:6080/vnc.html"
                       value={formScreenUrl}
                       onChange={(e) => setFormScreenUrl(e.target.value)}
-                      className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
+                      className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
                     />
                   </div>
                 </>
               )}
 
               <div>
-                <label className="block font-semibold text-ink-subtle mb-0.5">
+                <label className="block text-[10px] font-semibold text-ink-subtle mb-0.5">
                   {t("vm_screen_target_label", "Mode Buka Layar Virtual")}
                 </label>
                 <select
                   value={formScreenOpenTarget}
                   onChange={(e) => setFormScreenOpenTarget(e.target.value as any)}
-                  className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px]"
+                  className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10px] h-6.5"
                 >
                   <option value="ask">{t("vm_screen_target_ask", "Tanyakan Setiap Membuka")}</option>
-                  <option value="window">{t("vm_screen_target_window", "Jendela MyServer (Sesi Terisolasi)")}</option>
+                  <option value="window">{t("vm_screen_target_window", "Jendela MyServer")}</option>
                   <option value="browser">{t("vm_screen_target_browser", "Browser Bawaan")}</option>
                 </select>
               </div>
 
-              <div className="flex items-center gap-1.5 pt-1 mt-1 border-t border-line">
+              <div className="flex items-center gap-1.5 pt-1 mt-0.5 border-t border-line">
                 <Button
                   size="sm"
                   variant="subtle"
@@ -1841,7 +1852,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     setIsAddingVm(false)
                     setEditingVm(null)
                   }}
-                  className="flex-1 justify-center"
+                  className="flex-1 justify-center h-7 text-[10.5px]"
                 >
                   {t("cancel_btn", "Batal")}
                 </Button>
@@ -1849,12 +1860,32 @@ export default function VmManagerView({ go }: ViewProps) {
                   size="sm"
                   variant="primary"
                   type="submit"
-                  className="flex-1 justify-center !bg-brand !from-brand !to-brand text-brand-ink shadow-sm hover:opacity-90"
+                  className="flex-1 justify-center !bg-brand !from-brand !to-brand text-brand-ink shadow-sm hover:opacity-90 h-7 text-[10.5px]"
                 >
                   {editingVm ? t("vm_save_changes_btn") : t("save_btn")}
                 </Button>
               </div>
+
+              {/* Tombol Hapus VM di dalam Menu Edit (v4.5.0 Beta) */}
+              {editingVm && (
+                <div className="pt-1 border-t border-line">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = editingVm
+                      setIsAddingVm(false)
+                      setEditingVm(null)
+                      setVmToDelete(target)
+                    }}
+                    className="w-full h-7 rounded-md bg-danger-soft/40 hover:bg-danger-soft text-danger-ink border border-danger-line/60 text-[10.5px] font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    <Trash2 className="size-3.5" />
+                    <span>{language === "id" ? "Hapus Virtual Machine" : "Delete Virtual Machine"}</span>
+                  </button>
+                </div>
+              )}
             </form>
+            </div>
           </Card>
         </div>
       )}

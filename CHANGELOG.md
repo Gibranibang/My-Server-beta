@@ -1,5 +1,25 @@
 # Changelog MyServer Desktop
 
+## [v4.5.0 - Beta] - 2026-11-10
+
+- Pengelompokan & Penyimpanan VM Multi-Target (Server vs Lokal):
+  - Opsi penyimpanan dan automasi VM pada modal Tambah VM: Server (<Nama Server Aktif>) vs Lokal (Perangkat Ini).
+  - VM kelompok Server tersimpan di database SQLite ZimaOS (MyServer Backend by algitha v1.2.0) dan disinkronisasi ke seluruh perangkat yang terhubung ke server tersebut.
+  - Daemon latar belakang 24/7 di ZimaOS mengeksekusi automasi Always-On, Smart Reset 8 jam tanpa cooldown, Auto-On, dan Auto-Restart mandiri meskipun laptop pengguna mati.
+- Migrasi 1-Klik VM Terhubung (Server <-> Lokal):
+  - Tombol migrasi cepat di dalam menu Edit VM untuk memindahkan VM beserta konfigurasi SSH dan jadwal automasi antara Server dan Lokal secara atomik dalam 1 klik tanpa perlu mengisi ulang form.
+- Akses Cepat Terminal SSH ke Server ZimaOS:
+  - Tombol penuh berdesain hijau selaras dengan tombol referensi Copy SSH Command tepat di bawah baris tombol Tambah, Ubah, Hapus pada menu Server & Network (ServerView.tsx).
+  - Menyalin perintah SSH (ssh root@<host>) ke clipboard dan meluncurkan terminal interaktif secara otomatis.
+- Pemfilteran Dinamis & Pengelompokan Kondisional Pintar:
+  - Menampilkan daftar VM sesuai server ZimaOS yang aktif ditambah VM Lokal.
+  - Header pemisah kelompok (SERVER: <NAMA SERVER> dan LOKAL · PERANGKAT INI) hanya muncul apabila kedua kelompok memiliki VM. Jika server terhubung tidak memiliki VM, header kelompok otomatis disembunyikan secara bersih.
+- Perbaikan Bug Animasi CRT Mode Offline (Isolasi Ketat):
+  - Menghapus lapisan animasi CRT (glitch, scanlines, hum, vignette, tracking band) khusus pada kartu File Manager (FILES_OFFLINE_SVG) dan VM Manager (VM_OFFLINE_SVG) mode offline. Seluruh kartu mode online dan kartu offline lainnya tetap 100% utuh dan identik.
+- Optimalisasi Modal UX & Struktur Scrollbar:
+  - Tombol hapus di header modal telah dieliminasi sehingga hanya tersisa satu tombol hapus di bagian bawah menu edit.
+  - Struktur scrollbar disederhanakan menjadi satu scrollbar tunggal yang rapi tanpa slider ganda.
+
 ## [v4.4.7 - Beta] - 2026-11-09
 
 - Perbaikan Menyeluruh Fitur "Tetap Nyala" (Always-On) & "Auto-Restart" + Daemon Latar Belakang 24/7:

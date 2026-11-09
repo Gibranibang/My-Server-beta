@@ -138,6 +138,10 @@ export interface CompanionApi {
 
   saveVms?(vms: VirtualMachine[]): Promise<any>
 
+  migrateVm?(vmId: string, targetScope: "server" | "local"): Promise<any>
+
+  openSshTerminal?(params?: { host?: string; user?: string; port?: number }): Promise<any>
+
   openVmWindow?(vmId: string, title: string, url: string): Promise<void>
 
   openFileManager(): Promise<void>
@@ -774,6 +778,14 @@ export function createMockApi(): CompanionApi {
     },
 
     async saveVms() {
+      return { status: "ok", success: true }
+    },
+
+    async migrateVm() {
+      return { status: "ok", success: true }
+    },
+
+    async openSshTerminal() {
       return { status: "ok", success: true }
     },
 

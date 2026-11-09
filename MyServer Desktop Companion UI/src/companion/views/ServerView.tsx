@@ -2,6 +2,7 @@ import { getTranslation } from "../i18n"
 import { useEffect, useRef, useState } from "react"
 import {
   Check,
+  Terminal,
   ChevronRight,
   Copy,
   Edit2,
@@ -37,6 +38,7 @@ export default function ServerView({ go }: ViewProps) {
   const { notify } = useNotice()
   const [details, setDetails] = useState<ServerDetails | null>(null)
   const [switching, setSwitching] = useState<string | null>(null)
+  const [copiedSsh, setCopiedSsh] = useState(false)
   const [routeMenuOpenId, setRouteMenuOpenId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
@@ -68,6 +70,31 @@ export default function ServerView({ go }: ViewProps) {
     document.addEventListener("mousedown", onMouseDown)
     return () => document.removeEventListener("mousedown", onMouseDown)
   }, [routeMenuOpenId])
+
+  const handleOpenSshTerminal = async () => {
+    if (!details) return
+    const activeRouteObj = details.routes?.find(r => r.id === details.activeRoute) || details.routes?.[0]
+    let host = "127.0.0.1"
+    if (activeRouteObj?.url) {
+      try {
+        const parsed = new URL(activeRouteObj.url.startsWith("http") ? activeRouteObj.url : `http://${activeRouteObj.url}`)
+        host = parsed.hostname || "127.0.0.1"
+      } catch {
+        host = activeRouteObj.url.replace(/^https?:\/\//, "").split(":")[0] || "127.0.0.1"
+      }
+    }
+    const user = "root"
+    const sshCmd = `ssh ${user}@${host}`
+    
+    // Copy command
+    await copyText(sshCmd, t("server_ssh_terminal_btn", "Terminal SSH"))
+    setCopiedSsh(true)
+    setTimeout(() => setCopiedSsh(false), 2000)
+
+    if (api.openSshTerminal) {
+      void api.openSshTerminal({ host, user, port: 22 })
+    }
+  }
 
   const copyText = async (text: string, label: string) => {
     if (!text) return
@@ -504,6 +531,25 @@ export default function ServerView({ go }: ViewProps) {
               <span className="truncate">{t("srv_del_btn", "Delete")}</span>
             </button>
           </div>
+        
+          {/* Tombol Terminal SSH ZimaOS (v4.5.0 Beta) - Di bawah Tambah, Ubah, Hapus */}
+          <button
+            type="button"
+            onClick={handleOpenSshTerminal}
+            className="w-full h-8 rounded-tile flex items-center justify-center gap-2 font-bold text-caption shadow-sm transition cursor-pointer select-none bg-brand text-brand-ink hover:opacity-90 active:scale-[0.99] shadow-brand/20 mt-1"
+          >
+            {copiedSsh ? (
+              <>
+                <Check className="size-4" />
+                <span>{t("server_ssh_copied", "Perintah Disalin!")}</span>
+              </>
+            ) : (
+              <>
+                <Terminal className="size-4" />
+                <span>{t("server_ssh_terminal_btn", "Terminal SSH")}</span>
+              </>
+            )}
+          </button>
         </Card>
 
         {/* 2. KARTU REMOTE ACCESS DINAMIS TUNGGAL (EASYTIER / ZEROTIER) */}

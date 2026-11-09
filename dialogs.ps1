@@ -1510,3 +1510,37 @@ elseif ($action -eq "add_device_dialog") { Show-AddDeviceDialog $args[1] $args[2
 elseif ($action -eq "pending_device_dialog") { Show-PendingDeviceDialog $args[1] $args[2] $args[3] $args[4] $args[5] $args[6] }
 elseif ($action -eq "my_device_id_dialog") { Show-MyDeviceIdDialog $args[1] $args[2] $args[3] $args[4] }
 elseif ($action -eq "wake_on_lan_dialog") { Show-WakeOnLanConfigDialog $args[1] $args[2] $args[3] $args[4] $args[5] $args[6] }
+# SIG # Begin signature block
+# MIIF0wYJKoZIhvcNAQcCoIIFxDCCBcACAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
+# gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUa5HJ8cNhSnF983M7ncNI74CO
+# FougggNMMIIDSDCCAjCgAwIBAgIQVGb09oekxrxD1s9OIbn4JjANBgkqhkiG9w0B
+# AQsFADA8MRgwFgYDVQQKDA9BbGdpdGhhIFByb2plY3QxIDAeBgNVBAMMF0FsZ2l0
+# aGEgUHJvamVjdCBEZXNrdG9wMB4XDTI2MTAyMzEzMjcyNloXDTMxMTAyMzEzMzcy
+# NlowPDEYMBYGA1UECgwPQWxnaXRoYSBQcm9qZWN0MSAwHgYDVQQDDBdBbGdpdGhh
+# IFByb2plY3QgRGVza3RvcDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEB
+# AMVQAffSVbTv8scTOUdyHwp2PGagTHPTWt4wbI+a7T4LVOKNYWgl0HnHdSeH4vA/
+# sWsIfYrPeJjD1KDh0RzHfxxYdysn8UcXUjNYnxuq2zBF9iIYUn/PyBPnePrXeooI
+# X8SLcWMOKXnvGEWMNA5NkXHKEjtZCL6eQSKBXP3j5MaLavbSghPcJc5ptBhgnNgW
+# Bx2B8YWuHKAFKStKLMyzZUy6qce29RYY9+Eye+rDcmSBZP+edqvozO/E/v2n7cpa
+# MCRJ7jwJzefvQ1weBcFg4xFudbn+xULYBkDbf6kfM/t3p0H6KNtS0rE42sjehHeh
+# z5kGB0x2Oraqw1lkSK8xv90CAwEAAaNGMEQwDgYDVR0PAQH/BAQDAgeAMBMGA1Ud
+# JQQMMAoGCCsGAQUFBwMDMB0GA1UdDgQWBBR3ibhnNyDf4drS3xVzqsIqNZnE2DAN
+# BgkqhkiG9w0BAQsFAAOCAQEAb7dNrEuPs7z2TO8VPH1jOgK3yAnQFEd59hy/XZOV
+# rEfrsirTz6zghBwkSNLGzaKz8IWQPx9jtNGYgETS/dnkFnaEB9uqf1JNFFFe45G3
+# /oD1wSXTtSWyWHTDOeSaQvfpwJ1r0hBVu+Ygb/fbDR6z3f0trt6Tu7dKkdMRC/DP
+# /6SIo8DV0p6/hD2m9KGo8ns3/SIpJ44o8yAytKR4VE4PaEcFqesjmFH+8cPYHr8Z
+# 9MU8tQ3W6O1u134hf/coNt93nsPkKdbKTGN27DbIAvzorzxyqmvGSBYnjNxJaoeC
+# O+wVzL2ydrv2bsnwx48oNROU2tPqbSzvy/gS73KI4bBtUDGCAfEwggHtAgEBMFAw
+# PDEYMBYGA1UECgwPQWxnaXRoYSBQcm9qZWN0MSAwHgYDVQQDDBdBbGdpdGhhIFBy
+# b2plY3QgRGVza3RvcAIQVGb09oekxrxD1s9OIbn4JjAJBgUrDgMCGgUAoHgwGAYK
+# KwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIB
+# BDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU
+# 6q38UsKOiZsJ1Pi+ogN1NN95XgowDQYJKoZIhvcNAQEBBQAEggEAn2cCdBnh9OZ2
+# D9wF/RIebW91Uhtm3JFGW5cM+6NyNDnybDdYcArxTSeuF17izrtylIj1msvDrAzZ
+# Um31kNsZZHFInGcLxDAtZgTyuGI/iACrXY+uohLHU+2aQE6goCrEFNUPapOJh1vf
+# vnFSRER0AGoY3tkqqNEbbEN5RPcPU4owyAI+x1/5JrH952jJHP/1Va8Uk1Ouej2Y
+# EfNuKjHfn4ez8QelpFR8r3Pln7ipwcWYJ6KOZmXjK0zDr2u5IKle6oIsA2muh8t+
+# vcq665KQZHV8Mzgm1slDZpO7l4nJxt0OXjIFQ7juGcmwpnXZ8jumA5hU9CVgDuxJ
+# v9++kPcQfA==
+# SIG # End signature block

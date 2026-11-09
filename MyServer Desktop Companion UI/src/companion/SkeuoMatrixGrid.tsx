@@ -3436,7 +3436,7 @@ const FILES_OFFLINE_SVG = `<svg class="w-[122px] h-[110px] overflow-visible card
 <g filter="url(#filter1_di_176_28253)">
 <g clip-path="url(#clip1_176_28253)">
 <rect x="8" y="28" width="106" height="74" rx="6" fill="#1B1B1B"/>
-<g class="crt-glitch-content"><g clip-path="url(#clip2_176_28253)">
+<g clip-path="url(#clip2_176_28253)">
 <g clip-path="url(#clip3_176_28253)">
 <rect x="5.81055" y="27.0528" width="3.49389" height="3.49389" fill="black"/>
 <rect x="9.62109" y="27.0528" width="3.49389" height="3.49389" fill="black"/>
@@ -4020,11 +4020,6 @@ const FILES_OFFLINE_SVG = `<svg class="w-[122px] h-[110px] overflow-visible card
 <rect x="112.506" y="99.4533" width="3.49389" height="3.49389" fill="black"/>
 </g>
 </g>
-</g>
-<rect x="8" y="28" width="106" height="74" rx="6" fill="url(#crt-scanlines-files-offline)" class="crt-layer-scanlines pointer-events-none"/>
-<g class="crt-hum-wrapper pointer-events-none"><rect x="8" y="28" width="106" height="30" fill="url(#crt-hum-grad-files-offline)"/></g>
-<rect x="8" y="28" width="106" height="74" rx="6" fill="url(#crt-vignette-files-offline)" class="crt-layer-vignette pointer-events-none"/>
-<rect class="crt-tracking-band pointer-events-none" x="8" y="55" width="106" height="3" fill="#86efac" opacity="0"/>
 </g>
 <rect x="9" y="29" width="104" height="72" rx="5" stroke="black" stroke-width="2"/>
 </g>
@@ -4888,7 +4883,7 @@ const VM_OFFLINE_SVG = `<svg class="w-[122px] h-[110px] overflow-visible card-sv
 <g filter="url(#filter1_di_176_30075)">
 <g clip-path="url(#clip1_176_30075)">
 <rect x="8" y="28" width="106" height="74" rx="6" fill="#1B1B1B"/>
-<g class="crt-glitch-content"><g clip-path="url(#clip2_176_30075)">
+<g clip-path="url(#clip2_176_30075)">
 <g clip-path="url(#clip3_176_30075)">
 <rect x="5.81055" y="27.0528" width="3.49389" height="3.49389" fill="black"/>
 <rect x="9.62109" y="27.0528" width="3.49389" height="3.49389" fill="black"/>
@@ -5472,11 +5467,6 @@ const VM_OFFLINE_SVG = `<svg class="w-[122px] h-[110px] overflow-visible card-sv
 <rect x="112.506" y="99.4533" width="3.49389" height="3.49389" fill="black"/>
 </g>
 </g>
-</g>
-<rect x="8" y="28" width="106" height="74" rx="6" fill="url(#crt-scanlines-vm-offline)" class="crt-layer-scanlines pointer-events-none"/>
-<g class="crt-hum-wrapper pointer-events-none"><rect x="8" y="28" width="106" height="30" fill="url(#crt-hum-grad-vm-offline)"/></g>
-<rect x="8" y="28" width="106" height="74" rx="6" fill="url(#crt-vignette-vm-offline)" class="crt-layer-vignette pointer-events-none"/>
-<rect class="crt-tracking-band pointer-events-none" x="8" y="55" width="106" height="3" fill="#86efac" opacity="0"/>
 </g>
 <rect x="9" y="29" width="104" height="72" rx="5" stroke="black" stroke-width="2"/>
 </g>

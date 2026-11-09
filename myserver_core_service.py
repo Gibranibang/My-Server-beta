@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.4.7"
+APP_VERSION_NUMBER = "4.5.0"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3705,6 +3705,24 @@ def probe_url_endpoint(target_url, timeout=1.2):
 
 
 
+
+
+def _get_active_server_backend_url(cfg):
+    """Menentukan URL REST API MyServer Backend di ZimaOS (port 8080) secara dinamis."""
+    try:
+        srv = config_manager.get_active_server(cfg)
+        if not srv:
+            return None
+        url, _ = config_manager.resolve_target_connection(cfg)
+        if not url:
+            return None
+        host = urllib.parse.urlparse(url).hostname
+        if not host:
+            return None
+        return f"http://{host}:8080"
+    except Exception as e:
+        logger_manager.log_debug(f"[_get_active_server_backend_url] Error: {e}")
+        return None
 
 
 def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=None, vm_id=None, force_window=False):
@@ -21116,7 +21134,38 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"running": False, "error": "easytier_manager not available"})
         elif path in ("/api/vms", "/api/vms/load"):
             cfg = config_manager.load_or_create_config()
-            self._send_json({"status": "ok", "vms": cfg.get("vms", [])})
+            local_vms = cfg.get("vms", [])
+            for vm in local_vms:
+                if not vm.get("scope"):
+                    vm["scope"] = "local"
+
+            srv = config_manager.get_active_server(cfg)
+            backend_url = _get_active_server_backend_url(cfg)
+            server_vms = []
+            if srv and backend_url:
+                try:
+                    req = urllib.request.Request(f"{backend_url}/api/v1/vms", headers={"User-Agent": "MyServer-Core/4.5.0"})
+                    with urllib.request.urlopen(req, timeout=1.5) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        raw_server_vms = data.get("vms", [])
+                        for svm in raw_server_vms:
+                            svm["scope"] = "server"
+                            svm["serverId"] = srv.get("id")
+                            svm["serverName"] = srv.get("name")
+                            server_vms.append(svm)
+                except Exception as be:
+                    logger_manager.log_debug(f"[api/vms] Gagal sync server VMs dari backend ZimaOS: {be}")
+
+            seen_ids = set()
+            combined = []
+            for vm in server_vms:
+                seen_ids.add(vm.get("id"))
+                combined.append(vm)
+            for vm in local_vms:
+                if vm.get("id") not in seen_ids:
+                    combined.append(vm)
+
+            self._send_json({"status": "ok", "vms": combined})
         elif path == "/api/instabox/vms":
             if instabox_manager:
                 vms = instabox_manager.InstaBoxManager.list_vms()
@@ -28023,13 +28072,31 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             elif ep in ("remote/status", "remote_status"):
                 path = "/api/remote/status"
 
-        # --- Endpoints Persisten VM & Layar Virtual Terisolasi (v4.4.7 Beta) ---
+        # --- Endpoints Persisten VM, Migrasi Server & Terminal SSH (v4.5.0 Beta) ---
         if path in ("/api/vms", "/api/vms/load"):
             cfg = config_manager.load_or_create_config()
             if "vms" in body and isinstance(body.get("vms"), list):
-                cfg["vms"] = body["vms"]
+                vms_list = body["vms"]
+                local_vms = [v for v in vms_list if v.get("scope") != "server"]
+                cfg["vms"] = local_vms
                 config_manager.save_config(cfg)
-                self._send_json({"status": "ok", "success": True, "vms": cfg["vms"]})
+
+                backend_url = _get_active_server_backend_url(cfg)
+                if backend_url:
+                    for vm in vms_list:
+                        if vm.get("scope") == "server":
+                            try:
+                                b_req = urllib.request.Request(
+                                    f"{backend_url}/api/v1/vms",
+                                    data=json.dumps(vm).encode("utf-8"),
+                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.0"},
+                                    method="POST"
+                                )
+                                urllib.request.urlopen(b_req, timeout=1.5)
+                            except Exception as be:
+                                logger_manager.log_debug(f"[api/vms] Gagal sync server VM {vm.get('id')}: {be}")
+
+                self._send_json({"status": "ok", "success": True, "vms": vms_list})
             else:
                 self._send_json({"status": "ok", "vms": cfg.get("vms", [])})
             return
@@ -28038,11 +28105,107 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             cfg = config_manager.load_or_create_config()
             vms_list = body.get("vms")
             if isinstance(vms_list, list):
-                cfg["vms"] = vms_list
+                local_vms = [v for v in vms_list if v.get("scope") != "server"]
+                cfg["vms"] = local_vms
                 config_manager.save_config(cfg)
+
+                backend_url = _get_active_server_backend_url(cfg)
+                if backend_url:
+                    for vm in vms_list:
+                        if vm.get("scope") == "server":
+                            try:
+                                b_req = urllib.request.Request(
+                                    f"{backend_url}/api/v1/vms",
+                                    data=json.dumps(vm).encode("utf-8"),
+                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.0"},
+                                    method="POST"
+                                )
+                                urllib.request.urlopen(b_req, timeout=1.5)
+                            except Exception as be:
+                                logger_manager.log_debug(f"[api/vms/save] Gagal sync server VM {vm.get('id')}: {be}")
+
                 self._send_json({"status": "ok", "success": True})
             else:
                 self._send_json({"status": "error", "message": "Invalid vms list"}, status=400)
+            return
+
+        if path == "/api/vms/migrate":
+            vm_id = body.get("vmId")
+            target_scope = body.get("targetScope") # "server" or "local"
+            vm_data = body.get("vm")
+            cfg = config_manager.load_or_create_config()
+            local_vms = cfg.get("vms", [])
+            srv = config_manager.get_active_server(cfg)
+            backend_url = _get_active_server_backend_url(cfg)
+
+            if target_scope == "server":
+                if not backend_url or not srv:
+                    self._send_json({"status": "error", "message": "Server ZimaOS tidak terhubung atau offline"}, status=400)
+                    return
+                target_vm = vm_data or next((v for v in local_vms if v.get("id") == vm_id), None)
+                if not target_vm:
+                    self._send_json({"status": "error", "message": f"VM '{vm_id}' tidak ditemukan"}, status=404)
+                    return
+                target_vm["scope"] = "server"
+                target_vm["serverId"] = srv.get("id")
+                target_vm["serverName"] = srv.get("name")
+                try:
+                    b_req = urllib.request.Request(
+                        f"{backend_url}/api/v1/vms",
+                        data=json.dumps(target_vm).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.0"},
+                        method="POST"
+                    )
+                    urllib.request.urlopen(b_req, timeout=3.0)
+                except Exception as be:
+                    self._send_json({"status": "error", "message": f"Gagal migrasi ke ZimaOS: {be}"}, status=500)
+                    return
+                cfg["vms"] = [v for v in local_vms if v.get("id") != vm_id]
+                config_manager.save_config(cfg)
+                self._send_json({"status": "ok", "success": True, "vm": target_vm})
+                return
+
+            elif target_scope == "local":
+                target_vm = vm_data or {}
+                target_vm["scope"] = "local"
+                target_vm.pop("serverId", None)
+                target_vm.pop("serverName", None)
+                if backend_url:
+                    try:
+                        del_req = urllib.request.Request(
+                            f"{backend_url}/api/v1/vms/{vm_id}",
+                            headers={"User-Agent": "MyServer-Core/4.5.0"},
+                            method="DELETE"
+                        )
+                        urllib.request.urlopen(del_req, timeout=3.0)
+                    except Exception as be:
+                        logger_manager.log_debug(f"[api/vms/migrate] Warning: Gagal hapus dari backend saat migrasi ke lokal: {be}")
+                filtered = [v for v in local_vms if v.get("id") != vm_id]
+                filtered.append(target_vm)
+                cfg["vms"] = filtered
+                config_manager.save_config(cfg)
+                self._send_json({"status": "ok", "success": True, "vm": target_vm})
+                return
+
+        if path == "/api/server/ssh_terminal":
+            cfg = config_manager.load_or_create_config()
+            srv = config_manager.get_active_server(cfg)
+            url, _ = config_manager.resolve_target_connection(cfg)
+            host = (urllib.parse.urlparse(url).hostname or "zimaos.local").strip()
+            ssh_cmd = f"ssh root@{host}"
+            launched = False
+            try:
+                ps_cmd = [
+                    "powershell.exe",
+                    "-NoExit",
+                    "-Command",
+                    f'Write-Host "Menghubungkan Terminal SSH ke Server: {host}..." -ForegroundColor Green; ssh root@{host}'
+                ]
+                subprocess.Popen(ps_cmd)
+                launched = True
+            except Exception as te:
+                logger_manager.log_debug(f"[api/server/ssh_terminal] Gagal meluncurkan terminal: {te}")
+            self._send_json({"status": "ok", "success": True, "command": ssh_cmd, "host": host, "launched": launched})
             return
 
         if path == "/api/vm/open_window":

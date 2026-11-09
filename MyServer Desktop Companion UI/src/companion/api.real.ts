@@ -1082,6 +1082,46 @@ export function createRealApi(): CompanionApi {
       return { status: 'error' }
     },
 
+    async migrateVm(vmId: string, targetScope: "server" | "local") {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'vms/migrate', payload: { vm_id: vmId, target_scope: targetScope } })
+        } catch (err) {
+          console.warn('[RealApi] migrateVm invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['vms/migrate']) {
+          return await api['vms/migrate']({ vm_id: vmId, target_scope: targetScope })
+        }
+      } catch (err) {
+        console.warn('[RealApi] migrateVm error:', err)
+      }
+      return { status: 'error' }
+    },
+
+    async openSshTerminal(params?: { host?: string; user?: string; port?: number }) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'server/ssh_terminal', payload: params || {} })
+        } catch (err) {
+          console.warn('[RealApi] openSshTerminal invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['server/ssh_terminal']) {
+          return await api['server/ssh_terminal'](params || {})
+        }
+      } catch (err) {
+        console.warn('[RealApi] openSshTerminal error:', err)
+      }
+      return { status: 'error' }
+    },
+
     async openVmWindow(vmId: string, title: string, url: string) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {

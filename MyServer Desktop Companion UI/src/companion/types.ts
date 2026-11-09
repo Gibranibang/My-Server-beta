@@ -45,6 +45,9 @@ export interface VirtualMachine {
   name: string
   provider: "instabox" | "custom"
   status: "running" | "sleeping" | "cooldown" | "stopped"
+  scope?: "server" | "local"
+  serverId?: string
+  serverName?: string
   machineId?: string
   sshHost?: string
   sshUser?: string

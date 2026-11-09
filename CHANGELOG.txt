@@ -1,3 +1,11 @@
+[v4.5.0 - Beta] - 2026-11-10
+- Pengelompokan & Penyimpanan VM Multi-Target (Server vs Lokal): opsi lokasi pada modal Tambah VM, penyimpanan tersinkron di SQLite ZimaOS (backend v1.2.0), dan automasi 24/7 tetap berjalan saat laptop mati.
+- Migrasi 1-Klik VM Terhubung: tombol migrasi cepat di menu Edit VM untuk memindahkan VM beserta konfigurasi SSH dan jadwal automasi antara Server dan Lokal.
+- Akses Cepat Terminal SSH ZimaOS: tombol hijau selaras di menu Server & Network di bawah tombol Tambah, Ubah, Hapus untuk salin perintah SSH dan buka terminal interaktif.
+- Pemfilteran Dinamis & Smart Grouping: filter VM sesuai server ZimaOS yang aktif + VM lokal, dengan pemisah kelompok kondisional (hanya tampil jika kedua kelompok memiliki VM).
+- Perbaikan Bug Animasi CRT Mode Offline: scanlines/glitch/vignette CRT dihilangkan hanya dari kartu File Manager dan VM Manager offline; kartu online dan kartu offline lain tetap utuh.
+- Optimalisasi Modal UX & Scrollbar: 1 tombol hapus di menu edit (tombol hapus di header dihapus) dan scrollbar tunggal tanpa slider tumpang tindih.
+
 [v4.4.7 - Beta] - 2026-11-09
 - Perbaikan Always-On & Auto-Restart 24/7: memperbaiki ReferenceError vmsRef di VmManagerView, wake instan saat Always-On diaktifkan pada VM sleeping, serta daemon latar belakang vm_power_scheduler_loop di myserver_core_service.py.
 - Fitur Auto-On & Grid Aksi 3x2 Simetris (Opsi A): penjadwalan nyala otomatis pada Jam Tertentu (HH:MM + hari aktif) dan Jeda Setelah Mati (detik/menit/jam setelah mati).

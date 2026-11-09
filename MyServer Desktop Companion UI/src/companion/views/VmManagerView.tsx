@@ -11,6 +11,7 @@ import {
   Globe,
   HardDrive,
   Key,
+  LoaderCircle,
   Monitor,
   Pencil,
   Plus,
@@ -20,6 +21,7 @@ import {
   Terminal,
   Trash2,
   X,
+  Zap,
 } from "lucide-react"
 import { getTranslation } from "../i18n"
 import { useCompanion, useNotice } from "../store"
@@ -94,7 +96,8 @@ function VmRuntimeDotBar({ usedPct, tone, live = false }: { usedPct: number; ton
 export default function VmManagerView({ go }: ViewProps) {
   const api = getCompanionApi()
   const { isOnline, settings } = useCompanion()
-  const t = getTranslation(settings?.language)
+  const language = settings?.language || "id"
+  const t = getTranslation(language)
   const { notify } = useNotice()
 
   // State: list of VMs with localStorage persistence
@@ -209,7 +212,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     ? {
                         ...v,
                         machineId: res.machineId || v.machineId,
-                        status: res.state === "running" ? "running" : v.status,
+                        status: res.state === "running" ? "running" : (res.state ? "sleeping" : v.status),
                         runtimeMinutes: res.runtimeMinutes ?? v.runtimeMinutes,
                         maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
                         idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
@@ -226,7 +229,26 @@ export default function VmManagerView({ go }: ViewProps) {
     }
 
     syncActiveInstaboxVms()
-    const syncInterval = setInterval(syncActiveInstaboxVms, 30000)
+
+    // 15-minute anti-sleep heartbeat & continuous runtime guard for InstaBox VMs with keepAliveEnabled
+    const keepAlivePing = () => {
+      vms.forEach((vm) => {
+        if (vm.provider === "instabox" && vm.keepAliveEnabled && isOnline) {
+          if (vm.status === "sleeping" && vm.apiKey && vm.machineId) {
+            api.wakeInstaBoxVm({ apiKey: vm.apiKey, machineId: vm.machineId }).catch(() => {})
+          }
+          if (vm.status === "running" && (vm.runtimeMinutes || 0) >= 420) {
+            handleImmediateResetCycle(vm)
+          }
+        }
+      })
+    }
+    const keepAliveInterval = setInterval(keepAlivePing, 900000)
+
+    const syncInterval = setInterval(() => {
+      syncActiveInstaboxVms()
+      keepAlivePing()
+    }, 30000)
 
     // Local runtime increment: increment runtime by 1 minute every 60 seconds if running
     const timerInterval = setInterval(() => {
@@ -247,12 +269,13 @@ export default function VmManagerView({ go }: ViewProps) {
 
     return () => {
       clearInterval(syncInterval)
+      clearInterval(keepAliveInterval)
       clearInterval(timerInterval)
     }
   }, [vms.length])
 
   // Accordion state
-  const [expandedId, setExpandedId] = useState<string | null>(vms[0]?.id || null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
 
   // Modals state
   const [vmToDelete, setVmToDelete] = useState<VirtualMachine | null>(() => {
@@ -307,6 +330,7 @@ export default function VmManagerView({ go }: ViewProps) {
   const [formScreenUrl, setFormScreenUrl] = useState("")
   const [formApiKey, setFormApiKey] = useState("")
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [powerBusyVmId, setPowerBusyVmId] = useState<string | null>(null)
 
   // Schedule modal form fields
   const [schedEnabled, setSchedEnabled] = useState(false)
@@ -333,9 +357,9 @@ export default function VmManagerView({ go }: ViewProps) {
         setCopiedId(vmId)
         setTimeout(() => setCopiedId(null), 1800)
       }
-      notify(`${label} disalin ke papan klip!`, "success")
+      notify(language === "id" ? `${label} disalin ke papan klip!` : `${label} copied to clipboard!`, "success")
     } catch {
-      notify(`Gagal menyalin ${label}.`, "danger")
+      notify(language === "id" ? `Gagal menyalin ${label}.` : `Failed to copy ${label}.`, "danger")
     }
   }
 
@@ -347,24 +371,70 @@ export default function VmManagerView({ go }: ViewProps) {
     return `ssh -p ${port} ${user}${host}`
   }
 
-  // Toggle Power (Wake / Sleep)
-  const handleTogglePower = (vm: VirtualMachine) => {
+  // Toggle Power (Wake / Sleep) - Real API call to InstaBox Cloud
+  const handleTogglePower = async (vm: VirtualMachine) => {
     if (!isOnline) {
-      notify(t("server_offline_warning", "Server sedang offline."), "warning")
+      notify(language === "id" ? "Server sedang offline." : "Server is currently offline.", "warning")
       return
     }
-    const nextStatus = vm.status === "running" ? "sleeping" : "running"
-    setVms((prev) =>
-      prev.map((item) =>
-        item.id === vm.id ? { ...item, status: nextStatus } : item
+
+    const isCurrentlyRunning = vm.status === "running"
+    const nextStatus = isCurrentlyRunning ? "sleeping" : "running"
+    setPowerBusyVmId(vm.id)
+
+    if (vm.provider === "instabox") {
+      try {
+        const payload = {
+          apiKey: vm.apiKey,
+          machineId: vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined),
+          vmId: vm.id,
+        }
+        const res = isCurrentlyRunning
+          ? await api.pauseInstaBoxVm(payload)
+          : await api.wakeInstaBoxVm(payload)
+
+        if (res && res.status === "error") {
+          notify(language === "id" ? `Gagal mengubah daya VM: ${res.message || "Error"}` : `Failed to change VM power: ${res.message || "Error"}`, "danger")
+          setPowerBusyVmId(null)
+          return
+        }
+
+        setVms((prev) =>
+          prev.map((item) =>
+            item.id === vm.id
+              ? {
+                  ...item,
+                  status: nextStatus,
+                  lastActive: nextStatus === "running" ? "Just now" : "Sleeping",
+                }
+              : item
+          )
+        )
+        notify(
+          nextStatus === "running"
+            ? (language === "id" ? `${vm.name}: VM Berhasil Dibangunkan!` : `${vm.name}: VM Woken Up Successfully!`)
+            : (language === "id" ? `${vm.name}: VM Berhasil Ditidurkan!` : `${vm.name}: VM Put to Sleep Successfully!`),
+          "success"
+        )
+      } catch (err: any) {
+        notify(language === "id" ? `Komunikasi API gagal: ${err?.message || String(err)}` : `API communication failed: ${err?.message || String(err)}`, "danger")
+      } finally {
+        setPowerBusyVmId(null)
+      }
+    } else {
+      setVms((prev) =>
+        prev.map((item) =>
+          item.id === vm.id ? { ...item, status: nextStatus } : item
+        )
       )
-    )
-    notify(
-      nextStatus === "running"
-        ? `${vm.name}: ${t("wake_vm_btn", "VM Dibangunkan")}`
-        : `${vm.name}: ${t("sleep_vm_btn", "VM Masuk Mode Tidur")}`,
-      "neutral"
-    )
+      notify(
+        nextStatus === "running"
+          ? `${vm.name}: ${language === "id" ? "VM Dibangunkan" : "VM Woken Up"}`
+          : `${vm.name}: ${language === "id" ? "VM Masuk Mode Tidur" : "VM Entered Sleep Mode"}`,
+        "neutral"
+      )
+      setPowerBusyVmId(null)
+    }
   }
 
   // Delete execution
@@ -372,7 +442,7 @@ export default function VmManagerView({ go }: ViewProps) {
     if (!vmToDelete) return
     const targetId = vmToDelete.id
     setVms((prev) => prev.filter((v) => v.id !== targetId))
-    notify(`${vmToDelete.name} berhasil dihapus.`, "neutral")
+    notify(language === "id" ? `${vmToDelete.name} berhasil dihapus.` : `${vmToDelete.name} deleted successfully.`, "neutral")
     setVmToDelete(null)
   }
 
@@ -390,12 +460,46 @@ export default function VmManagerView({ go }: ViewProps) {
     setFormApiKey(vm.apiKey || "")
   }
 
+  // Dedicated Always-On Toggle for InstaBox
+  const handleToggleKeepAlive = (vm: VirtualMachine) => {
+    const nextVal = !vm.keepAliveEnabled
+    const updatedVms = vms.map((v) => {
+      if (v.id === vm.id) {
+        const nextAutoRestart: VmAutoRestartSchedule = v.autoRestart ? {
+          ...v.autoRestart,
+          enabled: true,
+          resetMode: "pause_resume",
+        } : {
+          enabled: true,
+          mode: "interval",
+          intervalValue: 6,
+          intervalUnit: "hours",
+          resetMode: "pause_resume",
+        }
+
+        return {
+          ...v,
+          keepAliveEnabled: nextVal,
+          autoRestart: nextVal ? nextAutoRestart : v.autoRestart,
+        }
+      }
+      return v
+    })
+    setVms(updatedVms)
+    notify(
+      nextVal
+        ? (language === "id" ? `${vm.name}: Fitur Tetap Nyala diaktifkan` : `${vm.name}: Always-On enabled`)
+        : (language === "id" ? `${vm.name}: Fitur Tetap Nyala dinonaktifkan` : `${vm.name}: Always-On disabled`),
+      "info"
+    )
+  }
+
   // Save Add/Edit
   const handleSaveForm = (e: React.FormEvent) => {
     e.preventDefault()
     const cleanName = formName.trim()
     if (!cleanName && addVmTab === "manual") {
-      notify("Nama Virtual Machine wajib diisi.", "danger")
+      notify(language === "id" ? "Nama Virtual Machine wajib diisi." : "Virtual Machine name is required.", "danger")
       return
     }
 
@@ -432,7 +536,7 @@ export default function VmManagerView({ go }: ViewProps) {
             : item
         )
       )
-      notify(`${cleanName || editingVm.name} berhasil diperbarui!`, "success")
+      notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
       setEditingVm(null)
     } else {
       const finalName = cleanName || (addVmTab === "instabox" ? "InstaBox-MicroVM" : "Linux-VPS")
@@ -444,7 +548,7 @@ export default function VmManagerView({ go }: ViewProps) {
         sshHost: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : "127.0.0.1"),
         sshUser: cleanUser,
         sshPort: Number(formSshPort) || (addVmTab === "instabox" ? 2222 : 22),
-        tokenExpiry: formTokenExpiry.trim() || (addVmTab === "instabox" ? "7d" : ""),
+        tokenExpiry: formTokenExpiry.trim(),
         webPort: formWebPort ? Number(formWebPort) : undefined,
         screenUrl: formScreenUrl.trim() || undefined,
         apiKey: finalApiKey || undefined,
@@ -463,13 +567,13 @@ export default function VmManagerView({ go }: ViewProps) {
       }
       setVms((prev) => [...prev, newVm])
       setExpandedId(newVm.id)
-      notify(`${finalName} berhasil ditambahkan!`, "success")
+      notify(language === "id" ? `${finalName} berhasil ditambahkan!` : `${finalName} added successfully!`, "success")
       setIsAddingVm(false)
     }
 
     // Trigger immediate InstaBox cloud sync if API Key is configured
     if (finalApiKey && addVmTab === "instabox") {
-      notify("Menyinkronkan data dengan InstaBox Cloud…", "info")
+      notify(language === "id" ? "Menyinkronkan data dengan InstaBox Cloud…" : "Syncing data with InstaBox Cloud…", "info")
       api.syncInstaBoxVm({ apiKey: finalApiKey, vmName: cleanName, machineId: editingVm?.machineId }).then((res: any) => {
         if (res && res.success) {
           setVms((current) =>
@@ -491,9 +595,9 @@ export default function VmManagerView({ go }: ViewProps) {
                 : v
             )
           )
-          notify(`Terhubung ke InstaBox: ${res.machineName || 'MicroVM'}! Metrik berhasil disinkronkan.`, "success")
+          notify(language === "id" ? `Terhubung ke InstaBox: ${res.machineName || 'MicroVM'}! Metrik berhasil disinkronkan.` : `Connected to InstaBox: ${res.machineName || 'MicroVM'}! Metrics synced successfully.`, "success")
         } else if (res && res.error) {
-          notify(`Peringatan InstaBox: ${res.error}`, "warning")
+          notify(language === "id" ? `Peringatan InstaBox: ${res.error}` : `InstaBox Warning: ${res.error}`, "warning")
         }
       }).catch((err: any) => {
         console.warn("InstaBox sync error:", err)
@@ -510,7 +614,7 @@ export default function VmManagerView({ go }: ViewProps) {
       targetUrl = `http://${targetUrl}`
     }
     void api.openExternalBrowser(targetUrl)
-    notify(`Membuka web service ${targetUrl}…`, "info")
+    notify(language === "id" ? `Membuka web service ${targetUrl}…` : `Opening web service ${targetUrl}…`, "info")
   }
 
     // Open Virtual Screen
@@ -526,7 +630,7 @@ export default function VmManagerView({ go }: ViewProps) {
       targetUrl = `https://${targetUrl}`
     }
     void api.openExternalBrowser(targetUrl)
-    notify(`Membuka Layar Virtual: ${targetUrl}`, "info")
+    notify(language === "id" ? `Membuka Layar Virtual: ${targetUrl}` : `Opening Virtual Screen: ${targetUrl}`, "info")
   }
 
   // Copy SFTP URI
@@ -576,13 +680,13 @@ export default function VmManagerView({ go }: ViewProps) {
         item.id === schedulingVm.id ? { ...item, autoRestart: newSchedule } : item
       )
     )
-    notify(`Jadwal Auto-Restart ${schedulingVm.name} disimpan!`, "success")
+    notify(language === "id" ? `Jadwal Auto-Restart ${schedulingVm.name} disimpan!` : `Auto-Restart schedule for ${schedulingVm.name} saved!`, "success")
     setSchedulingVm(null)
   }
 
   // Immediate 8-hour reset cycle for InstaBox
   const handleImmediateResetCycle = async (vm: VirtualMachine) => {
-    notify(`Memulai siklus reset limit 8 jam untuk ${vm.name}…`, "info")
+    notify(language === "id" ? `Memulai siklus reset limit 8 jam untuk ${vm.name}…` : `Starting 8-hour limit reset cycle for ${vm.name}…`, "info")
     setVms((prev) =>
       prev.map((item) =>
         item.id === vm.id ? { ...item, status: "sleeping" } : item
@@ -599,7 +703,7 @@ export default function VmManagerView({ go }: ViewProps) {
           item.id === vm.id ? { ...item, status: "running", runtimeMinutes: 0 } : item
         )
       )
-      notify(`Siklus selesai! Limit 8 jam ${vm.name} berhasil di-reset ke 0.`, "success")
+      notify(language === "id" ? `Siklus selesai! Limit 8 jam ${vm.name} berhasil di-reset ke 0.` : `Cycle complete! 8-hour limit for ${vm.name} reset to 0.`, "success")
     }, 2500)
   }
   // Active Auto-Restart Scheduler Worker Loop
@@ -669,7 +773,7 @@ export default function VmManagerView({ go }: ViewProps) {
                 : item
             )
           )
-          notify(`[Auto-Restart] Menjalankan jadwal otomatis untuk ${vm.name} (${timestampStr})`, "info")
+          notify(language === "id" ? `[Auto-Restart] Menjalankan jadwal otomatis untuk ${vm.name} (${timestampStr})` : `[Auto-Restart] Executing automatic schedule for ${vm.name} (${timestampStr})`, "info")
           if (vm.provider === "instabox") {
             handleImmediateResetCycle(vm)
           } else {
@@ -793,19 +897,19 @@ export default function VmManagerView({ go }: ViewProps) {
                 <Clock className="size-3 text-ink-muted" />
                 <span>
                   {vm.runtimeMinutes != null
-                    ? `${Math.floor(vm.runtimeMinutes / 60)}j ${vm.runtimeMinutes % 60}m / 8j runtime`
-                    : "— / 8j runtime"}
+                    ? `${Math.floor(vm.runtimeMinutes / 60)}${language === "id" ? "j" : "h"} ${vm.runtimeMinutes % 60}m / 8${language === "id" ? "j" : "h"} runtime`
+                    : `— / 8${language === "id" ? "j" : "h"} runtime`}
                 </span>
               </Mono>
               <Mono className={cx("shrink-0 font-semibold", isRunning ? "text-ink" : "text-ink-subtle")}>
-                {vm.runtimeMinutes != null ? `${Math.round(runtimePct)}%` : "0%"} {t("used_label", "used")}
+                {vm.runtimeMinutes != null ? `${Math.round(runtimePct)}%` : "0%"} {language === "id" ? "terpakai" : "used"}
               </Mono>
             </div>
 
             <div className="flex items-center justify-between text-nano text-ink-faint border-t border-line/40 pt-1">
-              <span>Auto-sleep: 30m idle</span>
+              <span>{vm.keepAliveEnabled ? t("vm_always_on_disabled", "Auto-sleep: Nonaktif") : "Auto-sleep: 30m idle"}</span>
               {vm.autoRestart?.enabled && (
-                <span className="text-info font-medium">Auto-Restart Aktif</span>
+                <span className="text-info font-medium">{t("vm_autorestart_active")}</span>
               )}
             </div>
           </div>
@@ -840,11 +944,11 @@ export default function VmManagerView({ go }: ViewProps) {
         {/* TIER 3: Rincian Koneksi SSH & Ports */}
         <div className="rounded-tile bg-surface-sunken/80 border border-line p-2.5 flex flex-col gap-1.5 text-nano">
           <div className="flex items-center justify-between text-ink-subtle">
-            <span className="font-semibold text-ink">SSH Connection</span>
-            {vm.tokenExpiry && (
-              <span className="flex items-center gap-1 text-[10px] text-amber-500 font-medium">
-                <Clock className="size-3" />
-                <span>expires in {vm.tokenExpiry}</span>
+            <span className="font-semibold text-ink">{language === "id" ? "Koneksi SSH" : "SSH Connection"}</span>
+            {vm.tokenExpiry && vm.tokenExpiry !== "7d" && vm.tokenExpiry !== "6d" && !vm.apiKey && (
+              <span className="flex items-center gap-1 text-[10px] text-amber-500 font-medium shrink-0">
+                <Clock className="size-3 shrink-0" />
+                <span>{language === "id" ? "kedaluwarsa dlm" : "expires in"} {vm.tokenExpiry}</span>
               </span>
             )}
           </div>
@@ -910,67 +1014,101 @@ export default function VmManagerView({ go }: ViewProps) {
             )}
           </button>
 
-          {/* Action Row 1: Layar Virtual, Web Service, dan SFTP */}
-          <div className="flex items-center gap-1.5">
-            {(vm.screenUrl || vm.provider === "instabox") ? (
-              <Button
-                size="sm"
-                variant="info"
-                icon={Monitor}
-                onClick={() => handleOpenScreen(vm)}
-                className="flex-1 justify-center text-nano"
-              >
-                Layar Virtual
-              </Button>
-            ) : null}
+          {/* Action Grid 2x2: Layar Virtual, SFTP, Auto-Restart, Daya VM */}
+          <div className="grid grid-cols-2 gap-1.5 w-full mt-1">
+            {/* 1. Layar Virtual */}
+            <Button
+              size="sm"
+              variant="subtle"
+              icon={Monitor}
+              iconClassName="size-4 shrink-0 text-info-ink"
+              onClick={() => handleOpenScreen(vm)}
+              className="h-8 justify-center text-[11px] font-semibold px-2 text-ink"
+            >
+              {t("vm_screen_btn")}
+            </Button>
 
-            {(vm.webPort || vm.webUrl) ? (
-              <Button
-                size="sm"
-                variant="subtle"
-                icon={Globe}
-                disabled={!isOnline}
-                onClick={() => handleOpenWeb(vm)}
-                className="flex-1 justify-center text-nano"
-              >
-                Web ({vm.webPort || "App"})
-              </Button>
-            ) : null}
-
+            {/* 2. SFTP */}
             <Button
               size="sm"
               variant="subtle"
               icon={Folder}
+              iconClassName="size-4 shrink-0 text-ink"
               onClick={() => handleCopySftp(vm)}
-              className="flex-1 justify-center text-nano"
+              className="h-8 justify-center text-[11px] font-semibold px-2 text-ink"
             >
-              SFTP
+              {t("vm_sftp_btn")}
             </Button>
-          </div>
 
-          {/* Action Row 2: Jadwal Auto-Restart & Power Toggle */}
-          <div className="flex items-center gap-1.5">
+            {/* 3. Auto-Restart */}
             <Button
               size="sm"
               variant="subtle"
               icon={RotateCcw}
+              iconClassName="size-4 shrink-0 text-ink"
               onClick={() => handleOpenSchedule(vm)}
-              className="flex-1 justify-center text-nano"
+              className="h-8 justify-center text-[11px] font-semibold px-2 text-ink"
             >
-              Jadwal Auto-Restart
+              {t("vm_autorestart_btn")}
             </Button>
 
+            {/* 4. Daya (Tidurkan / Bangunkan) */}
             <Button
               size="sm"
               variant="subtle"
-              icon={Power}
-              disabled={!isOnline}
+              icon={powerBusyVmId === vm.id ? LoaderCircle : Power}
+              iconClassName={cx("size-4 shrink-0", vm.status === "running" ? "text-warning-ink" : "text-success-ink")}
+              disabled={!isOnline || powerBusyVmId === vm.id}
               onClick={() => handleTogglePower(vm)}
-              className="flex-1 justify-center text-nano"
+              className={cx(
+                "h-8 justify-center text-[11px] font-semibold px-2 transition-colors",
+                vm.status === "running"
+                  ? "text-warning-ink hover:border-warning-line/80"
+                  : "text-success-ink hover:border-success-line/80"
+              )}
             >
-              {vm.status === "running" ? "Tidurkan VM" : "Bangunkan VM"}
+              {powerBusyVmId === vm.id
+                ? t("vm_processing", "Memproses...")
+                : vm.status === "running"
+                  ? t("vm_power_sleep", "Tidurkan")
+                  : t("vm_power_wake", "Bangunkan")}
             </Button>
           </div>
+
+          {/* 5. Khusus InstaBox: Tombol Tetap Nyala (Always-On) */}
+          {vm.provider === "instabox" && (
+            <Button
+              size="sm"
+              variant={vm.keepAliveEnabled ? "info" : "subtle"}
+              icon={Zap}
+              iconClassName="size-4 shrink-0"
+              disabled={!isOnline}
+              onClick={() => handleToggleKeepAlive(vm)}
+              className={cx(
+                "w-full h-8 justify-center text-[11px] font-semibold px-2.5 transition-colors mt-0.5",
+                vm.keepAliveEnabled
+                  ? "border-amber-500/60 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
+                  : "text-ink"
+              )}
+            >
+              {vm.keepAliveEnabled ? t("vm_always_on_active") : t("vm_always_on_btn")}
+            </Button>
+          )}
+
+          {/* Web App Button (if webPort/webUrl configured) */}
+          {(vm.webPort || vm.webUrl) && (
+            <Button
+              size="sm"
+              variant="subtle"
+              icon={Globe}
+              iconClassName="size-4"
+              disabled={!isOnline}
+              onClick={() => handleOpenWeb(vm)}
+              className="w-full h-8 justify-center text-[11px] font-semibold text-ink px-2.5 mt-0.5"
+            >
+              Web ({vm.webPort || "App"})
+            </Button>
+          )}
         </div>
       </div>
     )
@@ -1108,7 +1246,19 @@ export default function VmManagerView({ go }: ViewProps) {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      title={language === "id" ? "Edit VM" : "Edit VM"}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleOpenEdit(vm)
+                      }}
+                      className="p-1 rounded text-ink-subtle hover:text-ink hover:bg-surface-sunken transition cursor-pointer"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+
                     <span
                       className={cx(
                         "inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5 border",
@@ -1129,23 +1279,35 @@ export default function VmManagerView({ go }: ViewProps) {
                         }
                         size="xs"
                       />
-                      {vm.status === "running" ? "Active" : "Sleep"}
+                      {!isOnline
+                        ? "Offline"
+                        : vm.status === "running"
+                          ? (language === "id" ? "Aktif" : "Active")
+                          : (language === "id" ? "Tidur" : "Sleep")}
                     </span>
 
-                    {isExpanded ? (
-                      <ChevronUp className="size-4 text-ink-subtle" />
-                    ) : (
-                      <ChevronDown className="size-4 text-ink-subtle" />
-                    )}
+                    <ChevronDown
+                      className={cx(
+                        "size-4 text-ink-subtle transition-transform duration-250 ease-out",
+                        isExpanded && "rotate-180"
+                      )}
+                    />
                   </div>
                 </div>
 
-                {/* Accordion Expanded Body */}
-                {isExpanded && (
-                  <div className="px-3 pb-3 pt-1 border-t border-line/60 flex flex-col gap-2 bg-surface-sunken/20">
-                    {renderVmCardContent(vm, true)}
+                {/* Smooth Animated Accordion Body using CSS Grid */}
+                <div
+                  className={cx(
+                    "grid transition-all duration-250 ease-out",
+                    isExpanded ? "grid-rows-[1fr] opacity-100 border-t border-line/60" : "grid-rows-[0fr] opacity-0"
+                  )}
+                >
+                  <div className="overflow-hidden">
+                    <div className="px-3 pb-3 pt-1 flex flex-col gap-2 bg-surface-sunken/20">
+                      {renderVmCardContent(vm, true)}
+                    </div>
                   </div>
-                )}
+                </div>
               </Card>
             )
           })}
@@ -1161,7 +1323,11 @@ export default function VmManagerView({ go }: ViewProps) {
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-line pb-2">
               <span className="text-caption font-bold text-ink">
-                {editingVm ? "Edit Virtual Machine" : "Tambah Virtual Machine"}
+                {editingVm
+                  ? editingVm.provider === "instabox"
+                    ? t("vm_edit_instabox_title")
+                    : t("vm_edit_manual_title")
+                  : t("add_vm_btn")}
               </span>
               <button
                 type="button"
@@ -1175,33 +1341,35 @@ export default function VmManagerView({ go }: ViewProps) {
               </button>
             </div>
 
-            {/* Modal 2-Tab Selector */}
-            <div className="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-surface-sunken border border-line text-nano">
-              <button
-                type="button"
-                onClick={() => setAddVmTab("instabox")}
-                className={cx(
-                  "py-1 rounded font-semibold transition cursor-pointer text-center",
-                  addVmTab === "instabox"
-                    ? "bg-surface text-ink shadow-xs"
-                    : "text-ink-subtle hover:text-ink"
-                )}
-              >
-                InstaBox Cloud
-              </button>
-              <button
-                type="button"
-                onClick={() => setAddVmTab("manual")}
-                className={cx(
-                  "py-1 rounded font-semibold transition cursor-pointer text-center",
-                  addVmTab === "manual"
-                    ? "bg-surface text-ink shadow-xs"
-                    : "text-ink-subtle hover:text-ink"
-                )}
-              >
-                Manual SSH
-              </button>
-            </div>
+            {/* Modal 2-Tab Selector - Filtered: Only shown when adding new VM, hidden during edit */}
+            {!editingVm && (
+              <div className="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-surface-sunken border border-line text-nano">
+                <button
+                  type="button"
+                  onClick={() => setAddVmTab("instabox")}
+                  className={cx(
+                    "py-1 rounded font-semibold transition cursor-pointer text-center",
+                    addVmTab === "instabox"
+                      ? "bg-surface text-ink shadow-xs"
+                      : "text-ink-subtle hover:text-ink"
+                  )}
+                >
+                  InstaBox Cloud
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddVmTab("manual")}
+                  className={cx(
+                    "py-1 rounded font-semibold transition cursor-pointer text-center",
+                    addVmTab === "manual"
+                      ? "bg-surface text-ink shadow-xs"
+                      : "text-ink-subtle hover:text-ink"
+                  )}
+                >
+                  Manual SSH
+                </button>
+              </div>
+            )}
 
             {/* Modal Form */}
             <form onSubmit={handleSaveForm} className="flex flex-col gap-2 text-nano">
@@ -1380,7 +1548,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   type="submit"
                   className="flex-1 justify-center"
                 >
-                  {t("save_btn", "Simpan")}
+                  {editingVm ? t("vm_save_changes_btn") : t("save_btn")}
                 </Button>
               </div>
             </form>
@@ -1397,7 +1565,7 @@ export default function VmManagerView({ go }: ViewProps) {
             <div className="flex items-center justify-between border-b border-line pb-2">
               <div className="flex flex-col min-w-0">
                 <span className="text-caption font-bold text-ink">
-                  Jadwal Auto-Restart
+                  {t("vm_sched_modal_title")}
                 </span>
                 <span className="text-nano text-ink-subtle truncate">
                   {schedulingVm.name}
@@ -1422,13 +1590,13 @@ export default function VmManagerView({ go }: ViewProps) {
                   className="rounded border-line text-brand focus:ring-0"
                 />
                 <span className="font-semibold text-ink text-micro">
-                  Aktifkan Auto-Restart Terjadwal
+                  {t("vm_sched_enable")}
                 </span>
               </label>
 
-              {/* Mode Pilihan: Interval vs Jam Tertentu */}
+              {/* Mode Pilihan: Interval vs {t("vm_sched_clock")} */}
               <div className="flex flex-col gap-1">
-                <span className="text-ink-subtle font-semibold">Tipe Penjadwalan:</span>
+                <span className="text-ink-subtle font-semibold">{t("vm_sched_mode")}:</span>
                 <div className="grid grid-cols-2 gap-1 text-nano">
                   <button
                     type="button"
@@ -1440,7 +1608,7 @@ export default function VmManagerView({ go }: ViewProps) {
                         : "bg-surface-sunken border-line text-ink-subtle"
                     )}
                   >
-                    Setiap Interval
+                    {t("vm_sched_interval")}
                   </button>
                   <button
                     type="button"
@@ -1452,7 +1620,7 @@ export default function VmManagerView({ go }: ViewProps) {
                         : "bg-surface-sunken border-line text-ink-subtle"
                     )}
                   >
-                    Jam Tertentu
+                    {t("vm_sched_clock")}
                   </button>
                 </div>
               </div>
@@ -1461,7 +1629,7 @@ export default function VmManagerView({ go }: ViewProps) {
                 <div className="grid grid-cols-2 gap-1.5">
                   <div>
                     <label className="block text-ink-subtle font-semibold mb-0.5">
-                      Setiap:
+                      {t("vm_sched_interval_val")}:
                     </label>
                     <input
                       type="number"
@@ -1480,16 +1648,16 @@ export default function VmManagerView({ go }: ViewProps) {
                       onChange={(e) => setSchedIntervalUnit(e.target.value as any)}
                       className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand"
                     >
-                      <option value="hours">Jam</option>
-                      <option value="minutes">Menit</option>
-                      <option value="seconds">Detik</option>
+                      <option value="hours">{t("vm_sched_hours")}</option>
+                      <option value="minutes">{t("vm_sched_minutes")}</option>
+                      <option value="seconds">{language === "id" ? "Detik" : "Seconds"}</option>
                     </select>
                   </div>
                 </div>
               ) : (
                 <div>
                   <label className="block text-ink-subtle font-semibold mb-0.5">
-                    Waktu Restart (HH:MM):
+                    {language === "id" ? "Waktu Restart (HH:MM):" : "Restart Time (HH:MM):"}
                   </label>
                   <input
                     type="time"
@@ -1498,7 +1666,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono"
                   />
                   <span className="text-[10px] text-ink-faint block mt-0.5">
-                    Dijalankan otomatis setiap hari pada jam ini.
+                    {language === "id" ? "Dijalankan otomatis setiap hari pada jam ini." : "Runs automatically daily at this time."}
                   </span>
                 </div>
               )}
@@ -1507,7 +1675,7 @@ export default function VmManagerView({ go }: ViewProps) {
               {schedulingVm.provider === "instabox" && (
                 <div className="rounded-tile bg-surface-sunken/80 border border-line p-2 flex flex-col gap-1.5 mt-0.5">
                   <span className="font-semibold text-ink text-[10.5px]">
-                    Metode Restart InstaBox:
+                    {t("vm_sched_reset_mode")}:
                   </span>
                   <label className="flex items-start gap-1.5 cursor-pointer text-[10.5px] text-ink">
                     <input
@@ -1519,7 +1687,7 @@ export default function VmManagerView({ go }: ViewProps) {
                       className="mt-0.5 text-brand focus:ring-0"
                     />
                     <span>
-                      <strong>Reset Limit 8 Jam (Siklus Pause & Resume)</strong> — Menidurkan mesin 5 detik lalu bangun lagi agar timer 8 jam reset ke 0 tanpa terkena penalti cooldown 20 menit.
+                      <strong>{t("vm_sched_smart_reset")}</strong> — {language === "id" ? "Menidurkan mesin 2 detik lalu bangun lagi agar timer 8 jam reset ke 0 tanpa cooldown." : "Puts machine to sleep for 2s then wakes it to reset 8h timer without cooldown."}
                     </span>
                   </label>
                   <label className="flex items-start gap-1.5 cursor-pointer text-[10.5px] text-ink-subtle">
@@ -1531,7 +1699,7 @@ export default function VmManagerView({ go }: ViewProps) {
                       onChange={() => setSchedResetMode("cold_restart")}
                       className="mt-0.5 text-brand focus:ring-0"
                     />
-                    <span>Reboot Penuh Sistem (Stop lalu Start)</span>
+                    <span>{language === "id" ? "Reboot Penuh Sistem (Stop lalu Start)" : "Full System Reboot (Stop then Start)"}</span>
                   </label>
 
                   <Button
@@ -1541,7 +1709,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     onClick={() => handleImmediateResetCycle(schedulingVm)}
                     className="mt-1 justify-center text-nano text-info-ink"
                   >
-                    Reset Limit 8 Jam Sekarang
+                    {language === "id" ? "Reset Limit 8 Jam Sekarang" : "Reset 8h Limit Now"}
                   </Button>
                 </div>
               )}
@@ -1562,7 +1730,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   type="submit"
                   className="flex-1 justify-center"
                 >
-                  {t("save_btn", "Simpan Jadwal")}
+                  {t("vm_sched_save")}
                 </Button>
               </div>
             </form>

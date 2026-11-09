@@ -45,6 +45,7 @@ export interface VirtualMachine {
   publishedPorts?: VmPublishedPort[]
   telemetry?: VmTelemetry
   autoRestart?: VmAutoRestartSchedule
+  keepAliveEnabled?: boolean
   meshIp?: string
   specs?: {
     cpu?: string

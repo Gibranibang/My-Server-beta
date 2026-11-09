@@ -43,7 +43,7 @@ export function IconButton({
 /* Button                                                              */
 /* ------------------------------------------------------------------ */
 
-type ButtonVariant = "primary" | "danger" | "secondary" | "soft" | "info" | "ghost"
+type ButtonVariant = "primary" | "danger" | "secondary" | "soft" | "info" | "ghost" | "subtle"
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
@@ -55,6 +55,7 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   soft: "bg-surface-muted text-ink-soft hover:bg-line",
   info: "border border-info-line/70 bg-info-soft text-info-ink hover:border-info-line hover:bg-info-line/40",
   ghost: "text-ink-subtle hover:text-ink hover:bg-surface-muted/60 active:bg-surface-sunken",
+  subtle: "border border-line/70 bg-surface-sunken/60 text-ink hover:bg-surface-sunken hover:border-line transition-colors",
 }
 
 const BUTTON_SIZES = {
@@ -66,6 +67,7 @@ export function Button({
   variant = "secondary",
   size = "md",
   icon: Icon,
+  iconClassName,
   state = "idle",
   busyLabel,
   doneLabel,
@@ -77,13 +79,14 @@ export function Button({
   variant?: ButtonVariant
   size?: keyof typeof BUTTON_SIZES
   icon?: LucideIcon
+  iconClassName?: string
   state?: "idle" | "busy" | "done"
   busyLabel?: string
   doneLabel?: string
   block?: boolean
   children: ReactNode
 }) {
-  const iconClass = size === "md" ? "size-4" : "size-3.5"
+  const iconClass = iconClassName || (size === "md" ? "size-4" : "size-3.5")
   const StateIcon =
     state === "busy" ? LoaderCircle : state === "done" ? Check : Icon
   return (
@@ -102,12 +105,12 @@ export function Button({
     >
       {StateIcon && (
         <StateIcon
-          className={cx(iconClass, state === "busy" && "animate-spin")}
+          className={cx("shrink-0", iconClass, state === "busy" && "animate-spin")}
           strokeWidth={2.2}
           aria-hidden
         />
       )}
-      <span>
+      <span className="truncate">
         {state === "busy" && busyLabel
           ? busyLabel
           : state === "done" && doneLabel

@@ -286,7 +286,7 @@ class InstaBoxManager:
             cls.update_vm(vm_id, {"status": "sleeping", "lastActive": "Just now"})
             return {"status": "ok", "message": "VM simulasi berhasil di-pause.", "simulated": True}
 
-        res = cls._api_request(f"machines/{machine_id}/pause", method="POST", body={}, api_key=api_key)
+        res = cls._api_request(f"machines/{machine_id}/suspend", method="POST", body={}, api_key=api_key)
         if "error" in res:
             return res
 

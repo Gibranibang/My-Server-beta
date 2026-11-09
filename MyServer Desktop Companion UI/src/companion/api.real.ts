@@ -997,6 +997,46 @@ export function createRealApi(): CompanionApi {
       return { success: false, error: 'Core service unreachable' }
     },
 
+    async wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'instabox/wake', payload: params })
+        } catch (err) {
+          console.warn('[RealApi] wakeInstaBoxVm invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['instabox/wake']) {
+          return await api['instabox/wake'](params)
+        }
+      } catch (err) {
+        console.warn('[RealApi] wakeInstaBoxVm error:', err)
+      }
+      return { success: false, error: 'Core service unreachable' }
+    },
+
+    async pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'instabox/pause', payload: params })
+        } catch (err) {
+          console.warn('[RealApi] pauseInstaBoxVm invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['instabox/pause']) {
+          return await api['instabox/pause'](params)
+        }
+      } catch (err) {
+        console.warn('[RealApi] pauseInstaBoxVm error:', err)
+      }
+      return { success: false, error: 'Core service unreachable' }
+    },
+
     async openFileExplorer() {
       try {
         const api = await getPyApi()

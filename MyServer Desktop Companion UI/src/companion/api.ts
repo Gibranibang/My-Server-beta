@@ -130,6 +130,10 @@ export interface CompanionApi {
 
   smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
 
+  wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
+
+  pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
+
   openFileManager(): Promise<void>
 
   openFileExplorer(): Promise<void>
@@ -749,6 +753,14 @@ export function createMockApi(): CompanionApi {
 
     async smartResetInstaBox() {
       return { success: true, message: "Limit 8 jam berhasil direset." }
+    },
+
+    async wakeInstaBoxVm() {
+      return { status: "ok", message: "VM berhasil dibangunkan (mock)." }
+    },
+
+    async pauseInstaBoxVm() {
+      return { status: "ok", message: "VM berhasil di-pause (mock)." }
     },
 
     async openFileManager() {},

@@ -71,6 +71,7 @@ import argparse
 
 
 import ipaddress
+import datetime
 
 
 
@@ -392,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.4.4"
+APP_VERSION_NUMBER = "4.4.6"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -27983,7 +27984,6 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 else:
                     # Hentikan daemon EasyTier terlebih dahulu agar Packet.dll & wintun.dll tidak terkunci saat installer menimpa berkas
                     try:
-                        import easytier_manager
                         easytier_manager.get_easytier_manager().stop()
                     except Exception as _et_err:
                         logger_manager.log_error(f"[Updater] Gagal menghentikan EasyTier sebelum installer: {_et_err}")
@@ -28057,21 +28057,81 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/instabox/wake":
-            vm_id = body.get("id")
+            vm_id = body.get("id") or body.get("vmId")
+            api_key = (body.get("apiKey") or "").strip()
+            machine_id = (body.get("machineId") or "").strip()
+            if not machine_id and instabox_manager and vm_id:
+                vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
+                if vm_rec:
+                    machine_id = vm_rec.get("machineId", "")
+                    api_key = api_key or vm_rec.get("apiKey", "")
+
+            if machine_id and api_key:
+                req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/resume"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Idempotency-Key": str(uuid.uuid4())
+                }
+                try:
+                    req = urllib.request.Request(req_url, data=b"{}", headers=headers, method="POST")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        resp_data = json.loads(resp.read().decode("utf-8") or "{}")
+                    if instabox_manager and vm_id:
+                        instabox_manager.InstaBoxManager.update_vm(vm_id, {"status": "running", "lastActive": "Just now"})
+                    self._send_json({"status": "ok", "message": "VM berhasil dibangunkan.", "result": resp_data})
+                except urllib.error.HTTPError as he:
+                    err_txt = he.read().decode("utf-8") if hasattr(he, "read") else ""
+                    self._send_json({"status": "error", "message": f"HTTP {he.code}: {err_txt}", "code": he.code}, status=he.code)
+                except Exception as ex:
+                    self._send_json({"status": "error", "message": str(ex)}, status=500)
+                return
+
             if instabox_manager and vm_id:
                 res = instabox_manager.InstaBoxManager.resume_vm(vm_id)
                 self._send_json(res)
             else:
-                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+                self._send_json({"status": "error", "message": "Kredensial Machine ID / API Key InstaBox belum lengkap."}, status=400)
             return
 
         if path == "/api/instabox/pause":
-            vm_id = body.get("id")
+            vm_id = body.get("id") or body.get("vmId")
+            api_key = (body.get("apiKey") or "").strip()
+            machine_id = (body.get("machineId") or "").strip()
+            if not machine_id and instabox_manager and vm_id:
+                vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
+                if vm_rec:
+                    machine_id = vm_rec.get("machineId", "")
+                    api_key = api_key or vm_rec.get("apiKey", "")
+
+            if machine_id and api_key:
+                req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/suspend"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Idempotency-Key": str(uuid.uuid4())
+                }
+                try:
+                    req = urllib.request.Request(req_url, data=b"{}", headers=headers, method="POST")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        resp_data = json.loads(resp.read().decode("utf-8") or "{}")
+                    if instabox_manager and vm_id:
+                        instabox_manager.InstaBoxManager.update_vm(vm_id, {"status": "sleeping", "lastActive": "Just now"})
+                    self._send_json({"status": "ok", "message": "VM berhasil di-pause (tidur).", "result": resp_data})
+                except urllib.error.HTTPError as he:
+                    err_txt = he.read().decode("utf-8") if hasattr(he, "read") else ""
+                    self._send_json({"status": "error", "message": f"HTTP {he.code}: {err_txt}", "code": he.code}, status=he.code)
+                except Exception as ex:
+                    self._send_json({"status": "error", "message": str(ex)}, status=500)
+                return
+
             if instabox_manager and vm_id:
                 res = instabox_manager.InstaBoxManager.pause_vm(vm_id)
                 self._send_json(res)
             else:
-                self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
+                self._send_json({"status": "error", "message": "Kredensial Machine ID / API Key InstaBox belum lengkap."}, status=400)
             return
 
         if path == "/api/instabox/preflight_launch":
@@ -28095,14 +28155,13 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     api_key = api_key or vm_rec.get("apiKey", "")
 
             if machine_id and api_key:
-                import uuid
                 headers = {
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                     "Idempotency-Key": str(uuid.uuid4())
                 }
                 try:
-                    p_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{machine_id}/pause", data=b"{}", headers=headers, method="POST")
+                    p_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{machine_id}/suspend", data=b"{}", headers=headers, method="POST")
                     urllib.request.urlopen(p_req, timeout=10)
                     time.sleep(5)
                     r_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{machine_id}/resume", data=b"{}", headers=headers, method="POST")
@@ -28169,7 +28228,6 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     runtime_mins = 0
                     if run_started_at and state == "running":
                         try:
-                            import datetime
                             clean_iso = run_started_at.replace("Z", "+00:00")
                             dt = datetime.datetime.fromisoformat(clean_iso)
                             now = datetime.datetime.now(datetime.timezone.utc)

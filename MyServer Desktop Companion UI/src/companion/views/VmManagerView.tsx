@@ -831,7 +831,7 @@ export default function VmManagerView({ go }: ViewProps) {
     const host = vm.sshHost || vm.ip || "localhost"
     const port = vm.sshPort || 22
     const sftpUri = `sftp://${user}${host}:${port}`
-    copyToClipboard(sftpUri, "Tautan SFTP", vm.id)
+    copyToClipboard(sftpUri, language === "id" ? "Tautan SFTP" : "SFTP Link", vm.id)
   }
 
   // Open Auto-Restart Schedule modal
@@ -1242,7 +1242,7 @@ export default function VmManagerView({ go }: ViewProps) {
           <button
             type="button"
             disabled={!isOnline}
-            onClick={() => copyToClipboard(getSshCommand(vm), "Perintah SSH", vm.id)}
+            onClick={() => copyToClipboard(getSshCommand(vm), language === "id" ? "Perintah SSH" : "SSH Command", vm.id)}
             className={cx(
               "w-full h-9 rounded-tile flex items-center justify-center gap-2 font-bold text-caption shadow-sm transition cursor-pointer select-none",
               !isOnline
@@ -1253,7 +1253,7 @@ export default function VmManagerView({ go }: ViewProps) {
             {copiedId === vm.id ? (
               <>
                 <Check className="size-4" />
-                <span>Perintah Disalin!</span>
+                <span>{language === "id" ? "Perintah Disalin!" : "Command Copied!"}</span>
               </>
             ) : (
               <>
@@ -1354,13 +1354,13 @@ export default function VmManagerView({ go }: ViewProps) {
                 size="sm"
                 variant={vm.keepAliveEnabled ? "info" : "subtle"}
                 icon={Zap}
-                iconClassName={cx("size-3.5 shrink-0", vm.keepAliveEnabled ? "text-amber-500" : "text-ink")}
+                iconClassName={cx("size-3.5 shrink-0", vm.keepAliveEnabled ? "text-warning-ink" : "text-ink")}
                 disabled={!isOnline}
                 onClick={() => handleToggleKeepAlive(vm)}
                 className={cx(
                   "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
                   vm.keepAliveEnabled
-                    ? "border-amber-500/60 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
+                    ? "border-warning-line bg-warning-soft text-warning-ink hover:border-warning-line/90"
                     : "text-ink"
                 )}
               >
@@ -1636,7 +1636,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   className={cx(
                     "py-1 rounded font-semibold transition cursor-pointer text-center",
                     addVmTab === "instabox"
-                      ? "bg-surface text-ink shadow-xs"
+                      ? "bg-brand text-brand-ink font-semibold shadow-xs"
                       : "text-ink-subtle hover:text-ink"
                   )}
                 >
@@ -1648,7 +1648,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   className={cx(
                     "py-1 rounded font-semibold transition cursor-pointer text-center",
                     addVmTab === "manual"
-                      ? "bg-surface text-ink shadow-xs"
+                      ? "bg-brand text-brand-ink font-semibold shadow-xs"
                       : "text-ink-subtle hover:text-ink"
                   )}
                 >
@@ -1673,13 +1673,15 @@ export default function VmManagerView({ go }: ViewProps) {
                       className="w-full rounded-md border border-line bg-surface-sunken px-2 py-1 text-caption text-ink focus:outline-none focus:border-brand font-mono text-[10.5px]"
                     />
                     <span className="text-[10px] text-ink-faint block mt-0.5">
-                      Dapatkan dari menu Settings di web InstaBox untuk auto-connect.
+                      {language === "id"
+                        ? "Dapatkan dari menu Settings di web InstaBox untuk auto-connect."
+                        : "Obtain from InstaBox web Settings for automatic connection."}
                     </span>
                   </div>
 
                   <div>
                     <label className="block font-semibold text-ink-subtle mb-0.5">
-                      Nama Virtual Machine (Opsional)
+                      {language === "id" ? "Nama Virtual Machine (Opsional)" : "Virtual Machine Name (Optional)"}
                     </label>
                     <input
                       type="text"
@@ -1692,7 +1694,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
                   <div>
                     <label className="block font-semibold text-ink-subtle mb-0.5">
-                      Token SSH Sementara (Opsional jika ada)
+                      {language === "id" ? "Token SSH Sementara (Opsional)" : "Temporary SSH Token (Optional)"}
                     </label>
                     <input
                       type="text"
@@ -1705,7 +1707,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
                   <div>
                     <label className="block font-semibold text-ink-subtle mb-0.5">
-                      URL Layar Virtual / Web Console (Opsional)
+                      {language === "id" ? "URL Layar Virtual / Web Console (Opsional)" : "Virtual Screen / Web Console URL (Optional)"}
                     </label>
                     <input
                       type="url"
@@ -1720,7 +1722,7 @@ export default function VmManagerView({ go }: ViewProps) {
                 <>
                   <div>
                     <label className="block font-semibold text-ink-subtle mb-0.5">
-                      Nama Virtual Machine
+                      {language === "id" ? "Nama Virtual Machine" : "Virtual Machine Name"}
                     </label>
                     <input
                       type="text"
@@ -1749,7 +1751,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   <div className="grid grid-cols-2 gap-1.5">
                     <div>
                       <label className="block font-semibold text-ink-subtle mb-0.5">
-                        Port SSH
+                        {language === "id" ? "Port SSH" : "SSH Port"}
                       </label>
                       <input
                         type="number"
@@ -1762,7 +1764,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     </div>
                     <div>
                       <label className="block font-semibold text-ink-subtle mb-0.5">
-                        Masa Berlaku
+                        {language === "id" ? "Masa Berlaku" : "Token Expiry"}
                       </label>
                       <input
                         type="text"
@@ -1776,7 +1778,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
                   <div>
                     <label className="block font-semibold text-ink-subtle mb-0.5">
-                      User SSH
+                      {language === "id" ? "User SSH" : "SSH User"}
                     </label>
                     <input
                       type="text"
@@ -1789,7 +1791,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
                   <div>
                     <label className="block font-semibold text-ink-subtle mb-0.5">
-                      Port Web Layanan (Opsional)
+                      {language === "id" ? "Port Web Layanan (Opsional)" : "Web Service Port (Optional)"}
                     </label>
                     <input
                       type="number"
@@ -1802,7 +1804,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
                   <div>
                     <label className="block font-semibold text-ink-subtle mb-0.5">
-                      URL Layar Virtual (Opsional)
+                      {language === "id" ? "URL Layar Virtual (Opsional)" : "Virtual Screen URL (Optional)"}
                     </label>
                     <input
                       type="url"
@@ -1847,7 +1849,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   size="sm"
                   variant="primary"
                   type="submit"
-                  className="flex-1 justify-center"
+                  className="flex-1 justify-center !bg-brand !from-brand !to-brand text-brand-ink shadow-sm hover:opacity-90"
                 >
                   {editingVm ? t("vm_save_changes_btn") : t("save_btn")}
                 </Button>
@@ -1888,7 +1890,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   type="checkbox"
                   checked={schedEnabled}
                   onChange={(e) => setSchedEnabled(e.target.checked)}
-                  className="rounded border-line text-brand focus:ring-0"
+                  className="rounded border-line text-brand accent-[#65a30d] focus:ring-0"
                 />
                 <span className="font-semibold text-ink text-micro">
                   {t("vm_sched_enable")}
@@ -1903,10 +1905,10 @@ export default function VmManagerView({ go }: ViewProps) {
                     type="button"
                     onClick={() => setSchedMode("interval")}
                     className={cx(
-                      "py-1 px-1.5 rounded border text-center transition cursor-pointer",
+                      "py-1 px-1.5 rounded border text-center transition cursor-pointer truncate",
                       schedMode === "interval"
-                        ? "bg-brand/10 border-brand/50 text-brand-ink font-semibold"
-                        : "bg-surface-sunken border-line text-ink-subtle"
+                        ? "bg-brand text-brand-ink border-brand font-semibold shadow-xs"
+                        : "bg-surface-sunken border-line text-ink-subtle hover:text-ink"
                     )}
                   >
                     {t("vm_sched_interval")}
@@ -1915,10 +1917,10 @@ export default function VmManagerView({ go }: ViewProps) {
                     type="button"
                     onClick={() => setSchedMode("clock")}
                     className={cx(
-                      "py-1 px-1.5 rounded border text-center transition cursor-pointer",
+                      "py-1 px-1.5 rounded border text-center transition cursor-pointer truncate",
                       schedMode === "clock"
-                        ? "bg-brand/10 border-brand/50 text-brand-ink font-semibold"
-                        : "bg-surface-sunken border-line text-ink-subtle"
+                        ? "bg-brand text-brand-ink border-brand font-semibold shadow-xs"
+                        : "bg-surface-sunken border-line text-ink-subtle hover:text-ink"
                     )}
                   >
                     {t("vm_sched_clock")}
@@ -1942,7 +1944,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   </div>
                   <div>
                     <label className="block text-ink-subtle font-semibold mb-0.5">
-                      Satuan:
+                      {language === "id" ? "Satuan:" : "Unit:"}
                     </label>
                     <select
                       value={schedIntervalUnit}
@@ -1985,7 +1987,7 @@ export default function VmManagerView({ go }: ViewProps) {
                       value="pause_resume"
                       checked={schedResetMode === "pause_resume"}
                       onChange={() => setSchedResetMode("pause_resume")}
-                      className="mt-0.5 text-brand focus:ring-0"
+                      className="mt-0.5 text-brand accent-[#65a30d] focus:ring-0"
                     />
                     <span>
                       <strong>{t("vm_sched_smart_reset")}</strong> — {language === "id" ? "Menidurkan mesin 2 detik lalu bangun lagi agar timer 8 jam reset ke 0 tanpa cooldown." : "Puts machine to sleep for 2s then wakes it to reset 8h timer without cooldown."}
@@ -1998,7 +2000,7 @@ export default function VmManagerView({ go }: ViewProps) {
                       value="cold_restart"
                       checked={schedResetMode === "cold_restart"}
                       onChange={() => setSchedResetMode("cold_restart")}
-                      className="mt-0.5 text-brand focus:ring-0"
+                      className="mt-0.5 text-brand accent-[#65a30d] focus:ring-0"
                     />
                     <span>{language === "id" ? "Reboot Penuh Sistem (Stop lalu Start)" : "Full System Reboot (Stop then Start)"}</span>
                   </label>
@@ -2029,7 +2031,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   size="sm"
                   variant="primary"
                   type="submit"
-                  className="flex-1 justify-center"
+                  className="flex-1 justify-center !bg-brand !from-brand !to-brand text-brand-ink shadow-sm hover:opacity-90"
                 >
                   {t("vm_sched_save")}
                 </Button>
@@ -2070,7 +2072,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   type="checkbox"
                   checked={autoOnEnabled}
                   onChange={(e) => setAutoOnEnabled(e.target.checked)}
-                  className="rounded border-line text-brand focus:ring-0"
+                  className="rounded border-line text-brand accent-[#65a30d] focus:ring-0"
                 />
                 <span className="font-semibold text-ink text-micro">
                   {t("vm_autoon_enable", "Aktifkan Jadwal Auto-On")}
@@ -2087,11 +2089,11 @@ export default function VmManagerView({ go }: ViewProps) {
                     className={cx(
                       "py-1 px-1.5 rounded border text-center transition cursor-pointer truncate",
                       autoOnMode === "clock"
-                        ? "bg-info-soft border-info-line text-info-ink font-semibold"
-                        : "bg-surface-sunken border-line text-ink-subtle"
+                        ? "bg-brand text-brand-ink border-brand font-semibold shadow-xs"
+                        : "bg-surface-sunken border-line text-ink-subtle hover:text-ink"
                     )}
                   >
-                    {t("vm_autoon_mode_clock", "Jam Tertentu (HH:MM)")}
+                    {t("vm_autoon_mode_clock", "Jam Tertentu")}
                   </button>
                   <button
                     type="button"
@@ -2099,8 +2101,8 @@ export default function VmManagerView({ go }: ViewProps) {
                     className={cx(
                       "py-1 px-1.5 rounded border text-center transition cursor-pointer truncate",
                       autoOnMode === "after_off"
-                        ? "bg-info-soft border-info-line text-info-ink font-semibold"
-                        : "bg-surface-sunken border-line text-ink-subtle"
+                        ? "bg-brand text-brand-ink border-brand font-semibold shadow-xs"
+                        : "bg-surface-sunken border-line text-ink-subtle hover:text-ink"
                     )}
                   >
                     {t("vm_autoon_mode_delay", "Jeda Setelah Mati")}
@@ -2199,7 +2201,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   size="sm"
                   variant="primary"
                   type="submit"
-                  className="flex-1 justify-center"
+                  className="flex-1 justify-center !bg-brand !from-brand !to-brand text-brand-ink shadow-sm hover:opacity-90"
                 >
                   {t("vm_sched_save", "Simpan Jadwal")}
                 </Button>
@@ -2274,7 +2276,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   type="checkbox"
                   checked={rememberScreenTarget}
                   onChange={(e) => setRememberScreenTarget(e.target.checked)}
-                  className="rounded border-line text-brand focus:ring-0"
+                  className="rounded border-line text-brand accent-[#65a30d] focus:ring-0"
                 />
                 <span>{t("vm_screen_remember_choice", "Ingat pilihan ini untuk VM ini")}</span>
               </label>

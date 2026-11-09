@@ -669,19 +669,19 @@ export function createMockApi(): CompanionApi {
 
     async getLogDirectory() {
 
-      return { logDirectory: "C:\\Users\\gibra\\.myserver\\logs", defaultDirectory: "C:\\Users\\gibra\\.myserver\\logs", isCustom: false }
+      return { logDirectory: "C:\\MyServer\\logs", defaultDirectory: "C:\\MyServer\\logs", isCustom: false }
 
     },
 
     async chooseLogFolder() {
 
-      return { success: true, logDirectory: "D:\\Logs", defaultDirectory: "C:\\Users\\gibra\\.myserver\\logs", isCustom: true }
+      return { success: true, logDirectory: "D:\\Logs", defaultDirectory: "C:\\MyServer\\logs", isCustom: true }
 
     },
 
     async resetLogDirectory() {
 
-      return { success: true, logDirectory: "C:\\Users\\gibra\\.myserver\\logs", defaultDirectory: "C:\\Users\\gibra\\.myserver\\logs", isCustom: false }
+      return { success: true, logDirectory: "C:\\MyServer\\logs", defaultDirectory: "C:\\MyServer\\logs", isCustom: false }
 
     },
 
@@ -813,15 +813,15 @@ export function createMockApi(): CompanionApi {
 
       return {
 
-        serverId: "stimi",
+        serverId: "srv_primary",
 
-        serverName: "STIMI-Server",
+        serverName: "Primary-Server",
 
         servers: [
 
-          { id: "algitha", name: "Algitha-Server" },
+          { id: "srv_primary", name: "Primary-Server" },
 
-          { id: "stimi", name: "STIMI-Server" },
+          { id: "srv_secondary", name: "Secondary-Server" },
 
         ],
 
@@ -829,7 +829,7 @@ export function createMockApi(): CompanionApi {
 
         routes: [
 
-          { id: "conn_lan", name: "Local / Primary", url: "http://stimiserver.algitha.my.id", active: true, pingMs: 287 },
+          { id: "conn_lan", name: "Local / Primary", url: "http://zimaos.local", active: true, pingMs: 287 },
 
           { id: "conn_ip", name: "IP Local", url: "http://192.168.1.6", active: false, pingMs: 2 },
 
@@ -841,17 +841,17 @@ export function createMockApi(): CompanionApi {
           running: true,
           networkStatus: "OK",
           networkName: "IceWhale-RemoteAccess",
-          configuredNwid: "2be7ac7a591b7bc8",
-          nodeId: "e642c82437",
-          virtualIp: "172.24.236.144",
+          configuredNwid: "0000000000000000",
+          nodeId: "0000000000",
+          virtualIp: "172.24.0.10",
           serverVirtualIp: "172.24.0.1",
           joined: true,
         },
         easyTier: {
           running: true,
           available: true,
-          remote_id: "2be7ac7a591b7bc8",
-          network_name: "zima-2be7ac7a591b7bc8",
+          remote_id: "0000000000000000",
+          network_name: "zima-0000000000000000",
           virtual_ipv4: null,
           virtual_ip: null,
           uptime: 120,
@@ -1097,7 +1097,7 @@ export function createMockApi(): CompanionApi {
           id: "task-capcut-project-102",
           label: "CapCut Project",
           localPath: "D:/Capcut Project",
-          serverPath: "/disk_gibran1/Disk D/CapCut Project",
+          serverPath: "/DATA/Projects/Media",
           type: "sendreceive",
           paused: false,
           completion: 100,

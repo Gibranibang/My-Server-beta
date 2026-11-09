@@ -42,7 +42,7 @@ VERSION = "4.4.7"
 
 APP_NAME = "My-Server by algitha BETA"
 
-ISCC_PATH = r"C:\Users\gibra\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
+ISCC_PATH = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe")
 
 
 

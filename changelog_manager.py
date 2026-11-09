@@ -133,19 +133,19 @@ CHANGELOG_HISTORY = [
         "date": "2026-10-30",
         "title": "Smart Multi-Server Backup Target Selector, Zero-Bias BEP Protocol Verification & Smart Identity Inheritance Architecture",
         "notes": [
-            "Smart Multi-Server Backup Target Selector: Pengguna kini dapat memilih server target (Algitha-Server / STIMI-Server) secara langsung di modal Tambah Jalur Backup Baru tanpa perlu beralih server global atau mengganggu koneksi SMB aktif.",
+            "Smart Multi-Server Backup Target Selector: Pengguna kini dapat memilih server target (Primary-Server / Secondary-Server) secara langsung di modal Tambah Jalur Backup Baru tanpa perlu beralih server global atau mengganggu koneksi SMB aktif.",
             "Independent Task Routing: Pembuatan task backup langsung memetakan kredensial, Device ID, dan rute efektif server tujuan terpilih secara terisolasi.",
             "Smart Identity Inheritance Architecture: MyServer secara cerdas mewarisi dan mengamankan sertifikat digital (cert.pem & key.pem) dari instalasi lama ke direktori internal MyServer, menjamin 0% re-pairing dan mencegah laptop dibaca sebagai device baru.",
             "Zero-Bias Native Protocol Verification: Terbukti secara empiris melalui pengujian koneksi TLSv1.3 langsung bahwa kode Python MyServer dapat berkomunikasi dengan Syncthing di sisi server (BEP Magic 0x2EA7D90B & Protobuf Hello) saat Syncthing laptop dimatikan.",
-            "Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (🎯 Algitha-Server / 🎯 STIMI-Server) dengan visual penanda server aktif.",
+            "Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (🎯 Primary-Server / 🎯 Secondary-Server) dengan visual penanda server aktif.",
             "Single-Command Multi-File Version Synchronizer: Utilitas terpusat sync_version.py untuk sinkronisasi versi atomik lintas seluruh ekosistem berkas MyServer."
         ],
         "features": [
-            "Smart Multi-Server Backup Target Selector: Pengguna kini dapat memilih server target (Algitha-Server / STIMI-Server) secara langsung di modal Tambah Jalur Backup Baru tanpa perlu beralih server global atau mengganggu koneksi SMB aktif.",
+            "Smart Multi-Server Backup Target Selector: Pengguna kini dapat memilih server target (Primary-Server / Secondary-Server) secara langsung di modal Tambah Jalur Backup Baru tanpa perlu beralih server global atau mengganggu koneksi SMB aktif.",
             "Independent Task Routing: Pembuatan task backup langsung memetakan kredensial, Device ID, dan rute efektif server tujuan terpilih secara terisolasi.",
             "Smart Identity Inheritance Architecture: MyServer secara cerdas mewarisi dan mengamankan sertifikat digital (cert.pem & key.pem) dari instalasi lama ke direktori internal MyServer, menjamin 0% re-pairing dan mencegah laptop dibaca sebagai device baru.",
             "Zero-Bias Native Protocol Verification: Terbukti secara empiris melalui pengujian koneksi TLSv1.3 langsung bahwa kode Python MyServer dapat berkomunikasi dengan Syncthing di sisi server (BEP Magic 0x2EA7D90B & Protobuf Hello) saat Syncthing laptop dimatikan.",
-            "Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (🎯 Algitha-Server / 🎯 STIMI-Server) dengan visual penanda server aktif.",
+            "Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (🎯 Primary-Server / 🎯 Secondary-Server) dengan visual penanda server aktif.",
             "Single-Command Multi-File Version Synchronizer: Utilitas terpusat sync_version.py untuk sinkronisasi versi atomik lintas seluruh ekosistem berkas MyServer."
         ]
     },
@@ -338,7 +338,7 @@ CHANGELOG_HISTORY = [
         "date": "2026-10-24 22:35",
         "notes": [
             "Pemulihan Pipeline Atomik Storage SMB (rebind_storage_pipeline): Unmount bersih seluruh drive remote lama dan pembersihan sesi kredensial Windows (NET USE /DELETE & WNetCancelConnection2W) otomatis saat pergantian akun aktif, mencegah tumpukan drive letter dan error 1219.",
-            "Koreksi Deteksi Share REST API ZimaOS: Memperbaiki penanganan respons list array pada endpoint /v2_1/files/share dan verifikasi hak akses case-insensitive multi-field untuk akun Admin (algitha) dan user biasa (gibran).",
+            "Koreksi Deteksi Share REST API ZimaOS: Memperbaiki penanganan respons list array pada endpoint /v2_1/files/share dan verifikasi hak akses case-insensitive multi-field untuk akun Admin (algitha) dan user standar.",
             "Pemulihan Live Telemetri Monitoring: Mengintegrasikan ZimaMetricsClient.fetch_metrics() secara real-time pada background thread daemon, memulihkan indikator CPU, RAM, dan HDD yang sebelumnya tertahan di 0%.",
             "Peluncur Jendela Web App Mandiri (Tauri WebviewWindow): Mengimplementasikan pembuka jendela native 1150x750 untuk aplikasi web ZimaOS dan dashboard dengan akselerasi perangkat keras.",
             "Peluncur Browser Eksternal Andal: Mengaktifkan aksi 'Browser Luar' via Windows native ShellExecute (os.startfile / start) untuk peramban default sistem."
@@ -397,7 +397,7 @@ CHANGELOG_HISTORY = [
         "notes": [
             "Refactoring Arsitektur Mini Tray Popover Sesuai Standar Industri Zima Client: Mengadopsi mekanisme native focus loss (WinForms Deactivate / Electron Blur), mengeliminasi total pemantau klik mouse agresif (GetAsyncKeyState) yang sebelumnya memicu penutupan prematur secara keliru.",
             "Kalibrasi Posisi Berlabuh Presisi (.NET Screen.PrimaryScreen.WorkingArea): Memastikan jendela Mini Tray selalu berlabuh sempurna di pojok kanan bawah tepat di atas taskbar Windows pada layar 1080p dengan skala DPI 150% tanpa terpotong atau terlempar ke luar batas layar.",
-            "Koreksi Parsing Partisi SMB UNC: Memperbaiki ekstraksi nama partisi share dari jalur UNC jaringan Windows sehingga nama share (seperti Disk_Gibran) tampil presisi pada tombol akses cepat.",
+            "Koreksi Parsing Partisi SMB UNC: Memperbaiki ekstraksi nama partisi share dari jalur UNC jaringan Windows sehingga nama share (seperti Shared_Disk) tampil presisi pada tombol akses cepat.",
             "Stabilitas Interaksi Pengguna: Menjamin antarmuka Mini Tray tetap tenang dan stabil di layar hingga pengguna secara sadar menutup via tombol X, toggle ikon tray, mengklik opsi aksi, atau beralih fokus ke aplikasi lain.",
         ],
     },
@@ -410,7 +410,7 @@ CHANGELOG_HISTORY = [
             "Kalkulasi Posisi Presisi Native Win32 (SPI_GETWORKAREA): Menjamin jendela Mini Tray selalu berlabuh sempurna di pojok kanan bawah tepat di atas taskbar Windows di semua resolusi layar (1080p, 1440p, 4K) dan skala DPI (100%, 125%, 150%).",
             "Mekanisme Auto-Dismiss Cerdas: Jendela Mini Tray otomatis tertutup secara halus saat pengguna mengklik area luar (desktop atau aplikasi lain).",
             "Monitoring Kecepatan Jaringan Real-Time (Pure Win32 iphlpapi): Menampilkan indikator kecepatan unduh/unggah langsung (kB/s) dan rute aktif secara dinamis tanpa library pihak ketiga.",
-            "Pintasan Cepat Akses Partisi SMB Utama: Menampilkan nama partisi aktif (misal 'Open Disk_Gibran' pada Drive Z:) yang langsung membuka Windows Explorer dengan 1-klik.",
+            "Pintasan Cepat Akses Partisi SMB Utama: Menampilkan nama partisi aktif (misal 'Open Shared_Disk' pada Drive Z:) yang langsung membuka Windows Explorer dengan 1-klik.",
             "Integrasi Telemetri Perangkat Keras Live: Menampilkan utilisasi CPU, RAM, Disk Storage, dan latensi jaringan real-time dari mesin telemetri ZimaOS.",
             "Dual-Interaction System Tray: Klik kiri menampilkan Mini Tray Flyout modern; klik kanan tetap mempertahankan menu kontekstual baki sistem.",
         ],
@@ -566,7 +566,7 @@ CHANGELOG_HISTORY = [
         "channel": "Alpha",
         "date": "2026-09-24 10:00",
         "notes": [
-            "Manajemen Kredensial Multi-Server Dinamis & Mandiri: Sistem kredensial kini sepenuhnya terisolasi per-server dan per-profil dengan get_server_credentials & save_server_credentials yang toleran (case-insensitive & fallback), menyelesaikan kegagalan login saat berpindah ke Server Kantor (STIMI-Server).",
+            "Manajemen Kredensial Multi-Server Dinamis & Mandiri: Sistem kredensial kini sepenuhnya terisolasi per-server dan per-profil dengan get_server_credentials & save_server_credentials yang toleran (case-insensitive & fallback), menyelesaikan kegagalan login saat berpindah ke Secondary-Server.",
             "Peningkatan Timeout Autentikasi ZimaOS (12.0s): Memperpanjang batas waktu verifikasi kredensial dan kalkulasi JWT token ECDSA ES256 ZimaOS dari 5.0s menjadi 12.0s, mengeliminasi false positive 'Login Failed' pada server dengan latensi enkripsi ~6.2s.",
             "Failover Rute Otomatis pada Autentikasi Metrik & Status: Autentikasi ZimaOS kini secara cerdas menguji base_url dan seluruh daftar jalur server_connections (LAN IP maupun Domain WAN) sampai menemukan rute yang dapat dihubungi.",
             "Dekopling Validasi Kredensial dari URL Webview Aktif: Dialog konfigurasi kredensial kini mengarahkan validasi secara spesifik ke server target, mencegah validasi kredensial server kantor terlempar ke URL server utama.",

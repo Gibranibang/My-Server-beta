@@ -785,7 +785,7 @@ def check_server_ping(url, timeout=1.5):
 
 
 _VIRTUAL_ADAPTER_PREFIXES = {
-    "172.24.", "172.25.",   # ZeroTier Network subnets (STIMI & Algitha standard presets)
+    "172.24.", "172.25.",   # ZeroTier Network subnets (ZeroTier standard presets)
     "172.20.", "172.21.", "172.22.", "172.23.",
     "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.", # ZeroTier standard subnets
     "10.147.", "10.244.",  # ZeroTier Class A pools

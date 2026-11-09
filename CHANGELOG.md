@@ -1,5 +1,30 @@
 # Changelog MyServer Desktop
 
+## [v4.4.6 - Beta] - 2026-11-09
+
+- Fitur Khusus "Tetap Nyala" (Always-On) Khusus InstaBox Cloud:
+  - Mengirimkan anti-sleep heartbeat berkala tiap 15 menit ke API InstaBox agar mesin tidak tertidur otomatis karena idle.
+  - Keterkaitan cerdas dengan Auto-Restart: mengeksekusi siklus Smart Reset (pause 2 detik lalu bangunkan kembali) sebelum continuous runtime mencapai 8 jam, mencegah mesin terkena penalti cooldown 20 menit dari cloud.
+  - Proteksi penuh logika VM Umum: Auto-Restart untuk VM Manual SSH tetap murni memanggil handleTogglePower tanpa intervensi.
+- Tombol Edit VM Per-Provider & Filter Modal Otomatis:
+  - Menambahkan tombol Edit (ikon pensil) di baris header setiap kartu VM.
+  - Modal form edit otomatis terkunci sesuai provider VM (tab switcher disembunyikan): form InstaBox untuk VM InstaBox, dan form Manual SSH untuk VM Manual SSH.
+- Sinkronisasi Status Riil Cloud:
+  - Memperbaiki normalisasi status API sehingga saat mesin tertidur otomatis dari pusat cloud, pill status di MyServer langsung beralih ke "Sleep" / "Tidur" (kuning/amber), bukan tertahan di "Active".
+- Perbaikan UI/UX, Animasi Accordion & Nol Emoji:
+  - Seluruh kartu informasi VM berstatus tertutup rapi (collapsed/minimized) secara default saat halaman dimuat.
+  - Animasi buka-tutup kartu menggunakan CSS Grid transition halus dan rotasi chevron 180 derajat.
+  - Standardisasi seluruh ikon tombol aksi ke ukuran 16x16px (`size-4 shrink-0`) sehingga tidak lagi tertekan/menciut oleh flexbox.
+  - Penyelarasan bahasa simetris (ID/ENG) pada kamus i18n dan pembersihan total teks dummy `expires in 7d`.
+
+## [v4.4.5 - Beta] - 2026-11-09
+
+- Perbaikan Endpoint Daya InstaBox Cloud:
+  - Mengoreksi routing API pause InstaBox menjadi `POST /v1/machines/{id}/suspend` yang valid sesuai spesifikasi OpenAPI InstaBox.
+  - Memperbaiki scoping shadow variable UnboundLocalError pada do_POST di myserver_core_service.py.
+  - Memulihkan fungsionalitas tombol Tidurkan VM dan Bangunkan VM secara real-time.
+- Perbaikan kontras tombol aksi pada tema terang (Light Mode) menggunakan varian subtle dengan garis tepi presisi.
+
 ## [v4.4.4 - Beta] - 2026-11-08
 
 - Redesain Kartu VM Manager Sesuai Standar UI Resmi & LED Dot Matrix Bar:

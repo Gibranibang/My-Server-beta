@@ -1,3 +1,17 @@
+[v4.4.6 - Beta] - 2026-11-09
+- Fitur 'Tetap Nyala' (Always-On) khusus InstaBox: anti-sleep heartbeat 15 menit & koordinasi Smart Reset batas 8 jam.
+- Proteksi mutlak logika Auto-Restart VM Umum (Manual SSH) tetap murni tanpa intervensi.
+- Tombol Edit VM pada header kartu & filter modal otomatis terkunci per-provider (InstaBox / Manual SSH).
+- Sinkronisasi status riil cloud: pill otomatis berubah ke Sleep saat VM tidur otomatis dari pusat.
+- Kartu VM default tertutup rapi (collapsed), animasi CSS Grid halus, dan rotasi chevron 180 derajat.
+- Standardisasi ukuran seluruh ikon tombol ke 16x16px (size-4 shrink-0) & penataan kontras multi-mode.
+- Penyelarasan bahasa simetris (ID/ENG) dan pembersihan tuntas teks dummy 'expires in 7d'.
+
+[v4.4.5 - Beta] - 2026-11-09
+- Perbaikan endpoint suspend mesin InstaBox (/v1/machines/{id}/suspend) & penanganan error scope Python core.
+- Tombol Tidurkan VM dan Bangunkan VM beroperasi normal secara real-time.
+- Perbaikan kontras tombol aksi kartu pada Light Mode.
+
 [v4.4.4 - Beta] - 2026-11-08
 - Redesain Kartu VM Manager: LED dot-matrix bar 42x3 style File Manager untuk runtime 8 jam InstaBox.
 - Isolasi desain: 100% tata letak luar menu VM Manager tetap konsisten tanpa perubahan layout.

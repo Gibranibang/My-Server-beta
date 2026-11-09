@@ -83,7 +83,10 @@ export default function ServerView({ go }: ViewProps) {
         host = activeRouteObj.url.replace(/^https?:\/\//, "").split(":")[0] || "127.0.0.1"
       }
     }
-    const user = "root"
+    // v4.5.1 Beta: Deteksi username dinamis dari profil aktif server pengguna
+    const activeProfile = details?.activeProfile || ""
+    const credUsername = (details as any)?.credentials?.[activeProfile]?.username
+    const user = credUsername || details?.accountStatus?.username || (activeProfile && activeProfile !== "Admin" ? activeProfile.toLowerCase() : "casaos")
     const sshCmd = `ssh ${user}@${host}`
     
     // Copy command

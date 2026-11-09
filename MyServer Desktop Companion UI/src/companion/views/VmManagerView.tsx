@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react"
+import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import {
   AlertTriangle,
   ArrowLeftRight,
@@ -157,18 +157,36 @@ export default function VmManagerView({ go }: ViewProps) {
   const isSingle = visibleVms.length === 1 && !showGroupHeaders
   const isMultiple = visibleVms.length > 1 || showGroupHeaders
 
-  // Load from backend config.json on mount (or sync existing localStorage VMs to backend)
-  useEffect(() => {
+  // v4.5.1 Beta: Ref pelindung penyimpanan agar tidak menimpa sebelum sinkronisasi backend selesai
+  const hasLoadedRemote = useRef<boolean>(false)
+
+  // Load & Sinkronisasi Pintar VM Server & Lokal (Mendukung Multi-Device & Pergantian Server Aktif)
+  const syncVmsFromBackend = useCallback(() => {
     if (api.loadVms) {
       api.loadVms().then((remoteVms) => {
-        if (Array.isArray(remoteVms) && remoteVms.length > 0 && vmsRef.current.length === 0) {
-          setVms(remoteVms)
-        } else if (vmsRef.current.length > 0 && (!Array.isArray(remoteVms) || remoteVms.length === 0)) {
-          void api.saveVms?.(vmsRef.current)
+        hasLoadedRemote.current = true
+        if (Array.isArray(remoteVms)) {
+          setVms((prev) => {
+            const remoteServerVms = remoteVms.filter((v: any) => v.scope === "server")
+            const remoteLocalVms = remoteVms.filter((v: any) => v.scope !== "server")
+            const currentLocals = prev.filter((v: any) => v.scope !== "server")
+            const baseLocals = currentLocals.length > 0 ? currentLocals : remoteLocalVms
+            const serverIds = new Set(remoteServerVms.map((v: any) => v.id))
+            const cleanLocals = baseLocals.filter((v: any) => !serverIds.has(v.id))
+            return [...cleanLocals, ...remoteServerVms]
+          })
         }
-      }).catch(() => {})
+      }).catch(() => {
+        hasLoadedRemote.current = true
+      })
     }
-  }, [])
+  }, [api])
+
+  useEffect(() => {
+    syncVmsFromBackend()
+    window.addEventListener("myserver:refresh", syncVmsFromBackend)
+    return () => window.removeEventListener("myserver:refresh", syncVmsFromBackend)
+  }, [syncVmsFromBackend, activeServerId])
 
   // Save to localStorage and backend config.json whenever vms change
   useEffect(() => {
@@ -177,7 +195,7 @@ export default function VmManagerView({ go }: ViewProps) {
         localStorage.setItem("myserver_vms", JSON.stringify(vms))
       } catch {}
     }
-    if (api.saveVms) {
+    if (api.saveVms && hasLoadedRemote.current) {
       void api.saveVms(vms).catch(() => {})
     }
   }, [vms])

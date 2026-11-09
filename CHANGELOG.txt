@@ -1,3 +1,8 @@
+[v4.5.1 - Beta] - 2026-11-10
+- Perbaikan Sinkronisasi VM Multi-Device: query dinamis ke backend ZimaOS saat memuat VM (POST /api/vms/load) sehingga VM kelompok Server langsung muncul di Perangkat B dan seluruh perangkat yang terhubung.
+- Resolusi Akun Dinamis Terminal SSH ZimaOS: mendeteksi username SSH secara dinamis dari profil aktif server pengguna (menggantikan 'root' yang ditolak Linux ZimaOS) sehingga login password berfungsi sukses.
+- Perlindungan Penulisan State VM: menambahkan ref proteksi pada VmManagerView agar tidak menimpa konfigurasi sebelum sinkronisasi backend selesai.
+
 [v4.5.0 - Beta] - 2026-11-10
 - Pengelompokan & Penyimpanan VM Multi-Target (Server vs Lokal): opsi lokasi pada modal Tambah VM, penyimpanan tersinkron di SQLite ZimaOS (backend v1.2.0), dan automasi 24/7 tetap berjalan saat laptop mati.
 - Migrasi 1-Klik VM Terhubung: tombol migrasi cepat di menu Edit VM untuk memindahkan VM beserta konfigurasi SSH dan jadwal automasi antara Server dan Lokal.

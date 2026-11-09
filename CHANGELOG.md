@@ -1,5 +1,15 @@
 # Changelog MyServer Desktop
 
+## [v4.5.1 - Beta] - 2026-11-10
+
+- Perbaikan Sinkronisasi VM Multi-Device:
+  - Mengimplementasikan query dinamis ke backend ZimaOS saat endpoint POST /api/vms/load dipanggil, sehingga VM yang disimpan di Server langsung muncul di Perangkat B dan seluruh perangkat klien yang terhubung (mengatasi kendala 'No Virtual Machines Added').
+  - Sinkronisasi pintar otomatis pada VmManagerView saat inisialisasi, pergantian server aktif, maupun penerimaan sinyal event myserver:refresh.
+  - Penambahan ref pelindung penulisan agar state lokal tidak menimpa data konfigurasi sebelum proses sinkronisasi remote tuntas.
+- Resolusi Akun Dinamis Terminal SSH ZimaOS (Anti-Hardcoding):
+  - Mengganti string statis 'root' dengan resolusi dinamis akun Linux pengguna dari profil server yang sedang aktif (misalnya 'algitha' atau 'stimi').
+  - Mengatasi penolakan autentikasi 'Permission denied' pada terminal SSH PowerShell dan memastikan perintah salin SSH akurat 100%.
+
 ## [v4.5.0 - Beta] - 2026-11-10
 
 - Pengelompokan & Penyimpanan VM Multi-Target (Server vs Lokal):

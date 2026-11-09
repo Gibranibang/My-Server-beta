@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.0"
+APP_VERSION_NUMBER = "4.5.1"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -28098,7 +28098,39 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
                 self._send_json({"status": "ok", "success": True, "vms": vms_list})
             else:
-                self._send_json({"status": "ok", "vms": cfg.get("vms", [])})
+                # v4.5.1 Beta: Query dinamis ke ZimaOS Backend saat request load (mendukung sinkronisasi multi-device)
+                local_vms = cfg.get("vms", [])
+                for vm in local_vms:
+                    if not vm.get("scope"):
+                        vm["scope"] = "local"
+
+                srv = config_manager.get_active_server(cfg)
+                backend_url = _get_active_server_backend_url(cfg)
+                server_vms = []
+                if srv and backend_url:
+                    try:
+                        req = urllib.request.Request(f"{backend_url}/api/v1/vms", headers={"User-Agent": "MyServer-Core/4.5.1"})
+                        with urllib.request.urlopen(req, timeout=1.5) as resp:
+                            data = json.loads(resp.read().decode("utf-8"))
+                            raw_server_vms = data.get("vms", [])
+                            for svm in raw_server_vms:
+                                svm["scope"] = "server"
+                                svm["serverId"] = srv.get("id")
+                                svm["serverName"] = srv.get("name")
+                                server_vms.append(svm)
+                    except Exception as be:
+                        logger_manager.log_debug(f"[api/vms/load] Gagal sync server VMs dari backend ZimaOS: {be}")
+
+                seen_ids = set()
+                combined = []
+                for vm in server_vms:
+                    seen_ids.add(vm.get("id"))
+                    combined.append(vm)
+                for vm in local_vms:
+                    if vm.get("id") not in seen_ids:
+                        combined.append(vm)
+
+                self._send_json({"status": "ok", "vms": combined})
             return
 
         if path == "/api/vms/save":
@@ -28192,20 +28224,36 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             srv = config_manager.get_active_server(cfg)
             url, _ = config_manager.resolve_target_connection(cfg)
             host = (urllib.parse.urlparse(url).hostname or "zimaos.local").strip()
-            ssh_cmd = f"ssh root@{host}"
+
+            # v4.5.1 Beta: Resolusi akun dinamis (Anti-Hardcoding)
+            req_user = (body.get("user") or "").strip()
+            user = ""
+            if req_user:
+                user = req_user
+            elif srv:
+                active_p = srv.get("active_profile", "")
+                creds = srv.get("credentials", {})
+                if active_p and isinstance(creds, dict) and active_p in creds:
+                    user = creds[active_p].get("username", "")
+                if not user:
+                    user = srv.get("default_user") or srv.get("username") or ""
+            if not user:
+                user = "casaos"
+
+            ssh_cmd = f"ssh {user}@{host}"
             launched = False
             try:
                 ps_cmd = [
                     "powershell.exe",
                     "-NoExit",
                     "-Command",
-                    f'Write-Host "Menghubungkan Terminal SSH ke Server: {host}..." -ForegroundColor Green; ssh root@{host}'
+                    f'Write-Host "Menghubungkan Terminal SSH ke Server ({user}@{host})..." -ForegroundColor Green; ssh {user}@{host}'
                 ]
                 subprocess.Popen(ps_cmd)
                 launched = True
             except Exception as te:
                 logger_manager.log_debug(f"[api/server/ssh_terminal] Gagal meluncurkan terminal: {te}")
-            self._send_json({"status": "ok", "success": True, "command": ssh_cmd, "host": host, "launched": launched})
+            self._send_json({"status": "ok", "success": True, "command": ssh_cmd, "host": host, "user": user, "launched": launched})
             return
 
         if path == "/api/vm/open_window":

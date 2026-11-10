@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.5",
+        "channel": "Beta",
+        "date": "2026-11-10",
+        "title": "Optimistic Inline Soft-Delete VM, Eliminasi Latensi Probing Antrean Soket, dan Pembaruan Atomik Automasi VM",
+        "notes": [
+            "Optimistic Inline Card Degradation: Penghapusan VM kini menutup dialog seketika (0ms) dengan status visual inline 'Menghapus...' tanpa memblokir layar pengguna, serta mempertahankan tombstone 30 detik untuk meredam respons polling tertunda.",
+            "Eliminasi Latensi Probing Soket: Menambahkan cache rute backend 25 detik pada Core Service sehingga operasi penghapusan VM berlangsung sub-detik (<1s) tanpa kemacetan antrean IPC Tauri 60 detik.",
+            "Pembaruan Pengaturan VM Atomik: Menambahkan endpoint atomik /api/vms/update (PUT /api/v1/vms/{id}) untuk saklar Always-On 24/7, Auto-On, dan Auto-Restart sehingga pengaturan tersimpan permanen dan tidak membal kembali akibat polling berkala.",
+            "Sinkronisasi Nilai Boolean & Array Jadwal: Menyelaraskan konversi camelCase dan snake_case antara Desktop dan ZimaOS Backend v1.2.3 sehingga nilai false dan daftar hari dihormati secara presisi."
+        ],
+        "features": [
+            "Optimistic Inline Soft-Delete VM (Non-Blocking UX)",
+            "Cache Rute Backend Sub-Detik (Bebas Antrean Soket)",
+            "Endpoint Atomik /api/vms/update (PUT /api/v1/vms/{id})",
+            "Harmonisasi Nilai Boolean Automasi (Always-On, Auto-On, Auto-Restart)"
+        ]
+    },
+    {
         "version": "4.5.4",
         "channel": "Beta",
         "date": "2026-11-10",

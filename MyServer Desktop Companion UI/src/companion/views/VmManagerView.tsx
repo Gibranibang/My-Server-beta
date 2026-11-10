@@ -157,11 +157,13 @@ export default function VmManagerView({ go }: ViewProps) {
   const isSingle = visibleVms.length === 1 && !showGroupHeaders
   const isMultiple = visibleVms.length > 1 || showGroupHeaders
 
-  // v4.5.4 Beta: Ref pelindung penyimpanan agar tidak menimpa sebelum sinkronisasi backend selesai
+  // v4.5.5 Beta: Ref pelindung penyimpanan agar tidak menimpa sebelum sinkronisasi backend selesai
   const hasLoadedRemote = useRef<boolean>(false)
   // Tombstone Guard: Mencegah VM yang sedang dihapus muncul kembali akibat polling in-flight atau event window focus
   const pendingDeleteIdsRef = useRef<Set<string>>(new Set())
   const [isDeletingVm, setIsDeletingVm] = useState<boolean>(false)
+  // Soft-Delete tracking for non-blocking Inline Card Degradation
+  const [deletingVmIds, setDeletingVmIds] = useState<Set<string>>(new Set())
 
   // Load & Sinkronisasi Pintar VM Server & Lokal (Mendukung Multi-Device & Bebas Zombie VM)
   const syncVmsFromBackend = useCallback(() => {
@@ -508,49 +510,55 @@ export default function VmManagerView({ go }: ViewProps) {
     )
   }
 
-  // Delete execution dengan Tombstone Guard & Anti-Race Condition
+  // Delete execution dengan Non-Blocking Inline Card Degradation & Core Service Tombstone (v4.5.5 Beta)
   const handleDeleteConfirm = async () => {
     if (!vmToDelete || isDeletingVm) return
     const targetId = vmToDelete.id
     const targetScope = vmToDelete.scope || "server"
+    const targetServerId = vmToDelete.serverId
     const targetName = vmToDelete.name
 
     setIsDeletingVm(true)
-    // 1. Daftarkan targetId ke tombstone agar polling atau event focus tidak menghidupkannya kembali
-    pendingDeleteIdsRef.current.add(targetId)
-
-    // 2. Bersihkan seketika dari state React & localStorage lokal
-    setVms((prev) => {
-      const next = prev.filter((v) => v.id !== targetId)
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.setItem("myserver_vms", JSON.stringify(next))
-        } catch {}
-      }
-      return next
-    })
+    // 1. Segera tutup dialog konfirmasi agar antarmuka tidak terblokir
     setVmToDelete(null)
 
-    // 3. Eksekusi API Delete permanen ke Core Service & server ZimaOS secara asynchronous aman
+    // 2. Beri status 'Menghapus...' pada kartu (soft-delete visual degradation)
+    setDeletingVmIds((prev) => new Set([...prev, targetId]))
+    pendingDeleteIdsRef.current.add(targetId)
+
+    // 3. Eksekusi API Delete ke Core Service & server ZimaOS secara asynchronous
     try {
       if (api.deleteVm) {
-        await api.deleteVm(targetId, targetScope)
+        await api.deleteVm(targetId, targetScope, targetServerId)
       }
       notify(language === "id" ? `${targetName} berhasil dihapus.` : `${targetName} deleted successfully.`, "neutral")
-      // Memicu sinkronisasi langsung untuk memastikan state server bersih
+      // Hapus kartu permanen setelah backend merespons
+      setVms((prev) => {
+        const next = prev.filter((v) => v.id !== targetId)
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("myserver_vms", JSON.stringify(next))
+          } catch {}
+        }
+        return next
+      })
       syncVmsFromBackend()
     } catch (err) {
       console.warn("[VmManagerView] deleteVm error:", err)
       notify(language === "id" ? `Gagal menghapus ${targetName} di server.` : `Failed to delete ${targetName} on server.`, "danger")
-      // Jika benar-benar gagal, lepaskan tombstone agar data kembali normal
       pendingDeleteIdsRef.current.delete(targetId)
       syncVmsFromBackend()
     } finally {
       setIsDeletingVm(false)
-      // Pertahankan tombstone selama 6 detik untuk meredam respons polling tertunda
+      setDeletingVmIds((prev) => {
+        const next = new Set(prev)
+        next.delete(targetId)
+        return next
+      })
+      // Pertahankan tombstone selama 30 detik untuk meredam respons polling tertunda
       setTimeout(() => {
         pendingDeleteIdsRef.current.delete(targetId)
-      }, 6000)
+      }, 30000)
     }
   }
 
@@ -602,6 +610,19 @@ export default function VmManagerView({ go }: ViewProps) {
       return v
     })
     persistVmChanges(updatedVms)
+
+    // Atomic dedicated update ke Core Service & ZimaOS
+    if (api.updateVm) {
+      void api.updateVm(vm.id, {
+        keepAliveEnabled: nextVal,
+        keep_alive_enabled: nextVal,
+        autoRestart: nextVal ? nextAutoRestart : vm.autoRestart,
+        autoOn: nextAutoOn,
+      }, vm.serverId).catch((err) => {
+        console.warn("[VmManagerView] updateVm keepAlive error:", err)
+      })
+    }
+
     notify(
       nextVal
         ? (language === "id" ? `${vm.name}: Fitur Tetap Nyala 24/7 diaktifkan` : `${vm.name}: Always-On 24/7 enabled`)
@@ -665,6 +686,20 @@ export default function VmManagerView({ go }: ViewProps) {
         : item
     )
     persistVmChanges(updated)
+
+    // Atomic dedicated update ke Core Service & ZimaOS
+    if (api.updateVm) {
+      void api.updateVm(autoOnVm.id, {
+        autoOn: nextAutoOn,
+        auto_on_enabled: autoOnEnabled,
+        autoOnEnabled: autoOnEnabled,
+        keepAliveEnabled: disableKeepAlive ? false : autoOnVm.keepAliveEnabled,
+        keep_alive_enabled: disableKeepAlive ? false : autoOnVm.keepAliveEnabled,
+      }, autoOnVm.serverId).catch((err) => {
+        console.warn("[VmManagerView] updateVm autoOn error:", err)
+      })
+    }
+
     notify(
       language === "id"
         ? `Jadwal Auto-On ${autoOnVm.name} berhasil disimpan!`
@@ -906,6 +941,18 @@ export default function VmManagerView({ go }: ViewProps) {
       item.id === schedulingVm.id ? { ...item, autoRestart: newSchedule } : item
     )
     persistVmChanges(updated)
+
+    // Atomic dedicated update ke Core Service & ZimaOS
+    if (api.updateVm) {
+      void api.updateVm(schedulingVm.id, {
+        autoRestart: newSchedule,
+        auto_restart_enabled: schedEnabled,
+        autoRestartEnabled: schedEnabled,
+      }, schedulingVm.serverId).catch((err) => {
+        console.warn("[VmManagerView] updateVm autoRestart error:", err)
+      })
+    }
+
     notify(language === "id" ? `Jadwal Auto-Restart ${schedulingVm.name} disimpan!` : `Auto-Restart schedule for ${schedulingVm.name} saved!`, "success")
     setSchedulingVm(null)
   }
@@ -1087,6 +1134,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
   // Helper renderer for Inner Card Informasi VM
   const renderVmCardContent = (vm: VirtualMachine, inAccordion: boolean) => {
+    const isDeleting = deletingVmIds.has(vm.id)
     const isRunning = isOnline && vm.status === "running"
     const live = isOnline && vm.status === "running"
     const runtimeMinutes = vm.runtimeMinutes != null ? vm.runtimeMinutes : 0
@@ -1103,7 +1151,7 @@ export default function VmManagerView({ go }: ViewProps) {
               <IconBadge
                 icon={Server}
                 tone={
-                  !isOnline
+                  isDeleting || !isOnline
                     ? "neutral"
                     : vm.status === "running"
                       ? "success"
@@ -1128,18 +1176,20 @@ export default function VmManagerView({ go }: ViewProps) {
               <span
                 className={cx(
                   "inline-flex items-center gap-1 text-nano font-semibold rounded-full px-2 py-0.5 border",
-                  !isOnline
+                  isDeleting
                     ? "bg-surface-sunken text-ink-muted border-line"
-                    : vm.status === "running"
-                      ? "bg-success-soft text-success-ink border-success-line/60"
-                      : vm.status === "sleeping"
-                        ? "bg-warning-soft text-warning-ink border-warning-line/60"
-                        : "bg-danger-soft text-danger-ink border-danger-line/60"
+                    : !isOnline
+                      ? "bg-surface-sunken text-ink-muted border-line"
+                      : vm.status === "running"
+                        ? "bg-success-soft text-success-ink border-success-line/60"
+                        : vm.status === "sleeping"
+                          ? "bg-warning-soft text-warning-ink border-warning-line/60"
+                          : "bg-danger-soft text-danger-ink border-danger-line/60"
                 )}
               >
                 <StatusDot
                   tone={
-                    !isOnline
+                    isDeleting || !isOnline
                       ? "neutral"
                       : vm.status === "running"
                         ? "success"
@@ -1149,13 +1199,15 @@ export default function VmManagerView({ go }: ViewProps) {
                   }
                   size="xs"
                 />
-                {!isOnline
-                  ? "Offline"
-                  : vm.status === "running"
-                    ? t("vm_status_running", "Active")
-                    : vm.status === "sleeping"
-                      ? t("vm_status_sleep", "Sleeping")
-                      : t("vm_status_cooldown", "Cooldown")}
+                {isDeleting
+                  ? (language === "id" ? "Menghapus..." : "Deleting...")
+                  : !isOnline
+                    ? "Offline"
+                    : vm.status === "running"
+                      ? t("vm_status_running", "Active")
+                      : vm.status === "sleeping"
+                        ? t("vm_status_sleep", "Sleeping")
+                        : t("vm_status_cooldown", "Cooldown")}
               </span>
 
               {/* 1-Click Migration Button */}
@@ -1438,12 +1490,14 @@ export default function VmManagerView({ go }: ViewProps) {
 
   const renderAccordionCard = (vm: VirtualMachine) => {
     const isExpanded = expandedId === vm.id
+    const isDeleting = deletingVmIds.has(vm.id)
     return (
       <Card
         key={vm.id}
         className={cx(
           "flex flex-col transition-all overflow-hidden p-0 border",
-          isExpanded ? "border-brand/40 shadow-sm" : "border-line"
+          isExpanded ? "border-brand/40 shadow-sm" : "border-line",
+          isDeleting && "opacity-40 pointer-events-none select-none transition-opacity duration-300"
         )}
       >
         {/* Accordion Header Row */}
@@ -1455,7 +1509,7 @@ export default function VmManagerView({ go }: ViewProps) {
             <IconBadge
               icon={vm.scope === "server" ? Server : Laptop}
               tone={
-                !isOnline
+                isDeleting || !isOnline
                   ? "neutral"
                   : vm.status === "running"
                     ? "success"
@@ -1491,16 +1545,18 @@ export default function VmManagerView({ go }: ViewProps) {
             <span
               className={cx(
                 "inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5 border",
-                !isOnline
-                  ? "bg-surface-sunken text-ink-muted border-line"
-                  : vm.status === "running"
-                    ? "bg-success-soft text-success-ink border-success-line/60"
-                    : "bg-warning-soft text-warning-ink border-warning-line/60"
+                isDeleting
+                  ? "bg-surface-sunken text-ink-muted border-line animate-pulse"
+                  : !isOnline
+                    ? "bg-surface-sunken text-ink-muted border-line"
+                    : vm.status === "running"
+                      ? "bg-success-soft text-success-ink border-success-line/60"
+                      : "bg-warning-soft text-warning-ink border-warning-line/60"
               )}
             >
               <StatusDot
                 tone={
-                  !isOnline
+                  isDeleting || !isOnline
                     ? "neutral"
                     : vm.status === "running"
                       ? "success"
@@ -1508,11 +1564,13 @@ export default function VmManagerView({ go }: ViewProps) {
                 }
                 size="xs"
               />
-              {!isOnline
-                ? "Offline"
-                : vm.status === "running"
-                  ? (language === "id" ? "Aktif" : "Active")
-                  : (language === "id" ? "Tidur" : "Sleep")}
+              {isDeleting
+                ? (language === "id" ? "Menghapus..." : "Deleting...")
+                : !isOnline
+                  ? "Offline"
+                  : vm.status === "running"
+                    ? (language === "id" ? "Aktif" : "Active")
+                    : (language === "id" ? "Tidur" : "Sleep")}
             </span>
 
             <ChevronDown
@@ -1624,7 +1682,12 @@ export default function VmManagerView({ go }: ViewProps) {
       {/* 3. CASE 1: SINGLE VM MODE (1 RICH CARD)                   */}
       {/* ========================================================= */}
       {isSingle && (
-        <Card className="flex flex-col gap-2.5 p-3 relative overflow-hidden">
+        <Card
+          className={cx(
+            "flex flex-col gap-2.5 p-3 relative overflow-hidden transition-all duration-300",
+            deletingVmIds.has(visibleVms[0].id) && "opacity-40 pointer-events-none select-none"
+          )}
+        >
           {renderVmCardContent(visibleVms[0], false)}
         </Card>
       )}

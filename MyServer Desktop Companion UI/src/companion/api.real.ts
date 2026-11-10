@@ -1082,11 +1082,31 @@ export function createRealApi(): CompanionApi {
       return { status: 'error' }
     },
 
-    async deleteVm(vmId: string, scope?: string) {
+    async updateVm(vmId: string, updates: any, serverId?: string) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'vms/delete', payload: { vmId, scope } })
+          return await invoke('call_core_api', { endpoint: 'vms/update', payload: { vmId, vm: updates, serverId } })
+        } catch (err) {
+          console.warn('[RealApi] updateVm invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['vms/update']) {
+          return await api['vms/update']({ vmId, vm: updates, serverId })
+        }
+      } catch (err) {
+        console.warn('[RealApi] updateVm error:', err)
+      }
+      return { status: 'error' }
+    },
+
+    async deleteVm(vmId: string, scope?: string, serverId?: string) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'vms/delete', payload: { vmId, scope, serverId } })
         } catch (err) {
           console.warn('[RealApi] deleteVm invoke error:', err)
         }
@@ -1094,7 +1114,7 @@ export function createRealApi(): CompanionApi {
       try {
         const api = await getPyApi()
         if (api && api['vms/delete']) {
-          return await api['vms/delete']({ vmId, scope })
+          return await api['vms/delete']({ vmId, scope, serverId })
         }
       } catch (err) {
         console.warn('[RealApi] deleteVm error:', err)

@@ -148,7 +148,7 @@ export default function ServerView({ go }: ViewProps) {
 
   const backendOnline = Boolean(details?.backend?.online)
   const backendVer = details?.backend?.version || ""
-  const isBackendUpToDate = backendOnline && (backendVer === "1.2.2" || backendVer.startsWith("1.2.2"))
+  const isBackendUpToDate = backendOnline && (backendVer === "1.2.3" || backendVer.startsWith("1.2.3"))
   const isBackendOld = backendOnline && !isBackendUpToDate
 
   const copyText = async (text: string, label: string) => {
@@ -624,7 +624,7 @@ export default function ServerView({ go }: ViewProps) {
                 </span>
               ) : isBackendOld ? (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold text-[10px]">
-                  <span>{`v${details?.backend?.version || "1.2.x"} -> v1.2.2`}</span>
+                  <span>{`v${details?.backend?.version || "1.2.x"} -> v1.2.3`}</span>
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-surface-muted text-ink-muted font-medium text-[10px]">
@@ -655,7 +655,7 @@ export default function ServerView({ go }: ViewProps) {
                 ) : isBackendOld ? (
                   <>
                     <RefreshCw className="size-3.5 text-amber-600 dark:text-amber-400" />
-                    <span>{t("server_backend_update", "Perbarui Backend v1.2.2")}</span>
+                    <span>{t("server_backend_update", "Perbarui Backend v1.2.3")}</span>
                   </>
                 ) : (
                   <>

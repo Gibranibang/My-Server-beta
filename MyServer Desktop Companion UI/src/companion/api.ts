@@ -138,7 +138,9 @@ export interface CompanionApi {
 
   saveVms?(vms: VirtualMachine[]): Promise<any>
 
-  deleteVm?(vmId: string, scope?: string): Promise<any>
+  updateVm?(vmId: string, updates: Partial<VirtualMachine>, serverId?: string): Promise<any>
+
+  deleteVm?(vmId: string, scope?: string, serverId?: string): Promise<any>
 
   migrateVm?(vmId: string, targetScope: "server" | "local"): Promise<any>
 
@@ -787,7 +789,11 @@ export function createMockApi(): CompanionApi {
       return { status: "ok", success: true }
     },
 
-    async deleteVm(_vmId: string, _scope?: string) {
+    async updateVm(_vmId: string, _updates: any, _serverId?: string) {
+      return { status: "ok", success: true }
+    },
+
+    async deleteVm(_vmId: string, _scope?: string, _serverId?: string) {
       return { status: "ok", success: true }
     },
 

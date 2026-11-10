@@ -20742,11 +20742,18 @@ def check_github_update_core() -> dict:
 
             if remote_ver > curr_ver:
                 download_url = rel_data.get("html_url", "")
+                setup_asset = None
                 for asset in rel_data.get("assets", []):
                     aname = asset.get("name", "").lower()
-                    if aname.endswith("-setup.exe") or aname.endswith(".exe") or aname.endswith(".zip"):
-                        download_url = asset.get("browser_download_url", download_url)
+                    if "setup" in aname and aname.endswith(".exe"):
+                        setup_asset = asset.get("browser_download_url")
                         break
+                    elif aname.endswith(".exe") and not setup_asset:
+                        setup_asset = asset.get("browser_download_url")
+                    elif aname.startswith("myserver") and aname.endswith(".zip") and not setup_asset:
+                        setup_asset = asset.get("browser_download_url")
+                if setup_asset:
+                    download_url = setup_asset
                 res = {
                     "upToDate": False,
                     "version": tag,

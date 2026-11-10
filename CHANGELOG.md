@@ -1,5 +1,19 @@
 # Changelog MyServer Desktop
 
+## [v4.5.2 - Beta] - 2026-11-10
+
+- Pengalihan Otomatis Rute Terminal SSH via Remote P2P saat Rute WAN Aktif:
+  - Terminal SSH ZimaOS secara cerdas mendeteksi rute WAN dan secara otomatis mengalihkan target koneksi ke Virtual IP Remote P2P (EasyTier / ZeroTier) di mana port 22 terbuka, persis seperti mekanisme akses Web App dan mount SMB.
+- Resolusi Cerdas REST API Backend ZimaOS pada Jaringan Eksternal (WAN):
+  - Memperbaiki kegagalan koneksi REST API backend (port 8080) saat pengguna berada di luar jaringan rumah (misalnya kantor) dengan mengalihkan endpoint backend ke Remote P2P IP secara dinamis, sehingga daftar VM sisi server tidak lagi menghilang.
+- Penyelarasan Schema Pydantic Backend ZimaOS (v1.2.1) & Persistensi Otomasi 24/7:
+  - Menyelaraskan field schema Pydantic (VmCreateRequest dan VmUpdateRequest) untuk menerima format camelCase dari desktop (keepAliveEnabled, apiKey, machineId, runtimeMinutes) serta membongkar struktur nested autoRestart dan autoOn.
+  - Memastikan fitur Always-On dan otomasi penjadwalan benar-benar tersimpan ke database SQLite server ZimaOS dan tersinkronisasi 100% antar-perangkat.
+- Sinkronisasi Status Riil VM InstaBox (Case-Insensitive) & Durasi Timer Uptime:
+  - Memperbaiki pengecekan status microVM menjadi case-insensitive (running / active), mengatasi kendala tampilan status Tidur (amber) padahal VM sedang berjalan (Running) di instabox.sh.
+  - Membaca durasi runtime riil (currentRunSeconds / uptimeSeconds / runDurationSeconds) dari API InstaBox, sehingga progress timer kartu VM menampilkan menit riil sesuai pusat cloud dan bukan ter-reset ke 1 menit.
+  - Memperbaiki interval loop scheduler server berbasis timestamp riil untuk mencegah inflasi waktu runtime per siklus 20 detik.
+
 ## [v4.5.1 - Beta] - 2026-11-10
 
 - Perbaikan Sinkronisasi VM Multi-Device:

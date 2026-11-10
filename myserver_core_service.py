@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.1"
+APP_VERSION_NUMBER = "4.5.2"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3707,8 +3707,50 @@ def probe_url_endpoint(target_url, timeout=1.2):
 
 
 
+def _prepare_vm_payload_for_backend(vm):
+    """Mengharmonisasi payload VM ke format dual camelCase & snake_case untuk backend ZimaOS."""
+    if not isinstance(vm, dict):
+        return vm
+    p = dict(vm)
+    if "keepAliveEnabled" in p and "keep_alive_enabled" not in p:
+        p["keep_alive_enabled"] = bool(p["keepAliveEnabled"])
+    elif "keep_alive_enabled" in p and "keepAliveEnabled" not in p:
+        p["keepAliveEnabled"] = bool(p["keep_alive_enabled"])
+    if "apiKey" in p and "api_key" not in p:
+        p["api_key"] = p["apiKey"]
+    if "machineId" in p and "machine_id" not in p:
+        p["machine_id"] = p["machineId"]
+    if "runtimeMinutes" in p and "runtime_minutes" not in p:
+        p["runtime_minutes"] = p["runtimeMinutes"]
+    if "maxRuntimeMinutes" in p and "max_runtime_minutes" not in p:
+        p["max_runtime_minutes"] = p["maxRuntimeMinutes"]
+    ar = p.get("autoRestart")
+    if isinstance(ar, dict):
+        if "enabled" in ar and "auto_restart_enabled" not in p:
+            p["auto_restart_enabled"] = bool(ar.get("enabled"))
+        if "mode" in ar and "auto_restart_mode" not in p:
+            p["auto_restart_mode"] = str(ar.get("mode"))
+        if "intervalValue" in ar and "auto_restart_val" not in p:
+            p["auto_restart_val"] = int(ar.get("intervalValue") or 7)
+        if "intervalUnit" in ar and "auto_restart_unit" not in p:
+            p["auto_restart_unit"] = str(ar.get("intervalUnit") or "hours")
+        if "clockTime" in ar and "auto_restart_time" not in p:
+            p["auto_restart_time"] = str(ar.get("clockTime") or "03:00")
+    ao = p.get("autoOn")
+    if isinstance(ao, dict):
+        if "enabled" in ao and "auto_on_enabled" not in p:
+            p["auto_on_enabled"] = bool(ao.get("enabled"))
+        if "mode" in ao and "auto_on_mode" not in p:
+            p["auto_on_mode"] = str(ao.get("mode"))
+        if "clockTime" in ao and "auto_on_time" not in p:
+            p["auto_on_time"] = str(ao.get("clockTime") or "07:00")
+        if "delayValue" in ao and "auto_on_delay_min" not in p:
+            p["auto_on_delay_min"] = int(ao.get("delayValue") or 60)
+    return p
+
+
 def _get_active_server_backend_url(cfg):
-    """Menentukan URL REST API MyServer Backend di ZimaOS (port 8080) secara dinamis."""
+    """Menentukan URL REST API MyServer Backend di ZimaOS (port 8080) secara dinamis dengan failover WAN."""
     try:
         srv = config_manager.get_active_server(cfg)
         if not srv:
@@ -3719,6 +3761,18 @@ def _get_active_server_backend_url(cfg):
         host = urllib.parse.urlparse(url).hostname
         if not host:
             return None
+
+        # v4.5.2 Beta: Jika host merupakan domain WAN publik, alihkan ke IP Remote P2P (port 8080 tertutup di router)
+        from smb_mount_manager import _is_domain_or_wan_host
+        if _is_domain_or_wan_host(host):
+            rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
+            rem_ip = rem_info.get("ip") if rem_info else ""
+            if not rem_ip:
+                rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
+            if rem_ip:
+                logger_manager.log_info(f"[_get_active_server_backend_url] Rute Domain aktif -> Backend API dialihkan ke Remote P2P ({rem_ip}:8080)")
+                return f"http://{rem_ip}:8080"
+
         return f"http://{host}:8080"
     except Exception as e:
         logger_manager.log_debug(f"[_get_active_server_backend_url] Error: {e}")
@@ -21152,6 +21206,33 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             svm["scope"] = "server"
                             svm["serverId"] = srv.get("id")
                             svm["serverName"] = srv.get("name")
+                            if "keep_alive_enabled" in svm and "keepAliveEnabled" not in svm:
+                                svm["keepAliveEnabled"] = bool(svm["keep_alive_enabled"])
+                            if "api_key" in svm and "apiKey" not in svm:
+                                svm["apiKey"] = svm["api_key"]
+                            if "machine_id" in svm and "machineId" not in svm:
+                                svm["machineId"] = svm["machine_id"]
+                            if "runtime_minutes" in svm and "runtimeMinutes" not in svm:
+                                svm["runtimeMinutes"] = svm["runtime_minutes"]
+                            if "max_runtime_minutes" in svm and "maxRuntimeMinutes" not in svm:
+                                svm["maxRuntimeMinutes"] = svm["max_runtime_minutes"]
+                            if "auto_restart_enabled" in svm and "autoRestart" not in svm:
+                                svm["autoRestart"] = {
+                                    "enabled": bool(svm.get("auto_restart_enabled")),
+                                    "mode": svm.get("auto_restart_mode", "interval"),
+                                    "intervalValue": svm.get("auto_restart_val", 7),
+                                    "intervalUnit": svm.get("auto_restart_unit", "hours"),
+                                    "clockTime": svm.get("auto_restart_time", "03:00"),
+                                    "resetCycleMode": svm.get("smart_reset_cycle", "sleep_2s"),
+                                }
+                            if "auto_on_enabled" in svm and "autoOn" not in svm:
+                                svm["autoOn"] = {
+                                    "enabled": bool(svm.get("auto_on_enabled")),
+                                    "mode": svm.get("auto_on_mode", "clock"),
+                                    "clockTime": svm.get("auto_on_time", "07:00"),
+                                    "delayValue": svm.get("auto_on_delay_min", 60),
+                                    "days": svm.get("auto_on_days", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
+                                }
                             server_vms.append(svm)
                 except Exception as be:
                     logger_manager.log_debug(f"[api/vms] Gagal sync server VMs dari backend ZimaOS: {be}")
@@ -28086,10 +28167,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     for vm in vms_list:
                         if vm.get("scope") == "server":
                             try:
+                                b_payload = _prepare_vm_payload_for_backend(vm)
                                 b_req = urllib.request.Request(
                                     f"{backend_url}/api/v1/vms",
-                                    data=json.dumps(vm).encode("utf-8"),
-                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.0"},
+                                    data=json.dumps(b_payload).encode("utf-8"),
+                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.2"},
                                     method="POST"
                                 )
                                 urllib.request.urlopen(b_req, timeout=1.5)
@@ -28146,10 +28228,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     for vm in vms_list:
                         if vm.get("scope") == "server":
                             try:
+                                b_payload = _prepare_vm_payload_for_backend(vm)
                                 b_req = urllib.request.Request(
                                     f"{backend_url}/api/v1/vms",
-                                    data=json.dumps(vm).encode("utf-8"),
-                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.0"},
+                                    data=json.dumps(b_payload).encode("utf-8"),
+                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.2"},
                                     method="POST"
                                 )
                                 urllib.request.urlopen(b_req, timeout=1.5)
@@ -28224,6 +28307,21 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             srv = config_manager.get_active_server(cfg)
             url, _ = config_manager.resolve_target_connection(cfg)
             host = (urllib.parse.urlparse(url).hostname or "zimaos.local").strip()
+
+            # v4.5.2 Beta: Failover otomatis ke Remote P2P IP saat rute aktif adalah WAN (port 22 diblokir router)
+            req_host = (body.get("host") or "").strip()
+            if req_host:
+                host = req_host
+
+            from smb_mount_manager import _is_domain_or_wan_host
+            if _is_domain_or_wan_host(host) and srv:
+                rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
+                rem_ip = rem_info.get("ip") if rem_info else ""
+                if not rem_ip:
+                    rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
+                if rem_ip:
+                    logger_manager.log_info(f"[api/server/ssh_terminal] Rute WAN terdeteksi -> Mengalihkan target SSH ke Remote P2P ({rem_ip}:22)")
+                    host = rem_ip
 
             # v4.5.1 Beta: Resolusi akun dinamis (Anti-Hardcoding)
             req_user = (body.get("user") or "").strip()
@@ -28455,23 +28553,31 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         target = next((m for m in machines if m.get("name", "").strip().lower() == vm_name.strip().lower()), None)
                     if not target and vm_name:
                         target = next((m for m in machines if vm_name.strip().lower() in m.get("name", "").strip().lower() or m.get("name", "").strip().lower() in vm_name.strip().lower()), None)
+                    if not target and vm_name:
+                        import re
+                        s_vm = re.sub(r'[^a-z0-9]', '', vm_name.lower())
+                        target = next((m for m in machines if s_vm and (s_vm in re.sub(r'[^a-z0-9]', '', m.get("name", "").lower()) or re.sub(r'[^a-z0-9]', '', m.get("name", "").lower()) in s_vm)), None)
                     if not target:
-                        target = next((m for m in machines if m.get("state") == "running"), machines[0])
+                        target = next((m for m in machines if str(m.get("state", "")).lower() == "running"), machines[0])
 
                     mid = target.get("id")
                     state = target.get("state", "running")
 
-                    # Calculate runtime from runStartedAt
-                    run_started_at = target.get("runStartedAt")
+                    # v4.5.2 Beta: Ekstraksi durasi runtime riil dari seluruh kemungkinan field InstaBox
                     runtime_mins = 0
-                    if run_started_at and state == "running":
-                        try:
-                            clean_iso = run_started_at.replace("Z", "+00:00")
-                            dt = datetime.datetime.fromisoformat(clean_iso)
-                            now = datetime.datetime.now(datetime.timezone.utc)
-                            runtime_mins = max(0, min(480, int((now - dt).total_seconds() / 60)))
-                        except Exception:
-                            runtime_mins = 0
+                    run_secs = target.get("currentRunSeconds") or target.get("uptimeSeconds") or target.get("runDurationSeconds")
+                    if run_secs and run_secs > 0:
+                        runtime_mins = max(0, min(480, int(run_secs // 60)))
+                    else:
+                        run_started_at = target.get("runStartedAt") or target.get("startedAt") or target.get("createdAt")
+                        if run_started_at and str(state).lower() in ("running", "active"):
+                            try:
+                                clean_iso = str(run_started_at).replace("Z", "+00:00")
+                                dt = datetime.datetime.fromisoformat(clean_iso)
+                                now = datetime.datetime.now(datetime.timezone.utc)
+                                runtime_mins = max(0, min(480, int((now - dt).total_seconds() / 60)))
+                            except Exception:
+                                runtime_mins = 0
 
                     # 2. Spec fallback for RAM and Disk sizing
                     spec = target.get("spec") or {}

@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.2",
+        "channel": "Beta",
+        "date": "2026-11-10",
+        "title": "Pengalihan Otomatis Rute WAN SSH via Remote P2P, Resolusi Backend API WAN, Persistensi Otomasi 24/7 & Sinkronisasi InstaBox",
+        "notes": [
+            "Pengalihan Otomatis Rute Terminal SSH via Remote P2P saat Rute WAN Aktif: Terminal SSH ZimaOS secara cerdas mendeteksi rute WAN dan secara otomatis mengalihkan target koneksi ke Virtual IP Remote P2P (EasyTier / ZeroTier) di mana port 22 terbuka, persis seperti mekanisme akses Web App dan mount SMB.",
+            "Resolusi Cerdas REST API Backend ZimaOS pada Jaringan Eksternal (WAN): Memperbaiki kegagalan koneksi REST API backend (port 8080) saat pengguna berada di luar jaringan rumah dengan mengalihkan endpoint backend ke Remote P2P IP secara dinamis, sehingga daftar VM sisi server tidak lagi menghilang.",
+            "Penyelarasan Schema Pydantic Backend ZimaOS (v1.2.1) & Persistensi Otomasi 24/7: Menyelaraskan field schema Pydantic untuk menerima format camelCase dari desktop (keepAliveEnabled, apiKey, machineId, runtimeMinutes) serta membongkar struktur nested autoRestart dan autoOn, menjamin otomasi tersimpan di SQLite server dan tersinkronisasi 100% antar-perangkat.",
+            "Sinkronisasi Status Riil VM InstaBox (Case-Insensitive) & Durasi Timer Uptime: Memperbaiki pengecekan status microVM menjadi case-insensitive (running / active), membaca durasi runtime riil dari API InstaBox (currentRunSeconds / uptimeSeconds), serta memperbaiki interval loop scheduler server berbasis timestamp riil untuk mencegah inflasi waktu runtime."
+        ],
+        "features": [
+            "Pengalihan Otomatis Rute Terminal SSH via Remote P2P saat Rute WAN Aktif",
+            "Resolusi Cerdas REST API Backend ZimaOS pada Jaringan Eksternal (WAN)",
+            "Penyelarasan Schema Pydantic Backend ZimaOS (v1.2.1) & Persistensi Otomasi 24/7",
+            "Sinkronisasi Status Riil VM InstaBox (Case-Insensitive) & Durasi Timer Uptime"
+        ]
+    },
+    {
         "version": "3.12.0",
         "channel": "Beta",
         "date": "2026-11-01",

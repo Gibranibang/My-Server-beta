@@ -203,20 +203,23 @@ export default function VmManagerView({ go }: ViewProps) {
   // Periodic InstaBox Sync & Local Runtime Counter
   useEffect(() => {
     const syncActiveInstaboxVms = () => {
+      const knownApiKey = vmsRef.current.find((v) => v.provider === "instabox" && v.apiKey)?.apiKey
       vmsRef.current.forEach((vm) => {
-        if (vm.provider === "instabox" && vm.apiKey) {
+        const apiKey = vm.apiKey || knownApiKey
+        if (vm.provider === "instabox" && apiKey) {
           const mid = vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined)
-          api.syncInstaBoxVm({ apiKey: vm.apiKey, machineId: mid, vmName: vm.name, vmId: vm.id }).then((res: any) => {
+          api.syncInstaBoxVm({ apiKey, machineId: mid, vmName: vm.name, vmId: vm.id }).then((res: any) => {
             if (res && res.success) {
+              const isRunning = String(res.state || "").toLowerCase() === "running" || String(res.state || "").toLowerCase() === "active"
               setVms((prev) =>
                 prev.map((v) =>
                   v.id === vm.id
                     ? {
                         ...v,
                         machineId: res.machineId || v.machineId || mid,
-                        status: res.state === "running" ? "running" : (res.state ? "sleeping" : v.status),
-                        sleepingSince: res.state !== "running" ? (v.sleepingSince || Date.now()) : undefined,
-                        runtimeMinutes: res.runtimeMinutes ?? v.runtimeMinutes,
+                        status: isRunning ? "running" : (res.state ? "sleeping" : v.status),
+                        sleepingSince: !isRunning ? (v.sleepingSince || Date.now()) : undefined,
+                        runtimeMinutes: typeof res.runtimeMinutes === "number" && res.runtimeMinutes > 0 ? res.runtimeMinutes : (v.runtimeMinutes ?? 0),
                         maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
                         idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
                         screenUrl: v.screenUrl || res.screenUrl,

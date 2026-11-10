@@ -192,6 +192,9 @@ export interface ServerDetails {
   servers?: ServerItem[]
   zeroTier?: ZeroTierInfo
   easyTier?: any
+  remoteMode?: string
+  activeRemoteEngine?: string
+  activeRemoteIp?: string
   activeRoute: string
   routes: ServerRoute[]
   activeProfile: string

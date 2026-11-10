@@ -1,3 +1,9 @@
+[v4.5.2 - Beta] - 2026-11-10
+- Pengalihan Otomatis Rute Terminal SSH via Remote P2P saat Rute WAN Aktif: mendeteksi rute WAN dan mengalihkan target koneksi SSH ke Virtual IP Remote P2P (EasyTier/ZeroTier) di mana port 22 terbuka (selaras dengan Web App dan mount SMB).
+- Resolusi Cerdas REST API Backend ZimaOS pada Jaringan Eksternal (WAN): failover backend API port 8080 ke Remote P2P IP saat rute WAN aktif sehingga VM sisi server tidak lagi menghilang saat di luar jaringan rumah.
+- Penyelarasan Schema Pydantic Backend ZimaOS (v1.2.1) & Persistensi Otomasi 24/7: penanganan format camelCase (keepAliveEnabled, apiKey, machineId, autoRestart, autoOn) sehingga otomasi tersimpan permanen di database server dan sinkron antar-perangkat.
+- Sinkronisasi Status Riil VM InstaBox (Case-Insensitive) & Durasi Timer Uptime: status case-insensitive running/active mengatasi tampilan Tidur saat di cloud sedang Running, pembacaan detik durasi runtime riil dari API cloud, serta pencegahan inflasi timer di server.
+
 [v4.5.1 - Beta] - 2026-11-10
 - Perbaikan Sinkronisasi VM Multi-Device: query dinamis ke backend ZimaOS saat memuat VM (POST /api/vms/load) sehingga VM kelompok Server langsung muncul di Perangkat B dan seluruh perangkat yang terhubung.
 - Resolusi Akun Dinamis Terminal SSH ZimaOS: mendeteksi username SSH secara dinamis dari profil aktif server pengguna (menggantikan 'root' yang ditolak Linux ZimaOS) sehingga login password berfungsi sukses.

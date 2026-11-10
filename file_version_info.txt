@@ -2,8 +2,8 @@
 # Windows PE Version Information Resource File for MyServer Desktop (Beta)
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(4, 4, 4, 0),
-    prodvers=(4, 4, 4, 0),
+    filevers=(4, 5, 2, 0),
+    prodvers=(4, 5, 2, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Project Algitha'),
             StringStruct('FileDescription', 'MyServer Desktop Client (Beta)'),
-            StringStruct('FileVersion', '4.4.4.0'),
+            StringStruct('FileVersion', '4.5.2.0'),
             StringStruct('InternalName', 'MyServer-Beta'),
             StringStruct('LegalCopyright', 'Copyright (C) 2026 Project Algitha. All rights reserved.'),
             StringStruct('OriginalFilename', 'MyServer-Beta.exe'),
             StringStruct('ProductName', 'MyServer Desktop'),
-            StringStruct('ProductVersion', '4.4.4'),
+            StringStruct('ProductVersion', '4.5.2'),
             StringStruct('Comments', 'MyServer Client by Algitha - Native ZimaOS Client')
           ]
         )

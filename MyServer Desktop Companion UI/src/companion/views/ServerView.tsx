@@ -83,6 +83,12 @@ export default function ServerView({ go }: ViewProps) {
         host = activeRouteObj.url.replace(/^https?:\/\//, "").split(":")[0] || "127.0.0.1"
       }
     }
+    // v4.5.2 Beta: Jika rute aktif adalah WAN / Domain publik, alihkan target SSH ke Virtual IP Remote P2P
+    const isWanOrDomain = host && !host.endsWith(".local") && !host.endsWith(".lan") && host !== "127.0.0.1" && host !== "localhost" && isNaN(Number(host.replace(/\./g, "")))
+    const activeRemoteIp = (details as any)?.activeRemoteIp || details?.zeroTier?.serverVirtualIp || (details as any)?.easyTier?.server_virtual_ip || ""
+    if (isWanOrDomain && activeRemoteIp) {
+      host = activeRemoteIp
+    }
     // v4.5.1 Beta: Deteksi username dinamis dari profil aktif server pengguna
     const activeProfile = details?.activeProfile || ""
     const credUsername = (details as any)?.credentials?.[activeProfile]?.username

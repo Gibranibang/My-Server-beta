@@ -3855,167 +3855,185 @@ def handle_remote_backend_action(body):
     Eksekusi 1-Klik Fresh Install atau Update OTA Backend ZimaOS via SSH & GitHub Release.
     Mendukung automatic SFTP fallback ke paket lokal jika GitHub tidak dapat diakses.
     """
-    action = (body.get("action") or "update").strip().lower()
-    req_server_id = (body.get("serverId") or body.get("server_id") or "").strip()
+    try:
+        action = (body.get("action") or "update").strip().lower()
+        req_server_id = (body.get("serverId") or body.get("server_id") or "").strip()
 
-    cfg = config_manager.load_or_create_config() if config_manager else {}
-    servers = cfg.get("servers", [])
-    srv = None
-    if req_server_id:
-        for s in servers:
-            if s.get("id") == req_server_id or s.get("name") == req_server_id:
-                srv = s
-                break
-    if not srv:
-        srv = config_manager.get_active_server(cfg)
-    if not srv:
-        return {"success": False, "status": "error", "message": "Server target tidak ditemukan."}
+        cfg = config_manager.load_or_create_config() if config_manager else {}
+        servers = cfg.get("servers", [])
+        srv = None
+        if req_server_id:
+            for s in servers:
+                if s.get("id") == req_server_id or s.get("name") == req_server_id:
+                    srv = s
+                    break
+        if not srv:
+            srv = config_manager.get_active_server(cfg)
+        if not srv:
+            return {"success": False, "status": "error", "message": "Server target tidak ditemukan."}
 
-    # 1. Kumpulkan kandidat host SSH (utamakan Remote P2P IP jika ada)
-    candidates = []
-    rem_info = config_manager.get_dynamic_remote_info(srv, cfg) if config_manager else None
-    rem_ip = rem_info.get("ip") if rem_info else ""
-    if not rem_ip:
-        rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
-    if rem_ip:
-        candidates.append(rem_ip)
+        # 1. Kumpulkan kandidat host SSH (utamakan Remote P2P IP jika ada)
+        candidates = []
+        rem_info = config_manager.get_dynamic_remote_info(srv, cfg) if config_manager else None
+        rem_ip = rem_info.get("ip") if rem_info else ""
+        if not rem_ip:
+            rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
+        if rem_ip:
+            candidates.append(rem_ip)
 
-    for c in srv.get("connections", []):
-        curl = c.get("url", "")
-        ch = urllib.parse.urlparse(curl if "://" in curl else f"http://{curl}").hostname
-        if ch and ch not in candidates:
-            from smb_mount_manager import _is_domain_or_wan_host
-            if not _is_domain_or_wan_host(ch):
-                candidates.insert(0, ch)
-            else:
-                candidates.append(ch)
+        for c in srv.get("connections", []):
+            curl = c.get("url", "")
+            ch = urllib.parse.urlparse(curl if "://" in curl else f"http://{curl}").hostname
+            if ch and ch not in candidates:
+                from smb_mount_manager import _is_domain_or_wan_host
+                if not _is_domain_or_wan_host(ch):
+                    candidates.insert(0, ch)
+                else:
+                    candidates.append(ch)
 
-    if not candidates:
-        return {"success": False, "status": "error", "message": "Tidak ada alamat host IP yang dapat dihubungi."}
+        if not candidates:
+            return {"success": False, "status": "error", "message": "Tidak ada alamat host IP yang dapat dihubungi."}
 
-    # 2. Ambil kredensial admin (prioritaskan 'Admin' untuk izin sudo)
-    creds = config_manager.get_server_credentials(srv, "Admin") if config_manager else {}
-    user = (creds.get("username") or "").strip()
-    pwd = (creds.get("password") or "").strip()
-    if not user or not pwd:
-        active_p = srv.get("active_profile", "")
-        creds = config_manager.get_server_credentials(srv, active_p) if config_manager else {}
+        # 2. Ambil kredensial admin (prioritaskan 'Admin' untuk izin sudo)
+        creds = config_manager.get_server_credentials(srv, "Admin") if config_manager else {}
         user = (creds.get("username") or "").strip()
         pwd = (creds.get("password") or "").strip()
-    if not user:
-        user = srv.get("default_user") or srv.get("username") or "admin"
+        if not user or not pwd:
+            active_p = srv.get("active_profile", "")
+            creds = config_manager.get_server_credentials(srv, active_p) if config_manager else {}
+            user = (creds.get("username") or "").strip()
+            pwd = (creds.get("password") or "").strip()
+        if not user:
+            user = srv.get("default_user") or srv.get("username") or "admin"
 
-    # 3. Hubungkan via Paramiko SSH
-    ssh_client = None
-    connected_host = None
-    connect_error = None
-    try:
-        import paramiko
-    except ImportError:
-        return {"success": False, "status": "error", "message": "Modul paramiko belum terpasang."}
-
-    for host_ip in candidates:
+        # 3. Hubungkan via Paramiko SSH
+        ssh_client = None
+        connected_host = None
+        connect_error = None
         try:
-            logger_manager.log_info(f"[handle_remote_backend_action] Mencoba SSH ke {user}@{host_ip}:22...")
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(host_ip, port=22, username=user, password=pwd, timeout=5, banner_timeout=5)
-            ssh_client = client
-            connected_host = host_ip
-            logger_manager.log_info(f"[handle_remote_backend_action] SSH berhasil tersambung ke {host_ip}!")
-            break
-        except Exception as ex:
-            connect_error = ex
-            logger_manager.log_debug(f"[handle_remote_backend_action] Gagal SSH ke {host_ip}: {ex}")
+            import paramiko
+        except ImportError as ie:
+            logger_manager.log_error(f"[handle_remote_backend_action] Modul paramiko belum terpasang: {ie}")
+            return {"success": False, "status": "error", "message": f"Modul SSH (paramiko) belum terpasang: {ie}"}
 
-    if not ssh_client or not connected_host:
-        return {
-            "success": False,
-            "status": "error",
-            "message": f"Gagal menghubungkan sesi SSH ke server: {connect_error}"
-        }
+        for host_ip in candidates:
+            try:
+                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba SSH ke {user}@{host_ip}:22...")
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(host_ip, port=22, username=user, password=pwd, timeout=5, banner_timeout=5)
+                ssh_client = client
+                connected_host = host_ip
+                logger_manager.log_info(f"[handle_remote_backend_action] SSH berhasil tersambung ke {host_ip}!")
+                break
+            except Exception as ex:
+                connect_error = ex
+                logger_manager.log_debug(f"[handle_remote_backend_action] Gagal SSH ke {host_ip}: {ex}")
 
-    try:
-        # 4. Unduh installer dari GitHub Release atau fallback ke SFTP lokal
-        _, _, _ = ssh_client.exec_command("mkdir -p /tmp/myserver_deploy")
+        if not ssh_client or not connected_host:
+            return {
+                "success": False,
+                "status": "error",
+                "message": f"Gagal menghubungkan sesi SSH ke server: {connect_error}"
+            }
 
-        github_url = "https://github.com/Gibranibang/My-Server-beta/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
-        curl_cmd = f"cd /tmp/myserver_deploy && curl -sSL -f '{github_url}' -o backend.tar.gz"
-        _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
-        exit_status = stdout.channel.recv_exit_status()
+        try:
+            # 4. Unduh installer dari GitHub Release atau fallback ke SFTP lokal
+            deploy_dir = f"/tmp/myserver_deploy_{user}"
+            ssh_client.exec_command(f"rm -rf {deploy_dir} && mkdir -p {deploy_dir}")
 
-        _, sz_stdout, _ = ssh_client.exec_command("wc -c < /tmp/myserver_deploy/backend.tar.gz 2>/dev/null || echo 0")
-        downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
+            github_url = "https://github.com/Gibranibang/My-Server-beta/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
+            curl_cmd = f"cd {deploy_dir} && curl -sSL -f '{github_url}' -o backend.tar.gz"
+            _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
+            exit_status = stdout.channel.recv_exit_status()
 
-        if exit_status != 0 or downloaded_bytes < 1000:
-            logger_manager.log_info(f"[handle_remote_backend_action] GitHub download gagal/tidak lengkap ({downloaded_bytes} bytes). Mengunggah paket lokal via SFTP...")
-            base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
-            local_bundle = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.tar.gz")
-            if not os.path.exists(local_bundle):
-                local_bundle = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.tar.gz"
+            _, sz_stdout, _ = ssh_client.exec_command(f"wc -c < {deploy_dir}/backend.tar.gz 2>/dev/null || echo 0")
+            downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
 
-            if os.path.exists(local_bundle):
-                sftp = ssh_client.open_sftp()
-                sftp.put(local_bundle, "/tmp/myserver_deploy/backend.tar.gz")
-                sftp.close()
-                logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
+            if exit_status != 0 or downloaded_bytes < 1000:
+                logger_manager.log_info(f"[handle_remote_backend_action] GitHub download gagal/tidak lengkap ({downloaded_bytes} bytes). Mengunggah paket lokal via SFTP...")
+                base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
+                local_bundle = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.tar.gz")
+                if not os.path.exists(local_bundle):
+                    local_bundle = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.tar.gz"
+
+                if os.path.exists(local_bundle):
+                    try:
+                        sftp = ssh_client.open_sftp()
+                        sftp.put(local_bundle, f"{deploy_dir}/backend.tar.gz")
+                        sftp.close()
+                        logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
+                    except Exception as sftp_err:
+                        logger_manager.log_error(f"[handle_remote_backend_action] Gagal upload SFTP: {sftp_err}")
+                        return {
+                            "success": False,
+                            "status": "error",
+                            "message": f"Gagal mengunggah paket installer backend via SFTP: {sftp_err}"
+                        }
+                else:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "message": "Paket installer backend tidak dapat diunduh dari GitHub dan tidak ditemukan di lokal."
+                    }
+
+            # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo
+            logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
+            exec_script = f"cd {deploy_dir} && tar -xzf backend.tar.gz && echo '{pwd}' | sudo -S bash install_zimaos.sh"
+            _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=60)
+            exec_exit = exec_stdout.channel.recv_exit_status()
+            exec_out_text = exec_stdout.read().decode("utf-8", errors="replace")
+            logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi: {exec_out_text[-500:]}")
+
+            # 6. Polling endpoint /health di port 8080 selama maksimal 30 detik
+            backend_url = f"http://{connected_host}:8080"
+            poll_ok = False
+            health_data = {}
+            logger_manager.log_info(f"[handle_remote_backend_action] Memulai verifikasi healthcheck ke {backend_url}/health...")
+            for _ in range(15):
+                time.sleep(2.0)
+                h_ok, h_data, h_code = _backend_http_request(f"{backend_url}/health", method="GET", timeout=2.0, retries=0)
+                if h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok":
+                    poll_ok = True
+                    health_data = h_data
+                    break
+
+            if poll_ok:
+                ver = health_data.get("version", "1.2.2")
+                _cached_backend_info["timestamp"] = time.time()
+                _cached_backend_info["data"] = {
+                    "online": True,
+                    "version": ver,
+                    "latestVersion": "1.2.2",
+                    "url": backend_url
+                }
+                msg = "Backend server berhasil diperbarui!" if action == "update" else "Backend server berhasil dipasang!"
+                logger_manager.log_info(f"[handle_remote_backend_action] Sukses! Versi aktif: {ver}")
+                return {
+                    "success": True,
+                    "status": "ok",
+                    "message": msg,
+                    "backend": dict(_cached_backend_info["data"])
+                }
             else:
                 return {
                     "success": False,
                     "status": "error",
-                    "message": "Paket installer backend tidak dapat diunduh dari GitHub dan tidak ditemukan di lokal."
+                    "message": "Instalasi selesai namun healthcheck port 8080 tidak merespons dalam 30 detik."
                 }
 
-        # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo
-        logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
-        exec_script = f"cd /tmp/myserver_deploy && tar -xzf backend.tar.gz && echo '{pwd}' | sudo -S bash install_zimaos.sh"
-        _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=60)
-        exec_exit = exec_stdout.channel.recv_exit_status()
-        exec_out_text = exec_stdout.read().decode("utf-8", errors="replace")
-        logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi: {exec_out_text[-500:]}")
-
-        # 6. Polling endpoint /health di port 8080 selama maksimal 30 detik
-        backend_url = f"http://{connected_host}:8080"
-        poll_ok = False
-        health_data = {}
-        logger_manager.log_info(f"[handle_remote_backend_action] Memulai verifikasi healthcheck ke {backend_url}/health...")
-        for _ in range(15):
-            time.sleep(2.0)
-            h_ok, h_data, h_code = _backend_http_request(f"{backend_url}/health", method="GET", timeout=2.0, retries=0)
-            if h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok":
-                poll_ok = True
-                health_data = h_data
-                break
-
-        if poll_ok:
-            ver = health_data.get("version", "1.2.2")
-            _cached_backend_info["timestamp"] = time.time()
-            _cached_backend_info["data"] = {
-                "online": True,
-                "version": ver,
-                "latestVersion": "1.2.2",
-                "url": backend_url
-            }
-            msg = "Backend server berhasil diperbarui!" if action == "update" else "Backend server berhasil dipasang!"
-            logger_manager.log_info(f"[handle_remote_backend_action] Sukses! Versi aktif: {ver}")
-            return {
-                "success": True,
-                "status": "ok",
-                "message": msg,
-                "backend": dict(_cached_backend_info["data"])
-            }
-        else:
-            return {
-                "success": False,
-                "status": "error",
-                "message": "Instalasi selesai namun healthcheck port 8080 tidak merespons dalam 30 detik."
-            }
-
-    finally:
-        try:
-            ssh_client.close()
-        except Exception:
-            pass
+        finally:
+            try:
+                ssh_client.close()
+            except Exception:
+                pass
+    except Exception as ex:
+        logger_manager.log_error(f"[handle_remote_backend_action] Exception unhandled: {ex}")
+        return {
+            "success": False,
+            "status": "error",
+            "message": f"Terjadi kesalahan saat memproses backend: {ex}"
+        }
 
 
 def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=None, vm_id=None, force_window=False):

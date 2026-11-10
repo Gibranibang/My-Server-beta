@@ -104,3 +104,5 @@ $RECYCLE.BIN/
 # Drivers & native resources
 *.sys
 resources/
+
+build_core/

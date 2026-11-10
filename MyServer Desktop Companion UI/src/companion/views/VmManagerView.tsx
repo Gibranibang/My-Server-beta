@@ -159,6 +159,9 @@ export default function VmManagerView({ go }: ViewProps) {
 
   // v4.5.4 Beta: Ref pelindung penyimpanan agar tidak menimpa sebelum sinkronisasi backend selesai
   const hasLoadedRemote = useRef<boolean>(false)
+  // Tombstone Guard: Mencegah VM yang sedang dihapus muncul kembali akibat polling in-flight atau event window focus
+  const pendingDeleteIdsRef = useRef<Set<string>>(new Set())
+  const [isDeletingVm, setIsDeletingVm] = useState<boolean>(false)
 
   // Load & Sinkronisasi Pintar VM Server & Lokal (Mendukung Multi-Device & Bebas Zombie VM)
   const syncVmsFromBackend = useCallback(() => {
@@ -167,9 +170,11 @@ export default function VmManagerView({ go }: ViewProps) {
         hasLoadedRemote.current = true
         if (Array.isArray(remoteVms)) {
           setVms((prev) => {
-            const remoteServerVms = remoteVms.filter((v: any) => v.scope === "server")
-            const currentLocals = prev.filter((v: any) => v.scope !== "server")
-            const remoteLocalVms = remoteVms.filter((v: any) => v.scope !== "server")
+            // Saring VM yang berada dalam tombstone penghapusan
+            const filteredRemote = remoteVms.filter((v: any) => !pendingDeleteIdsRef.current.has(v.id))
+            const remoteServerVms = filteredRemote.filter((v: any) => v.scope === "server")
+            const currentLocals = prev.filter((v: any) => v.scope !== "server" && !pendingDeleteIdsRef.current.has(v.id))
+            const remoteLocalVms = filteredRemote.filter((v: any) => v.scope !== "server")
             const baseLocals = currentLocals.length > 0 ? currentLocals : remoteLocalVms
             const serverIds = new Set(remoteServerVms.map((v: any) => v.id))
             const cleanLocals = baseLocals.filter((v: any) => !serverIds.has(v.id))
@@ -191,10 +196,10 @@ export default function VmManagerView({ go }: ViewProps) {
     }
   }, [api])
 
-  // Multi-Device Real-Time Sync: Polling setiap 10 detik & saat window kembali fokus
+  // Multi-Device Real-Time Sync: Polling cepat setiap 4 detik saat menu aktif & saat window kembali fokus
   useEffect(() => {
     syncVmsFromBackend()
-    const interval = setInterval(syncVmsFromBackend, 10000)
+    const interval = setInterval(syncVmsFromBackend, 4000)
     const onRefresh = () => syncVmsFromBackend()
     const onFocus = () => syncVmsFromBackend()
     window.addEventListener("myserver:refresh", onRefresh)
@@ -503,21 +508,18 @@ export default function VmManagerView({ go }: ViewProps) {
     )
   }
 
-  // Delete execution
-  const handleDeleteConfirm = () => {
-    if (!vmToDelete) return
+  // Delete execution dengan Tombstone Guard & Anti-Race Condition
+  const handleDeleteConfirm = async () => {
+    if (!vmToDelete || isDeletingVm) return
     const targetId = vmToDelete.id
     const targetScope = vmToDelete.scope || "server"
     const targetName = vmToDelete.name
 
-    // 1. Eksekusi API Delete permanen ke Core Service & server ZimaOS
-    if (api.deleteVm) {
-      void api.deleteVm(targetId, targetScope).catch((err) => {
-        console.warn("[VmManagerView] deleteVm error:", err)
-      })
-    }
+    setIsDeletingVm(true)
+    // 1. Daftarkan targetId ke tombstone agar polling atau event focus tidak menghidupkannya kembali
+    pendingDeleteIdsRef.current.add(targetId)
 
-    // 2. Bersihkan dari state React & localStorage lokal
+    // 2. Bersihkan seketika dari state React & localStorage lokal
     setVms((prev) => {
       const next = prev.filter((v) => v.id !== targetId)
       if (typeof window !== "undefined") {
@@ -527,9 +529,29 @@ export default function VmManagerView({ go }: ViewProps) {
       }
       return next
     })
-
-    notify(language === "id" ? `${targetName} berhasil dihapus.` : `${targetName} deleted successfully.`, "neutral")
     setVmToDelete(null)
+
+    // 3. Eksekusi API Delete permanen ke Core Service & server ZimaOS secara asynchronous aman
+    try {
+      if (api.deleteVm) {
+        await api.deleteVm(targetId, targetScope)
+      }
+      notify(language === "id" ? `${targetName} berhasil dihapus.` : `${targetName} deleted successfully.`, "neutral")
+      // Memicu sinkronisasi langsung untuk memastikan state server bersih
+      syncVmsFromBackend()
+    } catch (err) {
+      console.warn("[VmManagerView] deleteVm error:", err)
+      notify(language === "id" ? `Gagal menghapus ${targetName} di server.` : `Failed to delete ${targetName} on server.`, "danger")
+      // Jika benar-benar gagal, lepaskan tombstone agar data kembali normal
+      pendingDeleteIdsRef.current.delete(targetId)
+      syncVmsFromBackend()
+    } finally {
+      setIsDeletingVm(false)
+      // Pertahankan tombstone selama 6 detik untuk meredam respons polling tertunda
+      setTimeout(() => {
+        pendingDeleteIdsRef.current.delete(targetId)
+      }, 6000)
+    }
   }
 
   // Open Edit Modal
@@ -2446,9 +2468,10 @@ export default function VmManagerView({ go }: ViewProps) {
                 size="sm"
                 variant="danger"
                 onClick={handleDeleteConfirm}
+                disabled={isDeletingVm}
                 className="flex-1 justify-center"
               >
-                {t("delete_btn", "Hapus")}
+                {isDeletingVm ? (language === "id" ? "Menghapus..." : "Deleting...") : t("delete_btn", "Hapus")}
               </Button>
             </div>
           </Card>

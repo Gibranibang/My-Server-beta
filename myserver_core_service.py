@@ -21510,7 +21510,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 seen_ids.add(vm.get("id"))
                 combined.append(vm)
             for vm in local_vms:
-                if vm.get("id") not in seen_ids:
+                if not isinstance(vm, dict):
+                    continue
+                vscope = vm.get("scope") or ("server" if vm.get("serverId") or vm.get("serverName") else "local")
+                if vscope != "server" and vm.get("id") not in seen_ids:
                     combined.append(vm)
 
             self._send_json({"status": "ok", "vms": combined})
@@ -28509,7 +28512,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     if not isinstance(vm, dict):
                         continue
                     vid = vm.get("id")
-                    vscope = vm.get("scope", "local")
+                    vscope = vm.get("scope") or ("server" if vm.get("serverId") or vm.get("serverName") else "local")
                     if vid not in seen_ids:
                         if vscope != "server" or not server_online:
                             seen_ids.add(vid)

@@ -28311,15 +28311,43 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/server/ssh_terminal":
             cfg = config_manager.load_or_create_config()
-            srv = config_manager.get_active_server(cfg)
-            url, _ = config_manager.resolve_target_connection(cfg)
-            host = (urllib.parse.urlparse(url).hostname or "zimaos.local").strip()
-
-            # v4.5.2 Beta: Failover otomatis ke Remote P2P IP saat rute aktif adalah WAN (port 22 diblokir router)
+            servers = cfg.get("servers", [])
+            req_server_id = (body.get("serverId") or body.get("server_id") or "").strip()
             req_host = (body.get("host") or "").strip()
-            if req_host:
-                host = req_host
 
+            srv = None
+            if req_server_id:
+                for s in servers:
+                    if s.get("id") == req_server_id or s.get("name") == req_server_id:
+                        srv = s
+                        break
+            if not srv and req_host:
+                clean_h = req_host.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+                for s in servers:
+                    for c in s.get("connections", []):
+                        curl = c.get("url", "")
+                        chost = urllib.parse.urlparse(curl if "://" in curl else f"http://{curl}").hostname or ""
+                        if chost.lower() == clean_h:
+                            srv = s
+                            break
+                    if srv:
+                        break
+                    if s.get("zerotier_virtual_ip") == clean_h or s.get("easytier_virtual_ip") == clean_h:
+                        srv = s
+                        break
+                    sname = (s.get("name") or "").lower()
+                    if sname and sname in clean_h:
+                        srv = s
+                        break
+
+            if not srv:
+                srv = config_manager.get_active_server(cfg)
+
+            url, _ = config_manager.resolve_target_connection(cfg, check_network=False, target_server=srv)
+            default_host = (urllib.parse.urlparse(url).hostname or "zimaos.local").strip()
+            host = req_host if req_host else default_host
+
+            # v4.5.2 Beta: Failover otomatis WAN/Domain publik -> Remote Virtual IP P2P (ZeroTier / EasyTier)
             from smb_mount_manager import _is_domain_or_wan_host
             if _is_domain_or_wan_host(host) and srv:
                 rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
@@ -28327,7 +28355,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 if not rem_ip:
                     rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
                 if rem_ip:
-                    logger_manager.log_info(f"[api/server/ssh_terminal] Rute WAN terdeteksi -> Mengalihkan target SSH ke Remote P2P ({rem_ip}:22)")
+                    logger_manager.log_info(f"[api/server/ssh_terminal] Host WAN/Domain '{host}' terdeteksi -> Failover target SSH dialihkan ke Remote Virtual IP ({rem_ip}:22)")
                     host = rem_ip
 
             # v4.5.1 Beta: Resolusi akun dinamis (Anti-Hardcoding)

@@ -73,14 +73,14 @@ export default function ServerView({ go }: ViewProps) {
 
   const handleOpenSshTerminal = async () => {
     if (!details) return
-    const activeRouteObj = details.routes?.find(r => r.id === details.activeRoute) || details.routes?.[0]
-    let host = "127.0.0.1"
+    const activeRouteObj = details.routes?.find(r => r.active) || details.routes?.find(r => r.id === details.activeRoute) || details.routes?.[0]
+    let host = details.activeHost || "127.0.0.1"
     if (activeRouteObj?.url) {
       try {
         const parsed = new URL(activeRouteObj.url.startsWith("http") ? activeRouteObj.url : `http://${activeRouteObj.url}`)
-        host = parsed.hostname || "127.0.0.1"
+        host = parsed.hostname || host
       } catch {
-        host = activeRouteObj.url.replace(/^https?:\/\//, "").split(":")[0] || "127.0.0.1"
+        host = activeRouteObj.url.replace(/^https?:\/\//, "").split(":")[0] || host
       }
     }
     // v4.5.2 Beta: Jika rute aktif adalah WAN / Domain publik, alihkan target SSH ke Virtual IP Remote P2P
@@ -93,16 +93,28 @@ export default function ServerView({ go }: ViewProps) {
     const activeProfile = details?.activeProfile || ""
     const credUsername = (details as any)?.credentials?.[activeProfile]?.username
     const user = credUsername || details?.accountStatus?.username || (activeProfile && activeProfile !== "Admin" ? activeProfile.toLowerCase() : "casaos")
-    const sshCmd = `ssh ${user}@${host}`
+    let sshCmd = `ssh ${user}@${host}`
     
+    if (api.openSshTerminal) {
+      try {
+        const res: any = await api.openSshTerminal({
+          host,
+          user,
+          port: 22,
+          serverId: (details as any)?.serverId || (details as any)?.id || "",
+        } as any)
+        if (res && res.command) {
+          sshCmd = res.command
+        }
+      } catch (e) {
+        console.warn("[ServerView] openSshTerminal error:", e)
+      }
+    }
+
     // Copy command
     await copyText(sshCmd, t("server_ssh_terminal_btn", "Terminal SSH"))
     setCopiedSsh(true)
     setTimeout(() => setCopiedSsh(false), 2000)
-
-    if (api.openSshTerminal) {
-      void api.openSshTerminal({ host, user, port: 22 })
-    }
   }
 
   const copyText = async (text: string, label: string) => {

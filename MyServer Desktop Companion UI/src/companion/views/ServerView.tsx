@@ -2,6 +2,8 @@ import { getTranslation } from "../i18n"
 import { useEffect, useRef, useState } from "react"
 import {
   Check,
+  Download,
+  LoaderCircle,
   Terminal,
   ChevronRight,
   Copy,
@@ -39,6 +41,8 @@ export default function ServerView({ go }: ViewProps) {
   const [details, setDetails] = useState<ServerDetails | null>(null)
   const [switching, setSwitching] = useState<string | null>(null)
   const [copiedSsh, setCopiedSsh] = useState(false)
+  const [backendLoading, setBackendLoading] = useState(false)
+  const [backendAction, setBackendAction] = useState<"install" | "update" | null>(null)
   const [routeMenuOpenId, setRouteMenuOpenId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
@@ -116,6 +120,36 @@ export default function ServerView({ go }: ViewProps) {
     setCopiedSsh(true)
     setTimeout(() => setCopiedSsh(false), 2000)
   }
+
+  const handleBackendAction = async (action: "install" | "update") => {
+    if (backendLoading) return
+    setBackendLoading(true)
+    setBackendAction(action)
+    try {
+      const serverId = details?.serverId || (details as any)?.id || ""
+      const res: any = api.triggerBackendAction
+        ? await api.triggerBackendAction(action, serverId)
+        : { success: false, message: "API tidak tersedia" }
+
+      if (res && (res.success || res.status === "ok")) {
+        notify(t("server_backend_success", "Backend server berhasil diperbarui!"), "success")
+        const updated = await api.getServerDetails()
+        setDetails(updated)
+      } else {
+        notify(res?.message || t("server_backend_failed", "Gagal memperbarui backend server"), "danger")
+      }
+    } catch (err: any) {
+      notify(errorText(err), "danger")
+    } finally {
+      setBackendLoading(false)
+      setBackendAction(null)
+    }
+  }
+
+  const backendOnline = Boolean(details?.backend?.online)
+  const backendVer = details?.backend?.version || ""
+  const isBackendUpToDate = backendOnline && (backendVer === "1.2.2" || backendVer.startsWith("1.2.2"))
+  const isBackendOld = backendOnline && !isBackendUpToDate
 
   const copyText = async (text: string, label: string) => {
     if (!text) return
@@ -571,6 +605,67 @@ export default function ServerView({ go }: ViewProps) {
               </>
             )}
           </button>
+
+          {/* Status & Kontrol MyServer Backend ZimaOS (v4.5.3 Beta) */}
+          <div className="w-full pt-2 mt-1 border-t border-line/50 flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-nano font-medium px-0.5">
+              <span className="text-ink-subtle uppercase tracking-wider font-semibold">Backend ZimaOS</span>
+              {backendLoading ? (
+                <span className="flex items-center gap-1 text-ink-muted">
+                  <LoaderCircle className="size-3 animate-spin text-brand" />
+                  <span className="text-[10px]">
+                    {backendAction === "install" ? t("server_backend_installing", "Memasang Backend...") : t("server_backend_updating", "Memperbarui Backend...")}
+                  </span>
+                </span>
+              ) : isBackendUpToDate ? (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold text-[10px]">
+                  <Check className="size-3" />
+                  <span>{details?.backend?.version ? `v${details.backend.version} (${t("server_backend_uptodate_tag", "Terbaru")})` : t("server_backend_uptodate", "Backend ZimaOS: Terbaru")}</span>
+                </span>
+              ) : isBackendOld ? (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold text-[10px]">
+                  <span>{`v${details?.backend?.version || "1.2.x"} -> v1.2.2`}</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-surface-muted text-ink-muted font-medium text-[10px]">
+                  <span>{t("server_backend_not_detected", "Offline / Belum Ada")}</span>
+                </span>
+              )}
+            </div>
+
+            {(!isBackendUpToDate || isBackendOld || !backendOnline) && (
+              <button
+                type="button"
+                disabled={backendLoading}
+                onClick={() => handleBackendAction(isBackendOld ? "update" : "install")}
+                className={cx(
+                  "w-full h-7 rounded-tile flex items-center justify-center gap-1.5 font-semibold text-caption shadow-xs transition cursor-pointer select-none",
+                  isBackendOld
+                    ? "bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border border-amber-500/30"
+                    : "bg-surface-muted hover:bg-line text-ink border border-line"
+                )}
+              >
+                {backendLoading ? (
+                  <>
+                    <LoaderCircle className="size-3.5 animate-spin text-brand" />
+                    <span>
+                      {backendAction === "install" ? t("server_backend_installing", "Memasang Backend...") : t("server_backend_updating", "Memperbarui Backend...")}
+                    </span>
+                  </>
+                ) : isBackendOld ? (
+                  <>
+                    <RefreshCw className="size-3.5 text-amber-600 dark:text-amber-400" />
+                    <span>{t("server_backend_update", "Perbarui Backend v1.2.2")}</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="size-3.5 text-brand" />
+                    <span>{t("server_backend_install", "Pasang Backend ke Server")}</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         </Card>
 
         {/* 2. KARTU REMOTE ACCESS DINAMIS TUNGGAL (EASYTIER / ZEROTIER) */}

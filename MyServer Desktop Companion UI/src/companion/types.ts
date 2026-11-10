@@ -209,6 +209,12 @@ export interface ServerDetails {
   fullVersion?: string
   dpapiActive?: boolean
   theme?: "dark" | "light"
+  backend?: {
+    online: boolean
+    version?: string
+    latestVersion?: string
+    url?: string
+  }
 }
 
 export interface WebApp {

@@ -1,5 +1,16 @@
 # Changelog MyServer Desktop
 
+## [v4.5.3 - Beta] - 2026-11-10
+
+- 1-Klik Pasang & Perbarui OTA MyServer Backend ke ZimaOS:
+  - Menambahkan tombol dinamis pada antarmuka ServerView untuk memasang (fresh install) atau memperbarui (update OTA) backend ZimaOS ke versi 1.2.2 langsung dari desktop tanpa terminal manual.
+- Eliminasi Tuntas Socket WinError 10054 (Reset by Peer):
+  - Mengimplementasikan header eksplisit Connection: close dan mekanisme auto-retry 1x pada seluruh transmisi HTTP ke backend ZimaOS, menjamin transmisi REST API bebas kegagalan soket terputus.
+- Penyingkiran Timer Inflasi Runtime & Pembersihan Telemetri Fiktif:
+  - Menghapus timer interval increment fiktif di sisi frontend, membaca nilai runtime murni dari API InstaBox, serta membersihkan cache telemetri palsu (2.3% CPU / 0.7 GB RAM) sehingga status mesin berstatus tidur menampilkan strip (-) secara jujur.
+- Sinkronisasi Status Port & Host SSH MicroVM Resmi:
+  - Memperbaiki format host SSH agar selalu menampilkan alamat resmi ssh.instabox.sh:2222 secara konsisten dan meniadakan tampilan host kosong.
+
 ## [v4.5.2 - Beta] - 2026-11-10
 
 - Pengalihan Otomatis Rute Terminal SSH via Remote P2P saat Rute WAN Aktif:

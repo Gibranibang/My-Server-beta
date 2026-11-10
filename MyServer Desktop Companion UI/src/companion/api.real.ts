@@ -1122,6 +1122,46 @@ export function createRealApi(): CompanionApi {
       return { status: 'error' }
     },
 
+    async triggerBackendAction(action: "install" | "update", serverId?: string) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'server/backend_action', payload: { action, serverId } })
+        } catch (err) {
+          console.warn('[RealApi] triggerBackendAction invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['server/backend_action']) {
+          return await api['server/backend_action']({ action, serverId })
+        }
+      } catch (err) {
+        console.warn('[RealApi] triggerBackendAction error:', err)
+      }
+      return { success: false, status: 'error', message: 'API tidak tersedia' }
+    },
+
+    async getBackendStatus(serverId?: string) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'server/backend_status', payload: { serverId } })
+        } catch (err) {
+          console.warn('[RealApi] getBackendStatus invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['server/backend_status']) {
+          return await api['server/backend_status']({ serverId })
+        }
+      } catch (err) {
+        console.warn('[RealApi] getBackendStatus error:', err)
+      }
+      return { online: false, version: '', latestVersion: '1.2.2' }
+    },
+
     async openVmWindow(vmId: string, title: string, url: string) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {

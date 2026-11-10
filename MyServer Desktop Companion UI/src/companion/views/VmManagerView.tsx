@@ -235,9 +235,7 @@ export default function VmManagerView({ go }: ViewProps) {
                         sshUser: res.sshUser || v.sshUser || res.machineId,
                         ip: res.ip || res.sshHost || v.ip || "ssh.instabox.sh",
                         apiKey: v.apiKey || apiKey,
-                        telemetry: isRunning
-                          ? (res.telemetry || v.telemetry)
-                          : { ...(res.telemetry || {}), cpuPct: null, ramUsedBytes: null, diskUsedBytes: null },
+                        telemetry: isRunning && res.telemetry ? res.telemetry : null,
                       }
                     : v
                 )
@@ -253,7 +251,8 @@ export default function VmManagerView({ go }: ViewProps) {
     // Continuous anti-sleep heartbeat & immediate wake guard for InstaBox VMs with keepAliveEnabled
     const keepAlivePing = () => {
       vmsRef.current.forEach((vm) => {
-        if (vm.provider === "instabox" && vm.keepAliveEnabled && isOnline) {
+        // Isolasi: VM scope server dikontrol 100% oleh daemon backend ZimaOS
+        if (vm.scope !== "server" && vm.provider === "instabox" && vm.keepAliveEnabled && isOnline) {
           const mid = vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined)
           if (vm.status === "sleeping") {
             api.wakeInstaBoxVm({ apiKey: vm.apiKey, machineId: mid, vmId: vm.id }).then((res: any) => {
@@ -277,27 +276,9 @@ export default function VmManagerView({ go }: ViewProps) {
       keepAlivePing()
     }, 30000)
 
-    // Local runtime increment: increment runtime by 1 minute every 60 seconds if running
-    const timerInterval = setInterval(() => {
-      setVms((prev) =>
-        prev.map((vm) => {
-          if (vm.status === "running") {
-            const currentMins = vm.runtimeMinutes || 0
-            const maxMins = vm.maxRuntimeMinutes || 480
-            return {
-              ...vm,
-              runtimeMinutes: Math.min(maxMins, currentMins + 1),
-            }
-          }
-          return vm
-        })
-      )
-    }, 60000)
-
     return () => {
       clearInterval(syncInterval)
       clearInterval(keepAliveInterval)
-      clearInterval(timerInterval)
     }
   }, [vms.length])
 
@@ -732,7 +713,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     sshHost: v.sshHost || res.sshHost,
                     sshUser: v.sshUser || res.sshUser,
                     sshPort: v.sshPort || res.sshPort,
-                    telemetry: res.telemetry || v.telemetry,
+                    telemetry: (res.state === "running" || res.state === "active") && res.telemetry ? res.telemetry : null,
                   }
                 : v
             )
@@ -900,6 +881,8 @@ export default function VmManagerView({ go }: ViewProps) {
 
       const currentDay = nowDate.getDay()
       vmsRef.current.forEach((vm) => {
+        // Isolasi: jadwal VM scope server dijalankan oleh daemon backend ZimaOS, bukan dari PC ini
+        if (vm.scope === "server") return
         // 1. Evaluasi Jadwal Auto-On (Ketika VM sedang sleeping / stopped)
         if (vm.autoOn?.enabled && vm.status !== "running") {
           let shouldWake = false
@@ -920,6 +903,27 @@ export default function VmManagerView({ go }: ViewProps) {
             }
           }
           if (shouldWake) {
+            if (vm.provider === "instabox") {
+              api.wakeInstaBoxVm({
+                apiKey: vm.apiKey,
+                machineId: vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined),
+                vmId: vm.id,
+              }).then((res: any) => {
+                if (res && res.status === "error") {
+                  setVms((prev) =>
+                    prev.map((item) =>
+                      item.id === vm.id ? { ...item, status: "sleeping", sleepingSince: Date.now() } : item
+                    )
+                  )
+                  notify(
+                    language === "id"
+                      ? `[Auto-On] Gagal membangunkan ${vm.name}: ${res.message || "Error"}`
+                      : `[Auto-On] Failed to wake ${vm.name}: ${res.message || "Error"}`,
+                    "danger"
+                  )
+                }
+              }).catch(() => {})
+            }
             setVms((prev) =>
               prev.map((item) =>
                 item.id === vm.id
@@ -1156,7 +1160,7 @@ export default function VmManagerView({ go }: ViewProps) {
           <div className="flex flex-col border-x border-line/40">
             <span className="text-[9px] uppercase font-bold text-ink-faint">RAM</span>
             <Mono className="text-[11px] font-semibold text-ink">
-              {vm.telemetry?.ramUsedBytes != null && vm.telemetry?.ramTotalBytes
+              {vm.status === "running" && vm.telemetry?.ramUsedBytes != null && vm.telemetry?.ramTotalBytes
                 ? `${(vm.telemetry.ramUsedBytes / (1024 ** 3)).toFixed(1)} GB`
                 : "—"}
             </Mono>
@@ -1164,7 +1168,7 @@ export default function VmManagerView({ go }: ViewProps) {
           <div className="flex flex-col">
             <span className="text-[9px] uppercase font-bold text-ink-faint">DISK</span>
             <Mono className="text-[11px] font-semibold text-ink">
-              {vm.telemetry?.diskUsedBytes != null && vm.telemetry?.diskTotalBytes
+              {vm.status === "running" && vm.telemetry?.diskUsedBytes != null && vm.telemetry?.diskTotalBytes
                 ? `${(vm.telemetry.diskUsedBytes / (1024 ** 3)).toFixed(1)} GB`
                 : "—"}
             </Mono>

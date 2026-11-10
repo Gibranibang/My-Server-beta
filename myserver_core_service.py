@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.2"
+APP_VERSION_NUMBER = "4.5.3"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3777,6 +3777,245 @@ def _get_active_server_backend_url(cfg):
     except Exception as e:
         logger_manager.log_debug(f"[_get_active_server_backend_url] Error: {e}")
         return None
+
+
+def _backend_http_request(url, method="GET", json_body=None, headers=None, timeout=5.0, retries=1):
+    """
+    Eksekutor HTTP tangguh ke backend ZimaOS (port 8080).
+    Menggunakan header 'Connection: close' dan auto-retry 1x saat terjadi [WinError 10054] / socket reset.
+    Return (ok: bool, data_or_error: any, http_status: int).
+    """
+    req_headers = {
+        "User-Agent": f"MyServer-Core/{APP_VERSION_NUMBER}",
+        "Connection": "close",
+        "Accept": "application/json",
+    }
+    if json_body is not None:
+        req_headers["Content-Type"] = "application/json"
+    if headers:
+        req_headers.update(headers)
+
+    data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+                parsed = json.loads(raw.decode("utf-8")) if raw else {}
+                return True, parsed, resp.status
+        except urllib.error.HTTPError as he:
+            try:
+                err_txt = he.read().decode("utf-8")
+                err_data = json.loads(err_txt)
+            except Exception:
+                err_data = str(he)
+            return False, err_data, he.code
+        except Exception as ex:
+            last_err = ex
+            if attempt < retries:
+                time.sleep(0.3)
+                continue
+    return False, f"Gagal menghubungi backend ZimaOS: {last_err}", 502
+
+
+_cached_backend_info = {
+    "timestamp": 0,
+    "data": {"online": False, "version": "", "latestVersion": "1.2.2", "url": ""}
+}
+
+def _get_backend_health_info(cfg=None, force=False):
+    """Mengecek status kesehatan dan versi backend ZimaOS (port 8080)."""
+    now = time.time()
+    if not force and (now - _cached_backend_info["timestamp"] < 5):
+        return dict(_cached_backend_info["data"])
+
+    if cfg is None:
+        cfg = config_manager.load_or_create_config() if config_manager else {}
+    backend_url = _get_active_server_backend_url(cfg)
+    info = {
+        "online": False,
+        "version": "",
+        "latestVersion": "1.2.2",
+        "url": backend_url or ""
+    }
+    if backend_url:
+        ok, data, code = _backend_http_request(f"{backend_url}/health", method="GET", timeout=1.5, retries=0)
+        if ok and isinstance(data, dict) and data.get("status") == "ok":
+            info["online"] = True
+            info["version"] = data.get("version", "")
+    _cached_backend_info["timestamp"] = now
+    _cached_backend_info["data"] = info
+    return dict(info)
+
+
+def handle_remote_backend_action(body):
+    """
+    Eksekusi 1-Klik Fresh Install atau Update OTA Backend ZimaOS via SSH & GitHub Release.
+    Mendukung automatic SFTP fallback ke paket lokal jika GitHub tidak dapat diakses.
+    """
+    action = (body.get("action") or "update").strip().lower()
+    req_server_id = (body.get("serverId") or body.get("server_id") or "").strip()
+
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    servers = cfg.get("servers", [])
+    srv = None
+    if req_server_id:
+        for s in servers:
+            if s.get("id") == req_server_id or s.get("name") == req_server_id:
+                srv = s
+                break
+    if not srv:
+        srv = config_manager.get_active_server(cfg)
+    if not srv:
+        return {"success": False, "status": "error", "message": "Server target tidak ditemukan."}
+
+    # 1. Kumpulkan kandidat host SSH (utamakan Remote P2P IP jika ada)
+    candidates = []
+    rem_info = config_manager.get_dynamic_remote_info(srv, cfg) if config_manager else None
+    rem_ip = rem_info.get("ip") if rem_info else ""
+    if not rem_ip:
+        rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
+    if rem_ip:
+        candidates.append(rem_ip)
+
+    for c in srv.get("connections", []):
+        curl = c.get("url", "")
+        ch = urllib.parse.urlparse(curl if "://" in curl else f"http://{curl}").hostname
+        if ch and ch not in candidates:
+            from smb_mount_manager import _is_domain_or_wan_host
+            if not _is_domain_or_wan_host(ch):
+                candidates.insert(0, ch)
+            else:
+                candidates.append(ch)
+
+    if not candidates:
+        return {"success": False, "status": "error", "message": "Tidak ada alamat host IP yang dapat dihubungi."}
+
+    # 2. Ambil kredensial admin (prioritaskan 'Admin' untuk izin sudo)
+    creds = config_manager.get_server_credentials(srv, "Admin") if config_manager else {}
+    user = (creds.get("username") or "").strip()
+    pwd = (creds.get("password") or "").strip()
+    if not user or not pwd:
+        active_p = srv.get("active_profile", "")
+        creds = config_manager.get_server_credentials(srv, active_p) if config_manager else {}
+        user = (creds.get("username") or "").strip()
+        pwd = (creds.get("password") or "").strip()
+    if not user:
+        user = srv.get("default_user") or srv.get("username") or "admin"
+
+    # 3. Hubungkan via Paramiko SSH
+    ssh_client = None
+    connected_host = None
+    connect_error = None
+    try:
+        import paramiko
+    except ImportError:
+        return {"success": False, "status": "error", "message": "Modul paramiko belum terpasang."}
+
+    for host_ip in candidates:
+        try:
+            logger_manager.log_info(f"[handle_remote_backend_action] Mencoba SSH ke {user}@{host_ip}:22...")
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(host_ip, port=22, username=user, password=pwd, timeout=5, banner_timeout=5)
+            ssh_client = client
+            connected_host = host_ip
+            logger_manager.log_info(f"[handle_remote_backend_action] SSH berhasil tersambung ke {host_ip}!")
+            break
+        except Exception as ex:
+            connect_error = ex
+            logger_manager.log_debug(f"[handle_remote_backend_action] Gagal SSH ke {host_ip}: {ex}")
+
+    if not ssh_client or not connected_host:
+        return {
+            "success": False,
+            "status": "error",
+            "message": f"Gagal menghubungkan sesi SSH ke server: {connect_error}"
+        }
+
+    try:
+        # 4. Unduh installer dari GitHub Release atau fallback ke SFTP lokal
+        _, _, _ = ssh_client.exec_command("mkdir -p /tmp/myserver_deploy")
+
+        github_url = "https://github.com/Gibranibang/My-Server-beta/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
+        curl_cmd = f"cd /tmp/myserver_deploy && curl -sSL -f '{github_url}' -o backend.tar.gz"
+        _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
+        exit_status = stdout.channel.recv_exit_status()
+
+        _, sz_stdout, _ = ssh_client.exec_command("wc -c < /tmp/myserver_deploy/backend.tar.gz 2>/dev/null || echo 0")
+        downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
+
+        if exit_status != 0 or downloaded_bytes < 1000:
+            logger_manager.log_info(f"[handle_remote_backend_action] GitHub download gagal/tidak lengkap ({downloaded_bytes} bytes). Mengunggah paket lokal via SFTP...")
+            base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
+            local_bundle = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.tar.gz")
+            if not os.path.exists(local_bundle):
+                local_bundle = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.tar.gz"
+
+            if os.path.exists(local_bundle):
+                sftp = ssh_client.open_sftp()
+                sftp.put(local_bundle, "/tmp/myserver_deploy/backend.tar.gz")
+                sftp.close()
+                logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
+            else:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "message": "Paket installer backend tidak dapat diunduh dari GitHub dan tidak ditemukan di lokal."
+                }
+
+        # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo
+        logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
+        exec_script = f"cd /tmp/myserver_deploy && tar -xzf backend.tar.gz && echo '{pwd}' | sudo -S bash install_zimaos.sh"
+        _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=60)
+        exec_exit = exec_stdout.channel.recv_exit_status()
+        exec_out_text = exec_stdout.read().decode("utf-8", errors="replace")
+        logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi: {exec_out_text[-500:]}")
+
+        # 6. Polling endpoint /health di port 8080 selama maksimal 30 detik
+        backend_url = f"http://{connected_host}:8080"
+        poll_ok = False
+        health_data = {}
+        logger_manager.log_info(f"[handle_remote_backend_action] Memulai verifikasi healthcheck ke {backend_url}/health...")
+        for _ in range(15):
+            time.sleep(2.0)
+            h_ok, h_data, h_code = _backend_http_request(f"{backend_url}/health", method="GET", timeout=2.0, retries=0)
+            if h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok":
+                poll_ok = True
+                health_data = h_data
+                break
+
+        if poll_ok:
+            ver = health_data.get("version", "1.2.2")
+            _cached_backend_info["timestamp"] = time.time()
+            _cached_backend_info["data"] = {
+                "online": True,
+                "version": ver,
+                "latestVersion": "1.2.2",
+                "url": backend_url
+            }
+            msg = "Backend server berhasil diperbarui!" if action == "update" else "Backend server berhasil dipasang!"
+            logger_manager.log_info(f"[handle_remote_backend_action] Sukses! Versi aktif: {ver}")
+            return {
+                "success": True,
+                "status": "ok",
+                "message": msg,
+                "backend": dict(_cached_backend_info["data"])
+            }
+        else:
+            return {
+                "success": False,
+                "status": "error",
+                "message": "Instalasi selesai namun healthcheck port 8080 tidak merespons dalam 30 detik."
+            }
+
+    finally:
+        try:
+            ssh_client.close()
+        except Exception:
+            pass
 
 
 def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=None, vm_id=None, force_window=False):
@@ -15687,6 +15926,7 @@ def get_server_details_data(cfg=None):
 
 
         "dpapiActive": bool(config_manager.is_dpapi_supported()),
+        "backend": _get_backend_health_info(cfg),
 
 
 
@@ -21181,6 +21421,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
             self._send_json(get_server_details_data())
 
+        elif path in ("/api/server/backend_status", "/api/server_backend_status"):
+            self._send_json(_get_backend_health_info(force=True))
+
 
 
 
@@ -21205,9 +21448,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             server_vms = []
             if srv and backend_url:
                 try:
-                    req = urllib.request.Request(f"{backend_url}/api/v1/vms", headers={"User-Agent": "MyServer-Core/4.5.0"})
-                    with urllib.request.urlopen(req, timeout=1.5) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
+                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.0)
+                    if ok and isinstance(data, dict):
                         raw_server_vms = data.get("vms", [])
                         for svm in raw_server_vms:
                             svm["scope"] = "server"
@@ -27743,6 +27985,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 "language": str(cfg.get("language", "en")),
                 "theme": str(cfg.get("theme", "dark")) if str(cfg.get("theme", "")).lower() in ("dark", "light") else "dark",
                 "dpapiActive": bool(config_manager.is_dpapi_supported()),
+        "backend": _get_backend_health_info(cfg),
 
 
 
@@ -28159,6 +28402,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 path = "/api/easytier/stop"
             elif ep in ("remote/status", "remote_status"):
                 path = "/api/remote/status"
+            elif ep in ("server/backend_action", "server_backend_action"):
+                path = "/api/server/backend_action"
+            elif ep in ("server/backend_status", "server_backend_status"):
+                path = "/api/server/backend_status"
 
         # --- Endpoints Persisten VM, Migrasi Server & Terminal SSH (v4.5.0 Beta) ---
         if path in ("/api/vms", "/api/vms/load"):
@@ -28174,13 +28421,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         if vm.get("scope") == "server":
                             try:
                                 b_payload = _prepare_vm_payload_for_backend(vm)
-                                b_req = urllib.request.Request(
-                                    f"{backend_url}/api/v1/vms",
-                                    data=json.dumps(b_payload).encode("utf-8"),
-                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.2"},
-                                    method="POST"
-                                )
-                                urllib.request.urlopen(b_req, timeout=2.0)
+                                _backend_http_request(f"{backend_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=2.5)
                             except Exception as be:
                                 logger_manager.log_debug(f"[api/vms] Gagal sync server VM {vm.get('id')}: {be}")
 
@@ -28196,9 +28437,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 server_vms = []
                 if srv and backend_url:
                     try:
-                        req = urllib.request.Request(f"{backend_url}/api/v1/vms", headers={"User-Agent": "MyServer-Core/4.5.2"})
-                        with urllib.request.urlopen(req, timeout=2.0) as resp:
-                            data = json.loads(resp.read().decode("utf-8"))
+                        ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.5)
+                        if ok and isinstance(data, dict):
                             raw_server_vms = data.get("vms", [])
                             for svm in raw_server_vms:
                                 svm["scope"] = "server"
@@ -28227,22 +28467,31 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             vms_list = body.get("vms")
             if isinstance(vms_list, list):
                 # Simpan seluruh VM (lokal & server) ke config persisten untuk mencegah kehilangan data
+                prev_server_ids = {
+                    v.get("id") for v in (cfg.get("vms", []) or [])
+                    if isinstance(v, dict) and v.get("scope") == "server" and v.get("id")
+                }
+                new_server_ids = {
+                    v.get("id") for v in vms_list
+                    if isinstance(v, dict) and v.get("scope") == "server" and v.get("id")
+                }
                 cfg["vms"] = vms_list
                 config_manager.save_config(cfg)
 
                 backend_url = _get_active_server_backend_url(cfg)
                 if backend_url:
+                    # Isolasi: VM yang dulu scope server tapi kini lokal / dihapus harus hilang dari ZimaOS
+                    for gone_id in (prev_server_ids - new_server_ids):
+                        try:
+                            _backend_http_request(f"{backend_url}/api/v1/vms/{gone_id}", method="DELETE", timeout=3.0)
+                            logger_manager.log_info(f"[api/vms/save] VM {gone_id} dihapus dari server ZimaOS (tidak lagi scope server)")
+                        except Exception as de:
+                            logger_manager.log_debug(f"[api/vms/save] Gagal hapus VM {gone_id} di server: {de}")
                     for vm in vms_list:
                         if vm.get("scope") == "server":
                             try:
                                 b_payload = _prepare_vm_payload_for_backend(vm)
-                                b_req = urllib.request.Request(
-                                    f"{backend_url}/api/v1/vms",
-                                    data=json.dumps(b_payload).encode("utf-8"),
-                                    headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.2"},
-                                    method="POST"
-                                )
-                                urllib.request.urlopen(b_req, timeout=2.0)
+                                _backend_http_request(f"{backend_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=2.5)
                             except Exception as be:
                                 logger_manager.log_debug(f"[api/vms/save] Gagal sync server VM {vm.get('id')}: {be}")
 
@@ -28272,13 +28521,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 target_vm["serverId"] = srv.get("id")
                 target_vm["serverName"] = srv.get("name")
                 try:
-                    b_req = urllib.request.Request(
-                        f"{backend_url}/api/v1/vms",
-                        data=json.dumps(target_vm).encode("utf-8"),
-                        headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.0"},
-                        method="POST"
-                    )
-                    urllib.request.urlopen(b_req, timeout=3.0)
+                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="POST", json_body=target_vm, timeout=3.0)
+                    if not ok:
+                        self._send_json({"status": "error", "message": f"Gagal migrasi ke ZimaOS: {data}"}, status=500)
+                        return
                 except Exception as be:
                     self._send_json({"status": "error", "message": f"Gagal migrasi ke ZimaOS: {be}"}, status=500)
                     return
@@ -28294,12 +28540,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 target_vm.pop("serverName", None)
                 if backend_url:
                     try:
-                        del_req = urllib.request.Request(
-                            f"{backend_url}/api/v1/vms/{vm_id}",
-                            headers={"User-Agent": "MyServer-Core/4.5.0"},
-                            method="DELETE"
-                        )
-                        urllib.request.urlopen(del_req, timeout=3.0)
+                        _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0)
                     except Exception as be:
                         logger_manager.log_debug(f"[api/vms/migrate] Warning: Gagal hapus dari backend saat migrasi ke lokal: {be}")
                 filtered = [v for v in local_vms if v.get("id") != vm_id]
@@ -28308,6 +28549,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 config_manager.save_config(cfg)
                 self._send_json({"status": "ok", "success": True, "vm": target_vm})
                 return
+
+        if path in ("/api/server/backend_status", "/api/server_backend_status"):
+            self._send_json(_get_backend_health_info(force=True))
+            return
+
+        if path in ("/api/server/backend_action", "/api/server_backend_action"):
+            res = handle_remote_backend_action(body)
+            status_code = 200 if res.get("success") else 500
+            self._send_json(res, status=status_code)
+            return
 
         if path == "/api/server/ssh_terminal":
             cfg = config_manager.load_or_create_config()
@@ -28440,6 +28691,23 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             cfg = config_manager.load_or_create_config() if config_manager else {}
             all_vms = (cfg.get("vms", []) or []) + (cfg.get("instabox_vms", []) or [])
 
+            # Isolasi: VM scope server dieksekusi oleh backend ZimaOS, bukan dari PC ini
+            if _find_server_vm(cfg, vm_id):
+                srv_action = "wake" if action_type == "resume" else "sleep"
+                ok, data, code = _proxy_server_vm_action(cfg, vm_id, srv_action)
+                if ok:
+                    self._send_json({
+                        "status": "ok",
+                        "message": f"VM berhasil {action_name} (dieksekusi oleh server).",
+                        "vmStatus": new_status,
+                        "machineId": machine_id,
+                        "executedBy": "server",
+                        "result": data,
+                    })
+                else:
+                    self._send_json({"status": "error", "message": str(data)}, status=code)
+                return
+
             # Cari kredensial dari config jika tidak dikirim dari frontend
             if (not api_key or not machine_id) and vm_id:
                 for v in all_vms:
@@ -28537,6 +28805,15 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             api_key = (body.get("apiKey") or "").strip()
             machine_id = (body.get("machineId") or "").strip()
             vm_id = body.get("id") or body.get("vmId")
+            _sr_cfg = config_manager.load_or_create_config() if config_manager else {}
+            if _find_server_vm(_sr_cfg, vm_id):
+                ok, data, code = _proxy_server_vm_action(_sr_cfg, vm_id, "smart-reset", timeout=60.0)
+                if ok:
+                    self._send_json({"success": True, "status": "ok", "executedBy": "server",
+                                     "message": "Smart reset dieksekusi oleh server ZimaOS.", "result": data})
+                else:
+                    self._send_json({"success": False, "status": "error", "error": str(data), "message": str(data)}, status=code)
+                return
             if not machine_id and instabox_manager and vm_id:
                 vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
                 if vm_rec:
@@ -28569,6 +28846,27 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 return
 
         if path == "/api/instabox/sync":
+            _sy_vm_id = (body.get("vmId") or "").strip()
+            _sy_cfg = config_manager.load_or_create_config() if config_manager else {}
+            if _find_server_vm(_sy_cfg, _sy_vm_id):
+                ok, data, code = _proxy_server_vm_action(_sy_cfg, _sy_vm_id, "sync", timeout=20.0)
+                if ok and isinstance(data, dict):
+                    st = str(data.get("status") or "").lower()
+                    self._send_json({
+                        "success": True,
+                        "executedBy": "server",
+                        "state": "running" if st == "running" else "suspended",
+                        "machineId": data.get("machineId") or data.get("machine_id"),
+                        "runtimeMinutes": data.get("runtimeMinutes", data.get("runtime_minutes", 0)),
+                        "maxRuntimeMinutes": data.get("maxRuntimeMinutes", 480),
+                        "sshHost": data.get("sshHost") or "ssh.instabox.sh",
+                        "sshPort": data.get("sshPort") or 2222,
+                        "sshUser": data.get("sshUser"),
+                        "telemetry": data.get("telemetry"),
+                    })
+                else:
+                    self._send_json({"success": False, "error": str(data)})
+                return
             api_key = (body.get("apiKey") or "").strip()
             vm_name = (body.get("vmName") or "").strip()
             machine_id = (body.get("machineId") or "").strip()
@@ -29158,21 +29456,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
         if path == "/api/get_server_details":
-
-
-
-
-
-
-
             self._send_json(get_server_details_data())
+            return
 
-
-
-
-
-
-
+        if path in ("/api/server/backend_status", "/api/server_backend_status"):
+            self._send_json(_get_backend_health_info(force=True))
             return
 
 
@@ -31754,6 +32042,28 @@ _vm_daemon_state = {
     "last_heartbeat": {},
 }
 
+def _find_server_vm(cfg, vm_id):
+    """Mengembalikan VM ber-scope server dari config lokal (None jika bukan VM server)."""
+    if not vm_id:
+        return None
+    for v in (cfg.get("vms", []) or []):
+        if isinstance(v, dict) and v.get("id") == vm_id and v.get("scope") == "server":
+            return v
+    return None
+
+
+def _proxy_server_vm_action(cfg, vm_id, action, timeout=40.0):
+    """Meneruskan aksi VM ke backend ZimaOS. Return (ok, data_or_error, http_status)."""
+    backend_url = _get_active_server_backend_url(cfg)
+    if not backend_url:
+        return False, "Server ZimaOS tidak terhubung atau offline. VM server hanya bisa dikontrol lewat server.", 503
+    url = f"{backend_url}/api/v1/vms/{vm_id}/{action}"
+    ok, data, code = _backend_http_request(url, method="POST", json_body={}, timeout=timeout, retries=1)
+    if not ok:
+        return False, f"Backend ZimaOS ({code}): {data}", code
+    return True, data, code
+
+
 def _instabox_api_action(api_key, machine_id, action):
     req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/{action}"
     headers = {
@@ -31790,6 +32100,9 @@ def vm_power_scheduler_loop():
 
                 for vm in vms:
                     if not isinstance(vm, dict):
+                        continue
+                    # Isolasi: VM scope server dikontrol 100% oleh daemon backend ZimaOS
+                    if vm.get("scope") == "server":
                         continue
                     vm_id = str(vm.get("id") or "")
                     provider = str(vm.get("provider") or "instabox")

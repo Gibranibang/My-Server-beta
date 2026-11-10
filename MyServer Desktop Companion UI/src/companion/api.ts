@@ -320,6 +320,10 @@ export interface CompanionApi {
 
   executeRestoreDialog(targetFile?: string): Promise<{ success: boolean; rollbackFile?: string; restarting?: boolean; cancelled?: boolean; error?: string }>
 
+  triggerBackendAction?(action: "install" | "update", serverId?: string): Promise<{ success: boolean; status?: string; message?: string; backend?: any }>
+
+  getBackendStatus?(serverId?: string): Promise<{ online: boolean; version?: string; latestVersion?: string }>
+
 }
 
 
@@ -955,6 +959,14 @@ export function createMockApi(): CompanionApi {
     async configCredentials(): Promise<void> {},
 
     async joinZeroTier(): Promise<void> {},
+
+    async triggerBackendAction(action: "install" | "update", serverId?: string) {
+      return { success: true, status: "ok", message: "Mock backend updated", backend: { online: true, version: "1.2.2", latestVersion: "1.2.2" } }
+    },
+
+    async getBackendStatus(serverId?: string) {
+      return { online: true, version: "1.2.2", latestVersion: "1.2.2" }
+    },
 
     async getEasyTierStatus() {
       return {

@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "4.5.2"
+VERSION = "4.5.3"
 
 APP_NAME = "My-Server by algitha BETA"
 
@@ -56,11 +56,16 @@ else:
     src_tauri_exe = cand2
 print(f"[*] Menggunakan biner Companion: {src_tauri_exe}")
 
-src_core_exe = os.path.join(BASE_BETA, r"sandbox\dist\myserver-core.exe")
-
-if not os.path.exists(src_core_exe):
-
-    src_core_exe = r"D:\Projek\dist\myserver-core.exe"
+src_core_cands = [
+    os.path.join(BASE_BETA, r"dist\myserver-core.exe"),
+    os.path.join(BASE_BETA, r"sandbox\dist\myserver-core.exe"),
+    r"D:\Projek\dist\myserver-core.exe"
+]
+existing_core_cands = [c for c in src_core_cands if os.path.exists(c)]
+if existing_core_cands:
+    src_core_exe = max(existing_core_cands, key=os.path.getmtime)
+else:
+    src_core_exe = os.path.join(BASE_BETA, r"sandbox\dist\myserver-core.exe")
 
 
 

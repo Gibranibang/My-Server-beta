@@ -3868,9 +3868,116 @@ def _backend_http_request(url, method="GET", json_body=None, headers=None, timeo
     return False, f"Gagal menghubungi backend ZimaOS: {last_err}", 502
 
 
+_cached_bundled_backend_version = {"timestamp": 0, "version": ""}
+
+def _get_bundled_backend_version():
+    """
+    Menemukan dan membaca versi backend ZimaOS yang dibundel di folder resources secara dinamis.
+    1. Membaca backend_manifest.json di resources/ (jika ada)
+    2. Menginspeksi file ZIP/TAR.GZ di resources/ dan mengekstrak SERVER_VERSION langsung dari config.py
+    Nol hardcoding versi maupun path developer lokal.
+    """
+    global _cached_bundled_backend_version
+    now = time.time()
+    if _cached_bundled_backend_version["version"] and (now - _cached_bundled_backend_version["timestamp"] < 30):
+        return _cached_bundled_backend_version["version"]
+
+    base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
+    res_dir = os.path.join(base_d, "resources")
+
+    # 1. Coba baca backend_manifest.json di resources/
+    manifest_file = os.path.join(res_dir, "backend_manifest.json")
+    if os.path.isfile(manifest_file):
+        try:
+            with open(manifest_file, "r", encoding="utf-8") as f:
+                mdata = json.load(f)
+                v = (mdata.get("backend_version") or mdata.get("version") or "").strip()
+                if v:
+                    _cached_bundled_backend_version = {"timestamp": now, "version": v}
+                    return v
+        except Exception as e:
+            logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal membaca manifest: {e}")
+
+    # 2. Coba inspeksi ZIP di resources/
+    import zipfile
+    import re
+    if os.path.isdir(res_dir):
+        for fn in os.listdir(res_dir):
+            if fn.startswith("MyServer-Backend") and fn.endswith(".zip"):
+                zpath = os.path.join(res_dir, fn)
+                try:
+                    with zipfile.ZipFile(zpath, "r") as z:
+                        for name in z.namelist():
+                            if name.endswith("config.py"):
+                                content = z.read(name).decode("utf-8", errors="ignore")
+                                m = re.search(r'SERVER_VERSION\s*=\s*[\"\']([^\"\']+)[\"\']', content)
+                                if m:
+                                    v = m.group(1).strip()
+                                    _cached_bundled_backend_version = {"timestamp": now, "version": v}
+                                    return v
+                except Exception as e:
+                    logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi ZIP {zpath}: {e}")
+
+    # 3. Coba inspeksi TAR.GZ di resources/
+    import tarfile
+    if os.path.isdir(res_dir):
+        for fn in os.listdir(res_dir):
+            if fn.startswith("MyServer-Backend") and (fn.endswith(".tar.gz") or fn.endswith(".tgz")):
+                tpath = os.path.join(res_dir, fn)
+                try:
+                    with tarfile.open(tpath, "r:gz") as t:
+                        for member in t.getmembers():
+                            if member.name.endswith("config.py"):
+                                f = t.extractfile(member)
+                                if f:
+                                    content = f.read().decode("utf-8", errors="ignore")
+                                    m = re.search(r'SERVER_VERSION\s*=\s*[\"\']([^\"\']+)[\"\']', content)
+                                    if m:
+                                        v = m.group(1).strip()
+                                        _cached_bundled_backend_version = {"timestamp": now, "version": v}
+                                        return v
+                except Exception as e:
+                    logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi TAR {tpath}: {e}")
+
+    return _cached_bundled_backend_version["version"] or ""
+
+
+def _get_bundled_backend_packages():
+    """
+    Menemukan path berkas paket ZIP dan TAR.GZ di folder resources secara dinamis dan portabel.
+    Tidak ada path absolut hardcoded.
+    """
+    base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
+    res_dir = os.path.join(base_d, "resources")
+
+    zip_pkg = None
+    tar_pkg = None
+
+    if os.path.isdir(res_dir):
+        cand_zip = os.path.join(res_dir, "MyServer-Backend-ZimaOS.zip")
+        if os.path.isfile(cand_zip):
+            zip_pkg = cand_zip
+        else:
+            for fn in os.listdir(res_dir):
+                if fn.startswith("MyServer-Backend") and fn.endswith(".zip"):
+                    zip_pkg = os.path.join(res_dir, fn)
+                    break
+
+        cand_tar = os.path.join(res_dir, "MyServer-Backend-ZimaOS.tar.gz")
+        if os.path.isfile(cand_tar):
+            tar_pkg = cand_tar
+        else:
+            for fn in os.listdir(res_dir):
+                if fn.startswith("MyServer-Backend") and (fn.endswith(".tar.gz") or fn.endswith(".tgz")):
+                    tar_pkg = os.path.join(res_dir, fn)
+                    break
+
+    return zip_pkg, tar_pkg
+
+
 _cached_backend_info = {
     "timestamp": 0,
-    "data": {"online": False, "version": "", "latestVersion": "1.2.3", "url": ""}
+    "data": {"online": False, "version": "", "latestVersion": "", "url": ""}
 }
 
 def _get_backend_health_info(cfg=None, force=False):
@@ -3882,10 +3989,11 @@ def _get_backend_health_info(cfg=None, force=False):
     if cfg is None:
         cfg = config_manager.load_or_create_config() if config_manager else {}
     backend_url = _get_active_server_backend_url(cfg)
+    target_ver = _get_bundled_backend_version()
     info = {
         "online": False,
         "version": "",
-        "latestVersion": "1.2.3",
+        "latestVersion": target_ver,
         "url": backend_url or ""
     }
     if backend_url:
@@ -3922,14 +4030,12 @@ def handle_remote_backend_action(body):
 
         # Jalur Cepat 1: HTTP OTA langsung jika backend server saat ini sudah online
         target_backend_url = _get_active_server_backend_url(cfg, target_server_id=srv.get("id"))
-        base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
-        local_zip = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.zip")
-        if not os.path.exists(local_zip):
-            local_zip = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.zip"
+        target_ver = _get_bundled_backend_version()
+        local_zip, local_bundle = _get_bundled_backend_packages()
 
-        if action == "update" and target_backend_url and os.path.exists(local_zip):
+        if action == "update" and target_backend_url and local_zip and os.path.exists(local_zip):
             try:
-                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {target_backend_url}/api/v1/system/update...")
+                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {target_backend_url}/api/v1/system/update (paket: {local_zip})...")
                 boundary = f"----WebKitFormBoundary{int(time.time()*1000)}"
                 with open(local_zip, "rb") as zf:
                     zip_bytes = zf.read()
@@ -3956,15 +4062,15 @@ def handle_remote_backend_action(body):
                         time.sleep(3.5)
                         h_ok, h_data, _ = _backend_http_request(f"{target_backend_url}/health", method="GET", timeout=3.0, retries=5)
                         ver = h_data.get("version", "") if (h_ok and isinstance(h_data, dict)) else ""
-                        target_ver = "1.2.3"
+                        active_target_ver = target_ver or ver
                         _cached_backend_info["timestamp"] = time.time()
                         _cached_backend_info["data"] = {
                             "online": True,
-                            "version": ver or target_ver,
-                            "latestVersion": target_ver,
+                            "version": ver or active_target_ver,
+                            "latestVersion": active_target_ver,
                             "url": target_backend_url
                         }
-                        if ver and ver != target_ver:
+                        if target_ver and ver and ver != target_ver:
                             logger_manager.log_warning(f"[handle_remote_backend_action] HTTP OTA selesai namun versi server {ver} != {target_ver}")
                             return {
                                 "success": False,
@@ -3975,7 +4081,7 @@ def handle_remote_backend_action(body):
                         return {
                             "success": True,
                             "status": "ok",
-                            "message": f"Backend ZimaOS v{ver or target_ver} berhasil diperbarui!",
+                            "message": f"Backend ZimaOS v{ver or active_target_ver} berhasil diperbarui!",
                             "backend": dict(_cached_backend_info["data"])
                         }
             except Exception as ota_err:
@@ -4052,12 +4158,7 @@ def handle_remote_backend_action(body):
             ssh_client.exec_command(f"rm -rf {deploy_dir} && mkdir -p {deploy_dir}")
 
             uploaded_local = False
-            base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
-            local_bundle = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.tar.gz")
-            if not os.path.exists(local_bundle):
-                local_bundle = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.tar.gz"
-
-            if os.path.exists(local_bundle):
+            if local_bundle and os.path.exists(local_bundle):
                 try:
                     logger_manager.log_info(f"[handle_remote_backend_action] Mengunggah paket lokal {local_bundle} via SFTP...")
                     sftp = ssh_client.open_sftp()
@@ -4096,7 +4197,6 @@ def handle_remote_backend_action(body):
             backend_url = f"http://{connected_host}:8080"
             poll_ok = False
             health_data = {}
-            target_ver = "1.2.3"
             logger_manager.log_info(f"[handle_remote_backend_action] Memulai verifikasi healthcheck ke {backend_url}/health...")
             for _ in range(15):
                 time.sleep(2.0)
@@ -4107,15 +4207,16 @@ def handle_remote_backend_action(body):
                     break
 
             if poll_ok:
-                ver = health_data.get("version", target_ver)
+                ver = health_data.get("version", "")
+                active_target_ver = target_ver or ver
                 _cached_backend_info["timestamp"] = time.time()
                 _cached_backend_info["data"] = {
                     "online": True,
                     "version": ver,
-                    "latestVersion": target_ver,
+                    "latestVersion": active_target_ver,
                     "url": backend_url
                 }
-                if ver != target_ver:
+                if target_ver and ver and ver != target_ver:
                     logger_manager.log_error(f"[handle_remote_backend_action] Versi aktif ({ver}) tidak sesuai target ({target_ver}).")
                     return {
                         "success": False,
@@ -4123,7 +4224,7 @@ def handle_remote_backend_action(body):
                         "message": f"Instalasi backend selesai, namun versi server tetap v{ver} (seharusnya v{target_ver}).",
                         "backend": dict(_cached_backend_info["data"])
                     }
-                msg = f"Backend server berhasil diperbarui ke v{ver}!" if action == "update" else f"Backend server v{ver} berhasil dipasang!"
+                msg = f"Backend server berhasil diperbarui ke v{ver or active_target_ver}!" if action == "update" else f"Backend server v{ver or active_target_ver} berhasil dipasang!"
                 logger_manager.log_info(f"[handle_remote_backend_action] Sukses! Versi aktif: {ver}")
                 return {
                     "success": True,

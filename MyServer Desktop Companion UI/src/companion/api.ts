@@ -973,11 +973,11 @@ export function createMockApi(): CompanionApi {
     async joinZeroTier(): Promise<void> {},
 
     async triggerBackendAction(action: "install" | "update", serverId?: string) {
-      return { success: true, status: "ok", message: "Mock backend updated", backend: { online: true, version: "1.2.2", latestVersion: "1.2.2" } }
+      return { success: true, status: "ok", message: "Mock backend updated", backend: { online: true, version: "", latestVersion: "" } }
     },
 
     async getBackendStatus(serverId?: string) {
-      return { online: true, version: "1.2.2", latestVersion: "1.2.2" }
+      return { online: true, version: "", latestVersion: "" }
     },
 
     async getEasyTierStatus() {

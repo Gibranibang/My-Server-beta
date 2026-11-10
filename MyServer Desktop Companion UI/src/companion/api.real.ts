@@ -1199,7 +1199,7 @@ export function createRealApi(): CompanionApi {
       } catch (err) {
         console.warn('[RealApi] getBackendStatus error:', err)
       }
-      return { online: false, version: '', latestVersion: '1.2.2' }
+      return { online: false, version: '', latestVersion: '' }
     },
 
     async openVmWindow(vmId: string, title: string, url: string) {

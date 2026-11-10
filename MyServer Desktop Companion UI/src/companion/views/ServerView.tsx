@@ -33,6 +33,18 @@ import type { ServerDetails, ServerRoute } from "../types"
 import type { ViewProps } from "./shared"
 import { ViewBody } from "./shared"
 
+function compareSemver(a: string, b: string): number {
+  const pa = a.replace(/^v/i, "").split(".").map(n => parseInt(n, 10) || 0)
+  const pb = b.replace(/^v/i, "").split(".").map(n => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0
+    const nb = pb[i] || 0
+    if (na > nb) return 1
+    if (na < nb) return -1
+  }
+  return 0
+}
+
 export default function ServerView({ go }: ViewProps) {
   const api = getCompanionApi()
   const { isOnline, settings, startTransition, endTransition, runWithTransition } = useCompanion()
@@ -147,9 +159,12 @@ export default function ServerView({ go }: ViewProps) {
   }
 
   const backendOnline = Boolean(details?.backend?.online)
-  const backendVer = details?.backend?.version || ""
-  const isBackendUpToDate = backendOnline && (backendVer === "1.2.3" || backendVer.startsWith("1.2.3"))
-  const isBackendOld = backendOnline && !isBackendUpToDate
+  const backendVer = (details?.backend?.version || "").replace(/^v/i, "").trim()
+  const latestBackendVer = (details?.backend?.latestVersion || "").replace(/^v/i, "").trim()
+  const isBackendUpToDate = backendOnline && Boolean(backendVer) && Boolean(latestBackendVer) && (
+    backendVer === latestBackendVer || compareSemver(backendVer, latestBackendVer) >= 0
+  )
+  const isBackendOld = backendOnline && Boolean(latestBackendVer) && !isBackendUpToDate
 
   const copyText = async (text: string, label: string) => {
     if (!text) return
@@ -620,11 +635,11 @@ export default function ServerView({ go }: ViewProps) {
               ) : isBackendUpToDate ? (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold text-[10px]">
                   <Check className="size-3" />
-                  <span>{details?.backend?.version ? `v${details.backend.version} (${t("server_backend_uptodate_tag", "Terbaru")})` : t("server_backend_uptodate", "Backend ZimaOS: Terbaru")}</span>
+                  <span>{backendVer ? `v${backendVer} (${t("server_backend_uptodate_tag", "Terbaru")})` : t("server_backend_uptodate", "Backend ZimaOS: Terbaru")}</span>
                 </span>
               ) : isBackendOld ? (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold text-[10px]">
-                  <span>{`v${details?.backend?.version || "1.2.x"} -> v1.2.3`}</span>
+                  <span>{`v${backendVer || "?"} -> v${latestBackendVer}`}</span>
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-surface-muted text-ink-muted font-medium text-[10px]">
@@ -655,7 +670,7 @@ export default function ServerView({ go }: ViewProps) {
                 ) : isBackendOld ? (
                   <>
                     <RefreshCw className="size-3.5 text-amber-600 dark:text-amber-400" />
-                    <span>{t("server_backend_update", "Perbarui Backend v1.2.3")}</span>
+                    <span>{t("server_backend_update", "Perbarui Backend")}{latestBackendVer ? ` v${latestBackendVer}` : ""}</span>
                   </>
                 ) : (
                   <>

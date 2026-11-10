@@ -28165,8 +28165,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             cfg = config_manager.load_or_create_config()
             if "vms" in body and isinstance(body.get("vms"), list):
                 vms_list = body["vms"]
-                local_vms = [v for v in vms_list if v.get("scope") != "server"]
-                cfg["vms"] = local_vms
+                cfg["vms"] = vms_list
                 config_manager.save_config(cfg)
 
                 backend_url = _get_active_server_backend_url(cfg)
@@ -28181,15 +28180,14 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                                     headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.2"},
                                     method="POST"
                                 )
-                                urllib.request.urlopen(b_req, timeout=1.5)
+                                urllib.request.urlopen(b_req, timeout=2.0)
                             except Exception as be:
                                 logger_manager.log_debug(f"[api/vms] Gagal sync server VM {vm.get('id')}: {be}")
 
                 self._send_json({"status": "ok", "success": True, "vms": vms_list})
             else:
-                # v4.5.1 Beta: Query dinamis ke ZimaOS Backend saat request load (mendukung sinkronisasi multi-device)
-                local_vms = cfg.get("vms", [])
-                for vm in local_vms:
+                cached_vms = cfg.get("vms", [])
+                for vm in cached_vms:
                     if not vm.get("scope"):
                         vm["scope"] = "local"
 
@@ -28198,8 +28196,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 server_vms = []
                 if srv and backend_url:
                     try:
-                        req = urllib.request.Request(f"{backend_url}/api/v1/vms", headers={"User-Agent": "MyServer-Core/4.5.1"})
-                        with urllib.request.urlopen(req, timeout=1.5) as resp:
+                        req = urllib.request.Request(f"{backend_url}/api/v1/vms", headers={"User-Agent": "MyServer-Core/4.5.2"})
+                        with urllib.request.urlopen(req, timeout=2.0) as resp:
                             data = json.loads(resp.read().decode("utf-8"))
                             raw_server_vms = data.get("vms", [])
                             for svm in raw_server_vms:
@@ -28208,15 +28206,17 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                                 svm["serverName"] = srv.get("name")
                                 server_vms.append(svm)
                     except Exception as be:
-                        logger_manager.log_debug(f"[api/vms/load] Gagal sync server VMs dari backend ZimaOS: {be}")
+                        logger_manager.log_debug(f"[api/vms/load] Info: Server VMs belum tersedia dari backend ZimaOS: {be}")
 
                 seen_ids = set()
                 combined = []
                 for vm in server_vms:
                     seen_ids.add(vm.get("id"))
                     combined.append(vm)
-                for vm in local_vms:
+                # Pertahankan seluruh VM cache (lokal maupun server) agar tidak hilang saat backend belum siap
+                for vm in cached_vms:
                     if vm.get("id") not in seen_ids:
+                        seen_ids.add(vm.get("id"))
                         combined.append(vm)
 
                 self._send_json({"status": "ok", "vms": combined})
@@ -28226,8 +28226,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             cfg = config_manager.load_or_create_config()
             vms_list = body.get("vms")
             if isinstance(vms_list, list):
-                local_vms = [v for v in vms_list if v.get("scope") != "server"]
-                cfg["vms"] = local_vms
+                # Simpan seluruh VM (lokal & server) ke config persisten untuk mencegah kehilangan data
+                cfg["vms"] = vms_list
                 config_manager.save_config(cfg)
 
                 backend_url = _get_active_server_backend_url(cfg)
@@ -28242,7 +28242,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                                     headers={"Content-Type": "application/json", "User-Agent": "MyServer-Core/4.5.2"},
                                     method="POST"
                                 )
-                                urllib.request.urlopen(b_req, timeout=1.5)
+                                urllib.request.urlopen(b_req, timeout=2.0)
                             except Exception as be:
                                 logger_manager.log_debug(f"[api/vms/save] Gagal sync server VM {vm.get('id')}: {be}")
 
@@ -28427,82 +28427,100 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"status": "error", "message": "VM ID missing or instabox_manager not available"}, status=400)
             return
 
-        if path == "/api/instabox/wake":
+        if path in ("/api/instabox/wake", "/api/instabox/pause"):
+            action_type = "resume" if path == "/api/instabox/wake" else "suspend"
+            action_name = "dibangunkan" if action_type == "resume" else "ditidurkan"
+            new_status = "running" if action_type == "resume" else "sleeping"
+
             vm_id = body.get("id") or body.get("vmId")
             api_key = (body.get("apiKey") or "").strip()
             machine_id = (body.get("machineId") or "").strip()
-            if not machine_id and instabox_manager and vm_id:
-                vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
-                if vm_rec:
-                    machine_id = vm_rec.get("machineId", "")
-                    api_key = api_key or vm_rec.get("apiKey", "")
+            vm_name = (body.get("vmName") or body.get("name") or "").strip()
 
-            if machine_id and api_key:
-                req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/resume"
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "Idempotency-Key": str(uuid.uuid4())
-                }
-                try:
-                    req = urllib.request.Request(req_url, data=b"{}", headers=headers, method="POST")
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        resp_data = json.loads(resp.read().decode("utf-8") or "{}")
-                    if instabox_manager and vm_id:
-                        instabox_manager.InstaBoxManager.update_vm(vm_id, {"status": "running", "lastActive": "Just now"})
-                    self._send_json({"status": "ok", "message": "VM berhasil dibangunkan.", "result": resp_data})
-                except urllib.error.HTTPError as he:
-                    err_txt = he.read().decode("utf-8") if hasattr(he, "read") else ""
-                    self._send_json({"status": "error", "message": f"HTTP {he.code}: {err_txt}", "code": he.code}, status=he.code)
-                except Exception as ex:
-                    self._send_json({"status": "error", "message": str(ex)}, status=500)
+            cfg = config_manager.load_or_create_config() if config_manager else {}
+            all_vms = (cfg.get("vms", []) or []) + (cfg.get("instabox_vms", []) or [])
+
+            # Cari kredensial dari config jika tidak dikirim dari frontend
+            if (not api_key or not machine_id) and vm_id:
+                for v in all_vms:
+                    if isinstance(v, dict) and v.get("id") == vm_id:
+                        api_key = api_key or v.get("apiKey", "")
+                        machine_id = machine_id or v.get("machineId", "")
+                        vm_name = vm_name or v.get("name", "")
+                        break
+
+            # Jika apiKey masih kosong, ambil dari VM manapun yang memilikinya
+            if not api_key:
+                for v in all_vms:
+                    if isinstance(v, dict) and v.get("apiKey"):
+                        api_key = v.get("apiKey")
+                        break
+
+            if not api_key:
+                self._send_json({"status": "error", "message": "API Key InstaBox belum diisi."}, status=400)
                 return
 
-            if instabox_manager and vm_id:
-                res = instabox_manager.InstaBoxManager.resume_vm(vm_id)
-                self._send_json(res)
-            else:
-                self._send_json({"status": "error", "message": "Kredensial Machine ID / API Key InstaBox belum lengkap."}, status=400)
-            return
-
-        if path == "/api/instabox/pause":
-            vm_id = body.get("id") or body.get("vmId")
-            api_key = (body.get("apiKey") or "").strip()
-            machine_id = (body.get("machineId") or "").strip()
-            if not machine_id and instabox_manager and vm_id:
-                vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
-                if vm_rec:
-                    machine_id = vm_rec.get("machineId", "")
-                    api_key = api_key or vm_rec.get("apiKey", "")
-
-            if machine_id and api_key:
-                req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/suspend"
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "Idempotency-Key": str(uuid.uuid4())
-                }
+            # Jika machine_id belum ada, temukan via list machines API
+            if not machine_id:
                 try:
-                    req = urllib.request.Request(req_url, data=b"{}", headers=headers, method="POST")
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        resp_data = json.loads(resp.read().decode("utf-8") or "{}")
-                    if instabox_manager and vm_id:
-                        instabox_manager.InstaBoxManager.update_vm(vm_id, {"status": "sleeping", "lastActive": "Just now"})
-                    self._send_json({"status": "ok", "message": "VM berhasil di-pause (tidur).", "result": resp_data})
-                except urllib.error.HTTPError as he:
-                    err_txt = he.read().decode("utf-8") if hasattr(he, "read") else ""
-                    self._send_json({"status": "error", "message": f"HTTP {he.code}: {err_txt}", "code": he.code}, status=he.code)
-                except Exception as ex:
-                    self._send_json({"status": "error", "message": str(ex)}, status=500)
+                    m_req = urllib.request.Request("https://api.instabox.sh/v1/machines", headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"})
+                    with urllib.request.urlopen(m_req, timeout=8) as m_resp:
+                        raw_data = m_resp.read()
+                        m_list = json.loads(raw_data.decode("utf-8")).get("machines", [])
+                        if m_list:
+                            if vm_name:
+                                norm_target = re.sub(r"[^a-z0-9]", "", vm_name.lower())
+                                for m in m_list:
+                                    mn = m.get("name", "")
+                                    if mn and (norm_target in re.sub(r"[^a-z0-9]", "", mn.lower()) or re.sub(r"[^a-z0-9]", "", mn.lower()) in norm_target):
+                                        machine_id = m.get("id")
+                                        break
+                            if not machine_id:
+                                machine_id = m_list[0].get("id")
+                except Exception as me:
+                    logger_manager.log_warn(f"[InstaBox {action_type}] Gagal auto-resolve machineId: {me}")
+
+            if not machine_id:
+                self._send_json({"status": "error", "message": "Machine ID InstaBox tidak ditemukan di akun ini."}, status=400)
                 return
 
-            if instabox_manager and vm_id:
-                res = instabox_manager.InstaBoxManager.pause_vm(vm_id)
-                self._send_json(res)
-            else:
-                self._send_json({"status": "error", "message": "Kredensial Machine ID / API Key InstaBox belum lengkap."}, status=400)
+            req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/{action_type}"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Idempotency-Key": str(uuid.uuid4())
+            }
+            try:
+                req = urllib.request.Request(req_url, data=b"{}", headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    raw_b = resp.read()
+                    resp_data = json.loads(raw_b.decode("utf-8")) if raw_b else {"status": "ok"}
+
+                # Update status secara persisten di config
+                changed = False
+                for v in cfg.get("vms", []):
+                    if isinstance(v, dict) and (v.get("id") == vm_id or v.get("machineId") == machine_id):
+                        v["status"] = new_status
+                        v["machineId"] = machine_id
+                        v["apiKey"] = api_key
+                        v["lastActive"] = "Just now" if new_status == "running" else "Sleeping"
+                        changed = True
+                if changed and config_manager:
+                    config_manager.save_config(cfg)
+
+                self._send_json({
+                    "status": "ok",
+                    "message": f"VM berhasil {action_name}.",
+                    "vmStatus": new_status,
+                    "machineId": machine_id,
+                    "result": resp_data
+                })
+            except urllib.error.HTTPError as he:
+                err_txt = he.read().decode("utf-8") if hasattr(he, "read") else ""
+                self._send_json({"status": "error", "message": f"InstaBox API HTTP {he.code}: {err_txt}", "code": he.code}, status=he.code)
+            except Exception as ex:
+                self._send_json({"status": "error", "message": f"Gagal mengeksekusi {action_type}: {ex}"}, status=500)
             return
 
         if path == "/api/instabox/preflight_launch":
@@ -28669,6 +28687,12 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     except Exception as me:
                         logger_manager.log_warn(f"[InstaBox] Gagal mengambil metrics VM {mid}: {me}")
 
+                    # Jika mesin dalam kondisi tidur/suspended, metrik aktif tidak valid (CPU 0/kosong)
+                    if str(state).lower() not in ("running", "active"):
+                        metrics_res["cpuPct"] = None
+                        metrics_res["ramUsedBytes"] = None
+                        metrics_res["diskUsedBytes"] = None
+
                     # 4. Connection Info for host / port / username
                     conn_host = "ssh.instabox.sh"
                     conn_port = 2222
@@ -28692,9 +28716,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         "maxRuntimeMinutes": target.get("maxRunMinutes", 480),
                         "idleTimeoutMinutes": int(target.get("autoSuspendAfterSeconds", 1800) / 60),
                         "screenUrl": f"https://dashboard.instabox.sh/machines/{mid}",
-                        "sshHost": conn_host,
-                        "sshPort": conn_port,
-                        "sshUser": conn_user,
+                        "sshHost": conn_host or "ssh.instabox.sh",
+                        "sshPort": conn_port or 2222,
+                        "sshUser": conn_user or mid,
                         "telemetry": metrics_res
                     })
                     return

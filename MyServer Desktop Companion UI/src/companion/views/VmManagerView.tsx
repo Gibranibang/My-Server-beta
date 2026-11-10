@@ -165,15 +165,22 @@ export default function VmManagerView({ go }: ViewProps) {
     if (api.loadVms) {
       api.loadVms().then((remoteVms) => {
         hasLoadedRemote.current = true
-        if (Array.isArray(remoteVms)) {
+        if (Array.isArray(remoteVms) && remoteVms.length > 0) {
           setVms((prev) => {
             const remoteServerVms = remoteVms.filter((v: any) => v.scope === "server")
             const remoteLocalVms = remoteVms.filter((v: any) => v.scope !== "server")
             const currentLocals = prev.filter((v: any) => v.scope !== "server")
+            const currentServers = prev.filter((v: any) => v.scope === "server")
             const baseLocals = currentLocals.length > 0 ? currentLocals : remoteLocalVms
             const serverIds = new Set(remoteServerVms.map((v: any) => v.id))
             const cleanLocals = baseLocals.filter((v: any) => !serverIds.has(v.id))
-            return [...cleanLocals, ...remoteServerVms]
+            const mergedServers = [...remoteServerVms]
+            for (const s of currentServers) {
+              if (!serverIds.has(s.id)) {
+                mergedServers.push(s)
+              }
+            }
+            return [...cleanLocals, ...mergedServers]
           })
         }
       }).catch(() => {
@@ -217,13 +224,20 @@ export default function VmManagerView({ go }: ViewProps) {
                     ? {
                         ...v,
                         machineId: res.machineId || v.machineId || mid,
-                        status: isRunning ? "running" : (res.state ? "sleeping" : v.status),
+                        status: isRunning ? "running" : "sleeping",
                         sleepingSince: !isRunning ? (v.sleepingSince || Date.now()) : undefined,
-                        runtimeMinutes: typeof res.runtimeMinutes === "number" && res.runtimeMinutes > 0 ? res.runtimeMinutes : (v.runtimeMinutes ?? 0),
+                        runtimeMinutes: typeof res.runtimeMinutes === "number" ? res.runtimeMinutes : (v.runtimeMinutes ?? 0),
                         maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
                         idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
                         screenUrl: v.screenUrl || res.screenUrl,
-                        telemetry: res.telemetry || v.telemetry,
+                        sshHost: res.sshHost || v.sshHost || "ssh.instabox.sh",
+                        sshPort: res.sshPort || v.sshPort || 2222,
+                        sshUser: res.sshUser || v.sshUser || res.machineId,
+                        ip: res.ip || res.sshHost || v.ip || "ssh.instabox.sh",
+                        apiKey: v.apiKey || apiKey,
+                        telemetry: isRunning
+                          ? (res.telemetry || v.telemetry)
+                          : { ...(res.telemetry || {}), cpuPct: null, ramUsedBytes: null, diskUsedBytes: null },
                       }
                     : v
                 )
@@ -243,12 +257,10 @@ export default function VmManagerView({ go }: ViewProps) {
           const mid = vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined)
           if (vm.status === "sleeping") {
             api.wakeInstaBoxVm({ apiKey: vm.apiKey, machineId: mid, vmId: vm.id }).then((res: any) => {
-              if (!res || res.status !== "error") {
-                setVms((prev) =>
-                  prev.map((item) =>
-                    item.id === vm.id ? { ...item, status: "running", sleepingSince: undefined } : item
-                  )
-                )
+              if (res && res.status === "ok") {
+                setTimeout(() => {
+                  syncActiveInstaboxVms()
+                }, 3000)
               }
             }).catch(() => {})
           }
@@ -379,9 +391,9 @@ export default function VmManagerView({ go }: ViewProps) {
 
   // Generate full SSH command
   const getSshCommand = (vm: VirtualMachine) => {
-    const port = vm.sshPort || 2222
-    const user = vm.sshUser ? `${vm.sshUser}@` : ""
-    const host = vm.sshHost || vm.ip || "ssh.instabox.sh"
+    const port = vm.sshPort || (vm.provider === "instabox" ? 2222 : 22)
+    const user = vm.sshUser ? `${vm.sshUser}@` : (vm.machineId ? `${vm.machineId}@` : "")
+    const host = vm.sshHost || vm.ip || (vm.provider === "instabox" ? "ssh.instabox.sh" : "127.0.0.1")
     return `ssh -p ${port} ${user}${host}`
   }
 
@@ -413,17 +425,25 @@ export default function VmManagerView({ go }: ViewProps) {
           return
         }
 
+        const realStatus = res?.vmStatus || nextStatus
         setVms((prev) =>
           prev.map((item) =>
             item.id === vm.id
               ? {
                   ...item,
-                  status: nextStatus,
-                  lastActive: nextStatus === "running" ? "Just now" : "Sleeping",
+                  status: realStatus,
+                  machineId: res?.machineId || item.machineId || payload.machineId,
+                  sshHost: item.sshHost || "ssh.instabox.sh",
+                  sshPort: item.sshPort || 2222,
+                  sshUser: item.sshUser || res?.machineId || payload.machineId,
+                  lastActive: realStatus === "running" ? "Just now" : "Sleeping",
                 }
               : item
           )
         )
+        setTimeout(() => {
+          syncActiveInstaboxVms()
+        }, 2500)
         notify(
           nextStatus === "running"
             ? (language === "id" ? `${vm.name}: VM Berhasil Dibangunkan!` : `${vm.name}: VM Woken Up Successfully!`)
@@ -1032,7 +1052,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   {vm.name}
                 </span>
                 <span className="text-nano text-ink-subtle truncate">
-                  {vm.provider === "instabox" ? "InstaBox Cloud" : "Linux VM"} · {vm.sshHost || vm.ip}:{vm.sshPort}
+                  {vm.provider === "instabox" ? "InstaBox Cloud" : "Linux VM"} · {vm.sshHost || vm.ip || (vm.provider === "instabox" ? "ssh.instabox.sh" : "127.0.0.1")}:{vm.sshPort || (vm.provider === "instabox" ? 2222 : 22)}
                 </span>
               </div>
             </div>
@@ -1130,7 +1150,7 @@ export default function VmManagerView({ go }: ViewProps) {
           <div className="flex flex-col">
             <span className="text-[9px] uppercase font-bold text-ink-faint">CPU</span>
             <Mono className="text-[11px] font-semibold text-ink">
-              {vm.telemetry?.cpuPct != null ? `${vm.telemetry.cpuPct}%` : "—"}
+              {vm.status === "running" && vm.telemetry?.cpuPct != null ? `${vm.telemetry.cpuPct}%` : "—"}
             </Mono>
           </div>
           <div className="flex flex-col border-x border-line/40">
@@ -1166,7 +1186,7 @@ export default function VmManagerView({ go }: ViewProps) {
           <div className="flex items-center justify-between gap-1 text-ink-muted">
             <span className="text-[10px]">Host:</span>
             <Mono className="text-[10.5px] text-ink truncate select-all">
-              {vm.sshHost || vm.ip}:{vm.sshPort}
+              {vm.sshHost || vm.ip || (vm.provider === "instabox" ? "ssh.instabox.sh" : "127.0.0.1")}:{vm.sshPort || (vm.provider === "instabox" ? 2222 : 22)}
             </Mono>
           </div>
 
@@ -1224,67 +1244,9 @@ export default function VmManagerView({ go }: ViewProps) {
             )}
           </button>
 
-          {/* Action Grid 3x2 Simetris (Opsi A): Layar Virtual | SFTP, Auto-On | Auto-Restart, Daya | Always-On */}
+          {/* Action Grid 3x2 Simetris: Baris 1: Daya | Layar Virtual, Baris 2: Always-On | SFTP, Baris 3: Auto-On | Auto-Restart */}
           <div className="grid grid-cols-2 gap-1.5 w-full mt-1">
-            {/* Baris 1, Kolom 1: Layar Virtual */}
-            <Button
-              size="sm"
-              variant="subtle"
-              icon={Monitor}
-              iconClassName="size-3.5 shrink-0 text-info-ink"
-              onClick={() => handleOpenScreen(vm)}
-              className="h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 text-ink min-w-0"
-            >
-              <span className="truncate">{t("vm_screen_btn")}</span>
-            </Button>
-
-            {/* Baris 1, Kolom 2: SFTP */}
-            <Button
-              size="sm"
-              variant="subtle"
-              icon={Folder}
-              iconClassName="size-3.5 shrink-0 text-ink"
-              onClick={() => handleCopySftp(vm)}
-              className="h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 text-ink min-w-0"
-            >
-              <span className="truncate">{t("vm_sftp_btn")}</span>
-            </Button>
-
-            {/* Baris 2, Kolom 1: Auto-On (Jadwal Nyala Otomatis) */}
-            <Button
-              size="sm"
-              variant={vm.autoOn?.enabled ? "info" : "subtle"}
-              icon={Clock}
-              iconClassName={cx("size-3.5 shrink-0", vm.autoOn?.enabled ? "text-info-ink" : "text-ink")}
-              onClick={() => handleOpenAutoOn(vm)}
-              className={cx(
-                "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
-                vm.autoOn?.enabled
-                  ? "border-info-line/70 bg-info-soft/50 text-info-ink"
-                  : "text-ink"
-              )}
-            >
-              <span className="truncate">{t("vm_autoon_btn", "Auto-On")}</span>
-            </Button>
-
-            {/* Baris 2, Kolom 2: Auto-Restart */}
-            <Button
-              size="sm"
-              variant={vm.autoRestart?.enabled ? "info" : "subtle"}
-              icon={RotateCcw}
-              iconClassName={cx("size-3.5 shrink-0", vm.autoRestart?.enabled ? "text-info-ink" : "text-ink")}
-              onClick={() => handleOpenSchedule(vm)}
-              className={cx(
-                "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
-                vm.autoRestart?.enabled
-                  ? "border-info-line/70 bg-info-soft/50 text-info-ink"
-                  : "text-ink"
-              )}
-            >
-              <span className="truncate">{t("vm_autorestart_btn")}</span>
-            </Button>
-
-            {/* Baris 3, Kolom 1: Daya (Tidurkan / Bangunkan) */}
+            {/* Baris 1, Kolom 1: Daya (Tidurkan / Bangunkan) */}
             <Button
               size="sm"
               variant="subtle"
@@ -1294,7 +1256,6 @@ export default function VmManagerView({ go }: ViewProps) {
               onClick={() => handleTogglePower(vm)}
               className={cx(
                 "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
-                vm.provider !== "instabox" && "col-span-2",
                 vm.status === "running"
                   ? "text-warning-ink hover:border-warning-line/80"
                   : "text-success-ink hover:border-success-line/80"
@@ -1309,8 +1270,20 @@ export default function VmManagerView({ go }: ViewProps) {
               </span>
             </Button>
 
-            {/* Baris 3, Kolom 2: Always-On (Khusus InstaBox) */}
-            {vm.provider === "instabox" && (
+            {/* Baris 1, Kolom 2: Layar Virtual */}
+            <Button
+              size="sm"
+              variant="subtle"
+              icon={Monitor}
+              iconClassName="size-3.5 shrink-0 text-info-ink"
+              onClick={() => handleOpenScreen(vm)}
+              className="h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 text-ink min-w-0"
+            >
+              <span className="truncate">{t("vm_screen_btn")}</span>
+            </Button>
+
+            {/* Baris 2, Kolom 1: Always-On (Khusus InstaBox) */}
+            {vm.provider === "instabox" ? (
               <Button
                 size="sm"
                 variant={vm.keepAliveEnabled ? "info" : "subtle"}
@@ -1327,7 +1300,55 @@ export default function VmManagerView({ go }: ViewProps) {
               >
                 <span className="truncate">{t("vm_always_on_btn")}</span>
               </Button>
+            ) : (
+              <div />
             )}
+
+            {/* Baris 2, Kolom 2: SFTP */}
+            <Button
+              size="sm"
+              variant="subtle"
+              icon={Folder}
+              iconClassName="size-3.5 shrink-0 text-ink"
+              onClick={() => handleCopySftp(vm)}
+              className="h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 text-ink min-w-0"
+            >
+              <span className="truncate">{t("vm_sftp_btn")}</span>
+            </Button>
+
+            {/* Baris 3, Kolom 1: Auto-On (Jadwal Nyala Otomatis) */}
+            <Button
+              size="sm"
+              variant={vm.autoOn?.enabled ? "info" : "subtle"}
+              icon={Clock}
+              iconClassName={cx("size-3.5 shrink-0", vm.autoOn?.enabled ? "text-info-ink" : "text-ink")}
+              onClick={() => handleOpenAutoOn(vm)}
+              className={cx(
+                "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
+                vm.autoOn?.enabled
+                  ? "border-info-line/70 bg-info-soft/50 text-info-ink"
+                  : "text-ink"
+              )}
+            >
+              <span className="truncate">{t("vm_autoon_btn", "Auto-On")}</span>
+            </Button>
+
+            {/* Baris 3, Kolom 2: Auto-Restart */}
+            <Button
+              size="sm"
+              variant={vm.autoRestart?.enabled ? "info" : "subtle"}
+              icon={RotateCcw}
+              iconClassName={cx("size-3.5 shrink-0", vm.autoRestart?.enabled ? "text-info-ink" : "text-ink")}
+              onClick={() => handleOpenSchedule(vm)}
+              className={cx(
+                "h-8 justify-center gap-1.5 text-[10px] font-semibold px-1.5 transition-colors min-w-0",
+                vm.autoRestart?.enabled
+                  ? "border-info-line/70 bg-info-soft/50 text-info-ink"
+                  : "text-ink"
+              )}
+            >
+              <span className="truncate">{t("vm_autorestart_btn")}</span>
+            </Button>
           </div>
 
           {/* Web App Button (if webPort/webUrl configured) */}
@@ -1383,7 +1404,7 @@ export default function VmManagerView({ go }: ViewProps) {
                 {vm.name}
               </span>
               <span className="text-nano text-ink-subtle truncate">
-                {vm.sshHost || vm.ip}:{vm.sshPort}
+                {vm.sshHost || vm.ip || (vm.provider === "instabox" ? "ssh.instabox.sh" : "127.0.0.1")}:{vm.sshPort || (vm.provider === "instabox" ? 2222 : 22)}
               </span>
             </div>
           </div>

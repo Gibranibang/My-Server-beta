@@ -51,12 +51,15 @@ class InstaBoxManager:
     def list_vms(cls):
         """
         Mengambil daftar virtual machine yang tersimpan dalam config.
-        Jika belum ada konfigurasi VM, kembalikan daftar kosong (tanpa hardcoding).
+        Memeriksa 'vms' dan 'instabox_vms'.
         """
         cfg = cls._get_config()
-        vms = cfg.get("instabox_vms", [])
-        if not isinstance(vms, list):
-            vms = []
+        vms = []
+        seen = set()
+        for v in (cfg.get("vms", []) or []) + (cfg.get("instabox_vms", []) or []):
+            if isinstance(v, dict) and v.get("id") and v.get("id") not in seen:
+                seen.add(v.get("id"))
+                vms.append(v)
         return vms
 
     @classmethod
@@ -249,10 +252,10 @@ class InstaBoxManager:
 
         machine_id = vm.get("machineId")
         api_key = vm.get("apiKey")
-        if not machine_id or not api_key:
-            # Mode simulasi/lokal jika kredensial belum diisi
-            cls.update_vm(vm_id, {"status": "running", "lastActive": "Just now"})
-            return {"status": "ok", "message": "VM simulasi berhasil dibangunkan.", "simulated": True}
+        if not api_key:
+            return {"status": "error", "message": "API Key InstaBox belum dikonfigurasi.", "code": 401}
+        if not machine_id:
+            return {"status": "error", "message": "Machine ID InstaBox belum ditentukan.", "code": 400}
 
         res = cls._api_request(f"machines/{machine_id}/resume", method="POST", body={}, api_key=api_key)
         if "error" in res:
@@ -282,9 +285,10 @@ class InstaBoxManager:
 
         machine_id = vm.get("machineId")
         api_key = vm.get("apiKey")
-        if not machine_id or not api_key:
-            cls.update_vm(vm_id, {"status": "sleeping", "lastActive": "Just now"})
-            return {"status": "ok", "message": "VM simulasi berhasil di-pause.", "simulated": True}
+        if not api_key:
+            return {"status": "error", "message": "API Key InstaBox belum dikonfigurasi.", "code": 401}
+        if not machine_id:
+            return {"status": "error", "message": "Machine ID InstaBox belum ditentukan.", "code": 400}
 
         res = cls._api_request(f"machines/{machine_id}/suspend", method="POST", body={}, api_key=api_key)
         if "error" in res:

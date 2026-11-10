@@ -3920,6 +3920,67 @@ def handle_remote_backend_action(body):
         if not srv:
             return {"success": False, "status": "error", "message": "Server target tidak ditemukan."}
 
+        # Jalur Cepat 1: HTTP OTA langsung jika backend server saat ini sudah online
+        target_backend_url = _get_active_server_backend_url(cfg, target_server_id=srv.get("id"))
+        base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
+        local_zip = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.zip")
+        if not os.path.exists(local_zip):
+            local_zip = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.zip"
+
+        if action == "update" and target_backend_url and os.path.exists(local_zip):
+            try:
+                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {target_backend_url}/api/v1/system/update...")
+                boundary = f"----WebKitFormBoundary{int(time.time()*1000)}"
+                with open(local_zip, "rb") as zf:
+                    zip_bytes = zf.read()
+                parts = []
+                parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"username\"\r\n\r\nadmin\r\n".encode("utf-8"))
+                parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"update.zip\"\r\nContent-Type: application/zip\r\n\r\n".encode("utf-8"))
+                parts.append(zip_bytes)
+                parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+                body_bytes = b"".join(parts)
+
+                req = urllib.request.Request(
+                    f"{target_backend_url}/api/v1/system/update",
+                    data=body_bytes,
+                    headers={
+                        "Content-Type": f"multipart/form-data; boundary={boundary}",
+                        "Connection": "close"
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    if resp_data.get("status") == "success":
+                        logger_manager.log_info("[handle_remote_backend_action] HTTP OTA berhasil! Menunggu restart server...")
+                        time.sleep(3.5)
+                        h_ok, h_data, _ = _backend_http_request(f"{target_backend_url}/health", method="GET", timeout=3.0, retries=5)
+                        ver = h_data.get("version", "") if (h_ok and isinstance(h_data, dict)) else ""
+                        target_ver = "1.2.3"
+                        _cached_backend_info["timestamp"] = time.time()
+                        _cached_backend_info["data"] = {
+                            "online": True,
+                            "version": ver or target_ver,
+                            "latestVersion": target_ver,
+                            "url": target_backend_url
+                        }
+                        if ver and ver != target_ver:
+                            logger_manager.log_warning(f"[handle_remote_backend_action] HTTP OTA selesai namun versi server {ver} != {target_ver}")
+                            return {
+                                "success": False,
+                                "status": "error",
+                                "message": f"Update OTA selesai namun versi server tetap v{ver} (target v{target_ver}).",
+                                "backend": dict(_cached_backend_info["data"])
+                            }
+                        return {
+                            "success": True,
+                            "status": "ok",
+                            "message": f"Backend ZimaOS v{ver or target_ver} berhasil diperbarui!",
+                            "backend": dict(_cached_backend_info["data"])
+                        }
+            except Exception as ota_err:
+                logger_manager.log_info(f"[handle_remote_backend_action] HTTP OTA dilewati / gagal ({ota_err}), melanjutkan ke alur SSH...")
+
         # 1. Kumpulkan kandidat host SSH (utamakan Remote P2P IP jika ada)
         candidates = []
         rem_info = config_manager.get_dynamic_remote_info(srv, cfg) if config_manager else None
@@ -3986,43 +4047,41 @@ def handle_remote_backend_action(body):
             }
 
         try:
-            # 4. Unduh installer dari GitHub Release atau fallback ke SFTP lokal
+            # 4. Unggah paket lokal via SFTP (prioritas) atau unduh dari GitHub Release
             deploy_dir = f"/tmp/myserver_deploy_{user}"
             ssh_client.exec_command(f"rm -rf {deploy_dir} && mkdir -p {deploy_dir}")
 
-            github_url = "https://github.com/Gibranibang/My-Server-beta/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
-            curl_cmd = f"cd {deploy_dir} && curl -sSL -f '{github_url}' -o backend.tar.gz"
-            _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
-            exit_status = stdout.channel.recv_exit_status()
+            uploaded_local = False
+            base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
+            local_bundle = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.tar.gz")
+            if not os.path.exists(local_bundle):
+                local_bundle = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.tar.gz"
 
-            _, sz_stdout, _ = ssh_client.exec_command(f"wc -c < {deploy_dir}/backend.tar.gz 2>/dev/null || echo 0")
-            downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
+            if os.path.exists(local_bundle):
+                try:
+                    logger_manager.log_info(f"[handle_remote_backend_action] Mengunggah paket lokal {local_bundle} via SFTP...")
+                    sftp = ssh_client.open_sftp()
+                    sftp.put(local_bundle, f"{deploy_dir}/backend.tar.gz")
+                    sftp.close()
+                    uploaded_local = True
+                    logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
+                except Exception as sftp_err:
+                    logger_manager.log_warning(f"[handle_remote_backend_action] Gagal upload SFTP ({sftp_err}), mencoba unduh dari GitHub...")
 
-            if exit_status != 0 or downloaded_bytes < 1000:
-                logger_manager.log_info(f"[handle_remote_backend_action] GitHub download gagal/tidak lengkap ({downloaded_bytes} bytes). Mengunggah paket lokal via SFTP...")
-                base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
-                local_bundle = os.path.join(base_d, "resources", "MyServer-Backend-ZimaOS.tar.gz")
-                if not os.path.exists(local_bundle):
-                    local_bundle = r"D:\Projek\MyServer Backend by algitha\MyServer-Backend-ZimaOS.tar.gz"
+            if not uploaded_local:
+                github_url = "https://github.com/Gibranibang/My-Server-beta/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
+                curl_cmd = f"cd {deploy_dir} && curl -sSL -f '{github_url}' -o backend.tar.gz"
+                _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
+                exit_status = stdout.channel.recv_exit_status()
 
-                if os.path.exists(local_bundle):
-                    try:
-                        sftp = ssh_client.open_sftp()
-                        sftp.put(local_bundle, f"{deploy_dir}/backend.tar.gz")
-                        sftp.close()
-                        logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
-                    except Exception as sftp_err:
-                        logger_manager.log_error(f"[handle_remote_backend_action] Gagal upload SFTP: {sftp_err}")
-                        return {
-                            "success": False,
-                            "status": "error",
-                            "message": f"Gagal mengunggah paket installer backend via SFTP: {sftp_err}"
-                        }
-                else:
+                _, sz_stdout, _ = ssh_client.exec_command(f"wc -c < {deploy_dir}/backend.tar.gz 2>/dev/null || echo 0")
+                downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
+
+                if exit_status != 0 or downloaded_bytes < 1000:
                     return {
                         "success": False,
                         "status": "error",
-                        "message": "Paket installer backend tidak dapat diunduh dari GitHub dan tidak ditemukan di lokal."
+                        "message": "Paket installer backend tidak dapat diunggah via SFTP maupun diunduh dari GitHub."
                     }
 
             # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo
@@ -4037,6 +4096,7 @@ def handle_remote_backend_action(body):
             backend_url = f"http://{connected_host}:8080"
             poll_ok = False
             health_data = {}
+            target_ver = "1.2.3"
             logger_manager.log_info(f"[handle_remote_backend_action] Memulai verifikasi healthcheck ke {backend_url}/health...")
             for _ in range(15):
                 time.sleep(2.0)
@@ -4047,15 +4107,23 @@ def handle_remote_backend_action(body):
                     break
 
             if poll_ok:
-                ver = health_data.get("version", "1.2.3")
+                ver = health_data.get("version", target_ver)
                 _cached_backend_info["timestamp"] = time.time()
                 _cached_backend_info["data"] = {
                     "online": True,
                     "version": ver,
-                    "latestVersion": "1.2.3",
+                    "latestVersion": target_ver,
                     "url": backend_url
                 }
-                msg = "Backend server berhasil diperbarui!" if action == "update" else "Backend server berhasil dipasang!"
+                if ver != target_ver:
+                    logger_manager.log_error(f"[handle_remote_backend_action] Versi aktif ({ver}) tidak sesuai target ({target_ver}).")
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "message": f"Instalasi backend selesai, namun versi server tetap v{ver} (seharusnya v{target_ver}).",
+                        "backend": dict(_cached_backend_info["data"])
+                    }
+                msg = f"Backend server berhasil diperbarui ke v{ver}!" if action == "update" else f"Backend server v{ver} berhasil dipasang!"
                 logger_manager.log_info(f"[handle_remote_backend_action] Sukses! Versi aktif: {ver}")
                 return {
                     "success": True,

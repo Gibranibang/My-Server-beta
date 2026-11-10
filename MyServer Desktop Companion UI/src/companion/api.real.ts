@@ -1082,6 +1082,26 @@ export function createRealApi(): CompanionApi {
       return { status: 'error' }
     },
 
+    async deleteVm(vmId: string, scope?: string) {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        try {
+          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
+          return await invoke('call_core_api', { endpoint: 'vms/delete', payload: { vmId, scope } })
+        } catch (err) {
+          console.warn('[RealApi] deleteVm invoke error:', err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && api['vms/delete']) {
+          return await api['vms/delete']({ vmId, scope })
+        }
+      } catch (err) {
+        console.warn('[RealApi] deleteVm error:', err)
+      }
+      return { status: 'error' }
+    },
+
     async migrateVm(vmId: string, targetScope: "server" | "local") {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {

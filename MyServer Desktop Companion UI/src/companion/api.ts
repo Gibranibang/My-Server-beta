@@ -138,6 +138,8 @@ export interface CompanionApi {
 
   saveVms?(vms: VirtualMachine[]): Promise<any>
 
+  deleteVm?(vmId: string, scope?: string): Promise<any>
+
   migrateVm?(vmId: string, targetScope: "server" | "local"): Promise<any>
 
   openSshTerminal?(params?: { host?: string; user?: string; port?: number }): Promise<any>
@@ -782,6 +784,10 @@ export function createMockApi(): CompanionApi {
     },
 
     async saveVms() {
+      return { status: "ok", success: true }
+    },
+
+    async deleteVm(_vmId: string, _scope?: string) {
       return { status: "ok", success: true }
     },
 

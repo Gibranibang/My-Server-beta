@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.3"
+APP_VERSION_NUMBER = "4.5.4"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -28424,8 +28424,39 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 path = "/api/server/backend_action"
             elif ep in ("server/backend_status", "server_backend_status"):
                 path = "/api/server/backend_status"
+            elif ep in ("vms/load", "vms_load"):
+                path = "/api/vms/load"
+            elif ep in ("vms/save", "vms_save"):
+                path = "/api/vms/save"
+            elif ep in ("vms/delete", "vms_delete"):
+                path = "/api/vms/delete"
+            elif ep in ("vms/migrate", "vms_migrate"):
+                path = "/api/vms/migrate"
 
-        # --- Endpoints Persisten VM, Migrasi Server & Terminal SSH (v4.5.0 Beta) ---
+        # --- Endpoints Persisten VM, Migrasi Server & Terminal SSH (v4.5.4 Beta) ---
+        if path in ("/api/vms/delete", "/api/vms_delete"):
+            vm_id = (body.get("vmId") or body.get("vm_id") or body.get("id") or "").strip()
+            if not vm_id:
+                self._send_json({"status": "error", "message": "vmId is required"}, status=400)
+                return
+            cfg = config_manager.load_or_create_config()
+            local_vms = cfg.get("vms", []) or []
+            cfg["vms"] = [v for v in local_vms if isinstance(v, dict) and v.get("id") != vm_id]
+            config_manager.save_config(cfg)
+
+            backend_url = _get_active_server_backend_url(cfg)
+            server_deleted = False
+            if backend_url:
+                try:
+                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=4.0)
+                    server_deleted = ok
+                    logger_manager.log_info(f"[/api/vms/delete] VM {vm_id} berhasil dihapus dari ZimaOS: {ok} (code {code})")
+                except Exception as de:
+                    logger_manager.log_error(f"[/api/vms/delete] Gagal hapus VM {vm_id} dari server ZimaOS: {de}")
+
+            self._send_json({"status": "ok", "success": True, "server_deleted": server_deleted, "vmId": vm_id})
+            return
+
         if path in ("/api/vms", "/api/vms/load"):
             cfg = config_manager.load_or_create_config()
             if "vms" in body and isinstance(body.get("vms"), list):
@@ -28445,18 +28476,20 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
                 self._send_json({"status": "ok", "success": True, "vms": vms_list})
             else:
-                cached_vms = cfg.get("vms", [])
+                cached_vms = cfg.get("vms", []) or []
                 for vm in cached_vms:
-                    if not vm.get("scope"):
+                    if isinstance(vm, dict) and not vm.get("scope"):
                         vm["scope"] = "local"
 
                 srv = config_manager.get_active_server(cfg)
                 backend_url = _get_active_server_backend_url(cfg)
                 server_vms = []
+                server_online = False
                 if srv and backend_url:
                     try:
                         ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.5)
                         if ok and isinstance(data, dict):
+                            server_online = True
                             raw_server_vms = data.get("vms", [])
                             for svm in raw_server_vms:
                                 svm["scope"] = "server"
@@ -28471,12 +28504,19 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 for vm in server_vms:
                     seen_ids.add(vm.get("id"))
                     combined.append(vm)
-                # Pertahankan seluruh VM cache (lokal maupun server) agar tidak hilang saat backend belum siap
+                # Pertahankan seluruh VM lokal murni; jangan hidupkan kembali server VM yang sudah dihapus jika server online
                 for vm in cached_vms:
-                    if vm.get("id") not in seen_ids:
-                        seen_ids.add(vm.get("id"))
-                        combined.append(vm)
+                    if not isinstance(vm, dict):
+                        continue
+                    vid = vm.get("id")
+                    vscope = vm.get("scope", "local")
+                    if vid not in seen_ids:
+                        if vscope != "server" or not server_online:
+                            seen_ids.add(vid)
+                            combined.append(vm)
 
+                cfg["vms"] = combined
+                config_manager.save_config(cfg)
                 self._send_json({"status": "ok", "vms": combined})
             return
 
@@ -28484,7 +28524,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             cfg = config_manager.load_or_create_config()
             vms_list = body.get("vms")
             if isinstance(vms_list, list):
-                # Simpan seluruh VM (lokal & server) ke config persisten untuk mencegah kehilangan data
+                # Simpan seluruh VM (lokal & server) ke config persisten
                 prev_server_ids = {
                     v.get("id") for v in (cfg.get("vms", []) or [])
                     if isinstance(v, dict) and v.get("scope") == "server" and v.get("id")
@@ -28498,15 +28538,25 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
                 backend_url = _get_active_server_backend_url(cfg)
                 if backend_url:
+                    try:
+                        live_ok, live_data, _ = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.0)
+                        if live_ok and isinstance(live_data, dict):
+                            live_vms = live_data.get("vms", [])
+                            for lv in live_vms:
+                                if isinstance(lv, dict) and lv.get("id"):
+                                    prev_server_ids.add(lv.get("id"))
+                    except Exception:
+                        pass
+
                     # Isolasi: VM yang dulu scope server tapi kini lokal / dihapus harus hilang dari ZimaOS
                     for gone_id in (prev_server_ids - new_server_ids):
                         try:
                             _backend_http_request(f"{backend_url}/api/v1/vms/{gone_id}", method="DELETE", timeout=3.0)
-                            logger_manager.log_info(f"[api/vms/save] VM {gone_id} dihapus dari server ZimaOS (tidak lagi scope server)")
+                            logger_manager.log_info(f"[api/vms/save] VM {gone_id} dihapus dari server ZimaOS")
                         except Exception as de:
                             logger_manager.log_debug(f"[api/vms/save] Gagal hapus VM {gone_id} di server: {de}")
                     for vm in vms_list:
-                        if vm.get("scope") == "server":
+                        if isinstance(vm, dict) and vm.get("scope") == "server":
                             try:
                                 b_payload = _prepare_vm_payload_for_backend(vm)
                                 _backend_http_request(f"{backend_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=2.5)

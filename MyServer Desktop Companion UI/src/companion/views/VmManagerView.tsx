@@ -157,30 +157,32 @@ export default function VmManagerView({ go }: ViewProps) {
   const isSingle = visibleVms.length === 1 && !showGroupHeaders
   const isMultiple = visibleVms.length > 1 || showGroupHeaders
 
-  // v4.5.1 Beta: Ref pelindung penyimpanan agar tidak menimpa sebelum sinkronisasi backend selesai
+  // v4.5.4 Beta: Ref pelindung penyimpanan agar tidak menimpa sebelum sinkronisasi backend selesai
   const hasLoadedRemote = useRef<boolean>(false)
 
-  // Load & Sinkronisasi Pintar VM Server & Lokal (Mendukung Multi-Device & Pergantian Server Aktif)
+  // Load & Sinkronisasi Pintar VM Server & Lokal (Mendukung Multi-Device & Bebas Zombie VM)
   const syncVmsFromBackend = useCallback(() => {
     if (api.loadVms) {
       api.loadVms().then((remoteVms) => {
         hasLoadedRemote.current = true
-        if (Array.isArray(remoteVms) && remoteVms.length > 0) {
+        if (Array.isArray(remoteVms)) {
           setVms((prev) => {
             const remoteServerVms = remoteVms.filter((v: any) => v.scope === "server")
-            const remoteLocalVms = remoteVms.filter((v: any) => v.scope !== "server")
             const currentLocals = prev.filter((v: any) => v.scope !== "server")
-            const currentServers = prev.filter((v: any) => v.scope === "server")
+            const remoteLocalVms = remoteVms.filter((v: any) => v.scope !== "server")
             const baseLocals = currentLocals.length > 0 ? currentLocals : remoteLocalVms
             const serverIds = new Set(remoteServerVms.map((v: any) => v.id))
             const cleanLocals = baseLocals.filter((v: any) => !serverIds.has(v.id))
-            const mergedServers = [...remoteServerVms]
-            for (const s of currentServers) {
-              if (!serverIds.has(s.id)) {
-                mergedServers.push(s)
-              }
+            
+            // Server VMs adalah sumber kebenaran mutlak (authoritative) dari server ZimaOS.
+            // Jangan hidupkan kembali (resurrect) VM server yang sudah dihapus dari server!
+            const merged = [...cleanLocals, ...remoteServerVms]
+            if (typeof window !== "undefined") {
+              try {
+                localStorage.setItem("myserver_vms", JSON.stringify(merged))
+              } catch {}
             }
-            return [...cleanLocals, ...mergedServers]
+            return merged
           })
         }
       }).catch(() => {
@@ -189,21 +191,42 @@ export default function VmManagerView({ go }: ViewProps) {
     }
   }, [api])
 
+  // Multi-Device Real-Time Sync: Polling setiap 10 detik & saat window kembali fokus
   useEffect(() => {
     syncVmsFromBackend()
-    window.addEventListener("myserver:refresh", syncVmsFromBackend)
-    return () => window.removeEventListener("myserver:refresh", syncVmsFromBackend)
+    const interval = setInterval(syncVmsFromBackend, 10000)
+    const onRefresh = () => syncVmsFromBackend()
+    const onFocus = () => syncVmsFromBackend()
+    window.addEventListener("myserver:refresh", onRefresh)
+    window.addEventListener("focus", onFocus)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener("myserver:refresh", onRefresh)
+      window.removeEventListener("focus", onFocus)
+    }
   }, [syncVmsFromBackend, activeServerId])
 
-  // Save to localStorage and backend config.json whenever vms change
+  // Helper persisten untuk aksi pengguna eksplisit (Add, Edit, Migrate, Toggle KeepAlive, Schedule)
+  const persistVmChanges = useCallback((updatedVms: VirtualMachine[]) => {
+    setVms(updatedVms)
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("myserver_vms", JSON.stringify(updatedVms))
+      } catch {}
+    }
+    if (api.saveVms) {
+      void api.saveVms(updatedVms).catch((err) => {
+        console.warn("[VmManagerView] saveVms error:", err)
+      })
+    }
+  }, [api])
+
+  // Save to localStorage whenever vms change
   useEffect(() => {
     if (typeof window !== "undefined") {
       try {
         localStorage.setItem("myserver_vms", JSON.stringify(vms))
       } catch {}
-    }
-    if (api.saveVms && hasLoadedRemote.current) {
-      void api.saveVms(vms).catch(() => {})
     }
   }, [vms])
 
@@ -459,18 +482,17 @@ export default function VmManagerView({ go }: ViewProps) {
     const nextServerId = nextScope === "server" ? activeServerId : undefined
     const nextServerName = nextScope === "server" ? activeServerName : undefined
 
-    setVms((prev) =>
-      prev.map((item) =>
-        item.id === vm.id
-          ? {
-              ...item,
-              scope: nextScope,
-              serverId: nextServerId,
-              serverName: nextServerName,
-            }
-          : item
-      )
+    const updated = vms.map((item) =>
+      item.id === vm.id
+        ? {
+            ...item,
+            scope: nextScope,
+            serverId: nextServerId,
+            serverName: nextServerName,
+          }
+        : item
     )
+    persistVmChanges(updated)
 
     const targetLabel = nextScope === "server" ? `${activeServerName}` : (language === "id" ? "Perangkat Ini (Lokal)" : "This Device (Local)")
     notify(
@@ -485,8 +507,28 @@ export default function VmManagerView({ go }: ViewProps) {
   const handleDeleteConfirm = () => {
     if (!vmToDelete) return
     const targetId = vmToDelete.id
-    setVms((prev) => prev.filter((v) => v.id !== targetId))
-    notify(language === "id" ? `${vmToDelete.name} berhasil dihapus.` : `${vmToDelete.name} deleted successfully.`, "neutral")
+    const targetScope = vmToDelete.scope || "server"
+    const targetName = vmToDelete.name
+
+    // 1. Eksekusi API Delete permanen ke Core Service & server ZimaOS
+    if (api.deleteVm) {
+      void api.deleteVm(targetId, targetScope).catch((err) => {
+        console.warn("[VmManagerView] deleteVm error:", err)
+      })
+    }
+
+    // 2. Bersihkan dari state React & localStorage lokal
+    setVms((prev) => {
+      const next = prev.filter((v) => v.id !== targetId)
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem("myserver_vms", JSON.stringify(next))
+        } catch {}
+      }
+      return next
+    })
+
+    notify(language === "id" ? `${targetName} berhasil dihapus.` : `${targetName} deleted successfully.`, "neutral")
     setVmToDelete(null)
   }
 
@@ -537,7 +579,7 @@ export default function VmManagerView({ go }: ViewProps) {
       }
       return v
     })
-    setVms(updatedVms)
+    persistVmChanges(updatedVms)
     notify(
       nextVal
         ? (language === "id" ? `${vm.name}: Fitur Tetap Nyala 24/7 diaktifkan` : `${vm.name}: Always-On 24/7 enabled`)
@@ -590,18 +632,17 @@ export default function VmManagerView({ go }: ViewProps) {
       delayUnit: autoOnDelayUnit,
     }
     const disableKeepAlive = autoOnEnabled && autoOnMode === "after_off" && autoOnVm.keepAliveEnabled
-    setVms((prev) =>
-      prev.map((item) =>
-        item.id === autoOnVm.id
-          ? {
-              ...item,
-              autoOn: nextAutoOn,
-              keepAliveEnabled: disableKeepAlive ? false : item.keepAliveEnabled,
-              sleepingSince: item.status !== "running" ? (item.sleepingSince || Date.now()) : undefined,
-            }
-          : item
-      )
+    const updated = vms.map((item) =>
+      item.id === autoOnVm.id
+        ? {
+            ...item,
+            autoOn: nextAutoOn,
+            keepAliveEnabled: disableKeepAlive ? false : item.keepAliveEnabled,
+            sleepingSince: item.status !== "running" ? (item.sleepingSince || Date.now()) : undefined,
+          }
+        : item
     )
+    persistVmChanges(updated)
     notify(
       language === "id"
         ? `Jadwal Auto-On ${autoOnVm.name} berhasil disimpan!`
@@ -634,29 +675,28 @@ export default function VmManagerView({ go }: ViewProps) {
     const targetId = editingVm ? editingVm.id : `vm-${Date.now()}`
 
     if (editingVm) {
-      setVms((prev) =>
-        prev.map((item) =>
-          item.id === editingVm.id
-            ? {
-                ...item,
-                scope: formScope,
-                serverId: formScope === "server" ? (item.serverId || activeServerId) : undefined,
-                serverName: formScope === "server" ? (item.serverName || activeServerName) : undefined,
-                name: cleanName || item.name,
-                provider: addVmTab,
-                sshHost: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
-                sshUser: cleanUser,
-                sshPort: Number(formSshPort) || (addVmTab === "instabox" ? 2222 : 22),
-                tokenExpiry: formTokenExpiry.trim(),
-                webPort: formWebPort ? Number(formWebPort) : undefined,
-                screenUrl: formScreenUrl.trim() || undefined,
-                screenOpenTarget: formScreenOpenTarget,
-                apiKey: finalApiKey || undefined,
-                ip: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
-              }
-            : item
-        )
+      const updated = vms.map((item) =>
+        item.id === editingVm.id
+          ? {
+              ...item,
+              scope: formScope,
+              serverId: formScope === "server" ? (item.serverId || activeServerId) : undefined,
+              serverName: formScope === "server" ? (item.serverName || activeServerName) : undefined,
+              name: cleanName || item.name,
+              provider: addVmTab,
+              sshHost: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
+              sshUser: cleanUser,
+              sshPort: Number(formSshPort) || (addVmTab === "instabox" ? 2222 : 22),
+              tokenExpiry: formTokenExpiry.trim(),
+              webPort: formWebPort ? Number(formWebPort) : undefined,
+              screenUrl: formScreenUrl.trim() || undefined,
+              screenOpenTarget: formScreenOpenTarget,
+              apiKey: finalApiKey || undefined,
+              ip: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
+            }
+          : item
       )
+      persistVmChanges(updated)
       notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
       setEditingVm(null)
     } else {
@@ -689,7 +729,8 @@ export default function VmManagerView({ go }: ViewProps) {
           diskTotalBytes: null,
         },
       }
-      setVms((prev) => [...prev, newVm])
+      const nextList = [...vms, newVm]
+      persistVmChanges(nextList)
       notify(language === "id" ? `${finalName} berhasil ditambahkan!` : `${finalName} added successfully!`, "success")
       setIsAddingVm(false)
     }
@@ -839,11 +880,10 @@ export default function VmManagerView({ go }: ViewProps) {
       resetCycleMode: schedResetMode,
       lastExecuted: "Never",
     }
-    setVms((prev) =>
-      prev.map((item) =>
-        item.id === schedulingVm.id ? { ...item, autoRestart: newSchedule } : item
-      )
+    const updated = vms.map((item) =>
+      item.id === schedulingVm.id ? { ...item, autoRestart: newSchedule } : item
     )
+    persistVmChanges(updated)
     notify(language === "id" ? `Jadwal Auto-Restart ${schedulingVm.name} disimpan!` : `Auto-Restart schedule for ${schedulingVm.name} saved!`, "success")
     setSchedulingVm(null)
   }

@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.4",
+        "channel": "Beta",
+        "date": "2026-11-10",
+        "title": "Perbaikan Hapus VM Multi-Perangkat (Zero Zombie VM), Dedicated Delete API, dan Sinkronisasi Real-Time",
+        "notes": [
+            "Dedicated API Hapus VM Server: Menambahkan endpoint resmi /api/vms/delete pada Core Service dan pemanggilan langsung HTTP DELETE ke Backend ZimaOS saat pengguna mengonfirmasi penghapusan di VM Manager.",
+            "Eliminasi Zombie VM Resurrection Loop: Menghapus loop pembangkitan VM usang dari cache lokal, menjadikan database Backend ZimaOS sebagai sumber kebenaran mutlak (authoritative source of truth).",
+            "Pemisahan Polling Telemetri dari Penyimpanan: Memisahkan pembaruan berkala CPU/RAM/runtime agar tidak memicu auto-save ke server yang berpotensi me-rePOST VM yang telah dihapus oleh perangkat lain.",
+            "Sinkronisasi Multi-Perangkat Otomatis: Menambahkan auto-sync polling setiap 10 detik dan listener fokus jendela (window focus) untuk sinkronisasi seketika antar-perangkat pendamping."
+        ],
+        "features": [
+            "Dedicated Delete API /api/vms/delete ke Backend ZimaOS",
+            "Pemusnahan Zombie VM Resurrection Loop",
+            "Isolasi Background Telemetry dari Auto-Save Server",
+            "Auto-Sync Multi-Device Real-Time (10s & Window Focus)"
+        ]
+    },
+    {
         "version": "4.5.3",
         "channel": "Beta",
         "date": "2026-11-10",

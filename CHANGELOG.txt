@@ -1,194 +1,28 @@
+===================================================
+[v4.5.4 - Beta] - 2026-11-10
+Catatan:
+1. Dedicated API Hapus VM Server: Menambahkan endpoint resmi /api/vms/delete pada Core Service dan pemanggilan langsung HTTP DELETE ke Backend ZimaOS saat pengguna mengonfirmasi penghapusan di VM Manager.
+2. Eliminasi Zombie VM Resurrection Loop: Menghapus loop pembangkitan VM usang dari cache lokal, menjadikan database Backend ZimaOS sebagai sumber kebenaran mutlak (authoritative source of truth).
+3. Pemisahan Polling Telemetri dari Penyimpanan: Memisahkan pembaruan berkala CPU/RAM/runtime agar tidak memicu auto-save ke server yang berpotensi me-rePOST VM yang telah dihapus oleh perangkat lain.
+4. Sinkronisasi Multi-Perangkat Otomatis: Menambahkan auto-sync polling setiap 10 detik dan listener fokus jendela (window focus) untuk sinkronisasi seketika antar-perangkat pendamping.
+===================================================
+
+===================================================
 [v4.5.3 - Beta] - 2026-11-10
-- 1-Klik Pasang & Perbarui OTA MyServer Backend ke ZimaOS: menambahkan tombol dinamis pada antarmuka ServerView untuk memasang (fresh install) atau memperbarui (update OTA) backend ZimaOS ke versi 1.2.2 langsung dari desktop tanpa terminal manual.
-- Eliminasi Tuntas Socket WinError 10054 (Reset by Peer): mengimplementasikan header eksplisit Connection: close dan mekanisme auto-retry 1x pada seluruh transmisi HTTP ke backend ZimaOS, menjamin transmisi REST API bebas kegagalan soket terputus.
-- Penyingkiran Timer Inflasi Runtime & Pembersihan Telemetri Fiktif: menghapus timer interval increment fiktif di sisi frontend, membaca nilai runtime murni dari API InstaBox, serta membersihkan cache telemetri palsu (2.3% CPU / 0.7 GB RAM) sehingga status mesin berstatus tidur menampilkan strip (-) secara jujur.
-- Sinkronisasi Status Port & Host SSH MicroVM Resmi: memperbaiki format host SSH agar selalu menampilkan alamat resmi ssh.instabox.sh:2222 secara konsisten dan meniadakan tampilan host kosong.
+Catatan:
+1. 1-Klik Pasang & Perbarui OTA MyServer Backend ke ZimaOS: Menambahkan tombol dinamis pada antarmuka ServerView untuk memasang (fresh install) atau memperbarui (update OTA) backend ZimaOS ke versi 1.2.2 langsung dari desktop tanpa terminal manual.
+2. Eliminasi Tuntas Socket WinError 10054 (Reset by Peer): Mengimplementasikan header eksplisit Connection: close dan mekanisme auto-retry 1x pada seluruh transmisi HTTP ke backend ZimaOS, menjamin transmisi REST API bebas kegagalan soket terputus.
+3. Penyingkiran Timer Inflasi Runtime & Pembersihan Telemetri Fiktif: Menghapus timer interval increment fiktif di sisi frontend, membaca nilai runtime murni dari API InstaBox, serta membersihkan cache telemetri palsu (2.3% CPU / 0.7 GB RAM) sehingga status mesin berstatus tidur menampilkan strip (-) secara jujur.
+4. Sinkronisasi Status Port & Host SSH MicroVM Resmi: Memperbaiki format host SSH agar selalu menampilkan alamat resmi ssh.instabox.sh:2222 secara konsisten dan meniadakan tampilan host kosong.
+===================================================
 
+===================================================
 [v4.5.2 - Beta] - 2026-11-10
-- Pengalihan Otomatis Rute Terminal SSH via Remote P2P saat Rute WAN Aktif: mendeteksi rute WAN dan mengalihkan target koneksi SSH ke Virtual IP Remote P2P (EasyTier/ZeroTier) di mana port 22 terbuka (selaras dengan Web App dan mount SMB).
-- Resolusi Cerdas REST API Backend ZimaOS pada Jaringan Eksternal (WAN): failover backend API port 8080 ke Remote P2P IP saat rute WAN aktif sehingga VM sisi server tidak lagi menghilang saat di luar jaringan rumah.
-- Penyelarasan Schema Pydantic Backend ZimaOS (v1.2.1) & Persistensi Otomasi 24/7: penanganan format camelCase (keepAliveEnabled, apiKey, machineId, autoRestart, autoOn) sehingga otomasi tersimpan permanen di database server dan sinkron antar-perangkat.
-- Sinkronisasi Status Riil VM InstaBox (Case-Insensitive) & Durasi Timer Uptime: status case-insensitive running/active mengatasi tampilan Tidur saat di cloud sedang Running, pembacaan detik durasi runtime riil dari API cloud, serta pencegahan inflasi timer di server.
-
-[v4.5.1 - Beta] - 2026-11-10
-- Perbaikan Sinkronisasi VM Multi-Device: query dinamis ke backend ZimaOS saat memuat VM (POST /api/vms/load) sehingga VM kelompok Server langsung muncul di Perangkat B dan seluruh perangkat yang terhubung.
-- Resolusi Akun Dinamis Terminal SSH ZimaOS: mendeteksi username SSH secara dinamis dari profil aktif server pengguna (menggantikan 'root' yang ditolak Linux ZimaOS) sehingga login password berfungsi sukses.
-- Perlindungan Penulisan State VM: menambahkan ref proteksi pada VmManagerView agar tidak menimpa konfigurasi sebelum sinkronisasi backend selesai.
-
-[v4.5.0 - Beta] - 2026-11-10
-- Pengelompokan & Penyimpanan VM Multi-Target (Server vs Lokal): opsi lokasi pada modal Tambah VM, penyimpanan tersinkron di SQLite ZimaOS (backend v1.2.0), dan automasi 24/7 tetap berjalan saat laptop mati.
-- Migrasi 1-Klik VM Terhubung: tombol migrasi cepat di menu Edit VM untuk memindahkan VM beserta konfigurasi SSH dan jadwal automasi antara Server dan Lokal.
-- Akses Cepat Terminal SSH ZimaOS: tombol hijau selaras di menu Server & Network di bawah tombol Tambah, Ubah, Hapus untuk salin perintah SSH dan buka terminal interaktif.
-- Pemfilteran Dinamis & Smart Grouping: filter VM sesuai server ZimaOS yang aktif + VM lokal, dengan pemisah kelompok kondisional (hanya tampil jika kedua kelompok memiliki VM).
-- Perbaikan Bug Animasi CRT Mode Offline: scanlines/glitch/vignette CRT dihilangkan hanya dari kartu File Manager dan VM Manager offline; kartu online dan kartu offline lain tetap utuh.
-- Optimalisasi Modal UX & Scrollbar: 1 tombol hapus di menu edit (tombol hapus di header dihapus) dan scrollbar tunggal tanpa slider tumpang tindih.
-
-[v4.4.7 - Beta] - 2026-11-09
-- Perbaikan Always-On & Auto-Restart 24/7: memperbaiki ReferenceError vmsRef di VmManagerView, wake instan saat Always-On diaktifkan pada VM sleeping, serta daemon latar belakang vm_power_scheduler_loop di myserver_core_service.py.
-- Fitur Auto-On & Grid Aksi 3x2 Simetris (Opsi A): penjadwalan nyala otomatis pada Jam Tertentu (HH:MM + hari aktif) dan Jeda Setelah Mati (detik/menit/jam setelah mati).
-- Tombol Hapus VM (Trash2) & Default Minimized: seluruh kartu VM (1 VM maupun banyak VM) default tertutup rapi (collapsed) dengan tombol Edit dan Hapus VM di baris header serta modal konfirmasi dwibahasa (ID/ENG).
-- Target Pembukaan Layar Virtual & Isolasi Sesi Multi-VM: opsi buka di Jendela Baru MyServer (dengan folder sesi WebView2 terisolasi per-VM di data/vms/<vm_id>/webview_profile untuk login multi-akun InstaBox) atau Browser Bawaan.
-- Auto-Favicon Custom Web Apps: pengambilan ikon otomatis dari URL aplikasi web kustom di menu Apps beserta fallback ikon vektor.
-- Persistensi Tema Light/Dark Mode: memperbaiki /api/load_settings agar mengembalikan preferensi theme dari config.json sehingga mode terang/gelap bertahan setelah restart laptop.
-
-[v4.4.6 - Beta] - 2026-11-09
-- Fitur 'Tetap Nyala' (Always-On) khusus InstaBox: anti-sleep heartbeat 15 menit & koordinasi Smart Reset batas 8 jam.
-- Proteksi mutlak logika Auto-Restart VM Umum (Manual SSH) tetap murni tanpa intervensi.
-- Tombol Edit VM pada header kartu & filter modal otomatis terkunci per-provider (InstaBox / Manual SSH).
-- Sinkronisasi status riil cloud: pill otomatis berubah ke Sleep saat VM tidur otomatis dari pusat.
-- Kartu VM default tertutup rapi (collapsed), animasi CSS Grid halus, dan rotasi chevron 180 derajat.
-- Standardisasi ukuran seluruh ikon tombol ke 16x16px (size-4 shrink-0) & penataan kontras multi-mode.
-- Penyelarasan bahasa simetris (ID/ENG) dan pembersihan tuntas teks dummy 'expires in 7d'.
-
-[v4.4.5 - Beta] - 2026-11-09
-- Perbaikan endpoint suspend mesin InstaBox (/v1/machines/{id}/suspend) & penanganan error scope Python core.
-- Tombol Tidurkan VM dan Bangunkan VM beroperasi normal secara real-time.
-- Perbaikan kontras tombol aksi kartu pada Light Mode.
-
-[v4.4.4 - Beta] - 2026-11-08
-- Redesain Kartu VM Manager: LED dot-matrix bar 42x3 style File Manager untuk runtime 8 jam InstaBox.
-- Isolasi desain: 100% tata letak luar menu VM Manager tetap konsisten tanpa perubahan layout.
-- Anti-hardcoding telemetri riil (CPU/RAM/Disk murni dinamis/strip jika offline) & zero data pribadi.
-- Fitur universal 'Jadwal Auto-Restart': interval/jam tertentu, opsi reset limit 8 jam InstaBox & reboot VPS.
-- Sinkronisasi versi atomik v4.4.4 Beta lintas frontend, backend, tauri, dan installer.
-
-[v4.4.3 - Beta] - 2026-11-08
-- Perombakan UI/UX VM Manager: header rapi, hapus banner mock, ganti tombol Antigravity ke aksi SSH universal.
-- Eliminasi seluruh hardcoded data VM fiktif; koneksi SSH InstaBox riil (Host, Port, Token Expiry).
-- Sinkronisasi versi atomik v4.4.3 Beta lintas frontend, backend, tauri, dan installer.
-
-[v4.4.2 - Beta] - 2026-11-08
-- Integrasi 4 kartu SVG baru (File Manager & VM Manager online/offline) sesuai desain Figma.
-- Restorasi penuh sistem animasi retro CRT pada semua slot kartu.
-- Restorasi fungsi tombol '...' 3 titik File Manager untuk navigasi sub-menu Storage & Files.
-- Penyelarasan Auto Layout frame 1:1 Figma (Node 83:292) dengan bottom clearance terverifikasi ~21px.
-- Sinkronisasi versi atomik v4.4.2 Beta lintas frontend, backend, tauri, dan installer.
-
-[v4.4.1 - Beta] - 2026-11-08
-- Perbaikan Grid Kontainer Kartu & Eliminasi Total Horizontal Scroll:
-  - Kembalikan dimensi asli v4.3.2 Beta (252x228) tanpa pembungkus ekstra.
-  - Eliminasi total scrollbar horizontal (overflow-x-hidden) dan hilangkan scrollbar native OS (scrollbar-none).
-  - Scrolling vertikal mulus ke kartu VM Manager melalui mouse wheel / trackpad.
-- Rangkaian Animasi CRT Lengkap pada Kartu VM Manager:
-  - Scanlines, tube warmth, slow hum band, hover glitch jitter, dan tracking band pada kartu online & offline.
-  - Konfigurasi organic seed [data-crt-slot="vm"] pada crt-cards.css.
-- Sinkronisasi versi atomik v4.4.1 Beta lintas frontend, backend, tauri, dan installer.
-
-[v4.4.0 - Beta] - 2026-11-08
-- Integrasi Sub-sistem Virtual Machine (VM Manager) & Antigravity Remote:
-  - Penambahan kartu ke-5 VM Manager pada Home View dengan scroll vertikal mulus.
-  - Mode adaptif 1 VM (Card Mode) dan 2+ VM (Accordion Mode) dengan tombol tambah, edit, dan modal konfirmasi hapus.
-  - Fitur spesifikasi hardware, tracker batas 8 jam, idle auto-sleep 30m, pre-flight launch Antigravity Remote, dan terminal SSH.
-- Integrasi Backend Core Service & InstaBox Manager (instabox_manager.py) dengan REST API v1 dan Smart Anti-Cooldown Guard.
-- Perbaikan tuntas biner font lokal Doto di index.css agar selalu merender dot-matrix asli pada seluruh tampilan LCD footer dan dock.
-- Bump Versi Atomik v4.4.0 Beta lintas frontend, backend, installer, dan tauri.
-
-[v4.3.2 - Beta] - 2026-11-08
-- Penyelarasan Presisi Chip Footer Mode OFFLINE (1:1 Acuan footer.relative (offline).svg):
-  - Mengubah styling tombol rute jaringan (LAN/WAN) dan tombol akun pengguna (Account/User) saat server offline agar selaras 100% dengan desain footer.relative (offline).svg.
-  - Ikon globe dan ikon pengguna kini mengadopsi warna charcoal gelap #2D2D2D, teks rute dan nama akun menggunakan abu-abu lembut #CCCCCC, serta chevron dropdown menggunakan #CBCBCA.
-  - Menggantikan bayangan biru pada chip akun saat offline dengan bayangan halus beraksen kemerahan 0px 4px 6px 0px rgba(130,0,22,0.15), inset 4px 4px 8px 0px rgba(130,0,22,0.30), dan bayangan chip rute 0px 4px 6px 0px rgba(130,0,22,0.20), inset 4px 4px 8px 0px rgba(130,0,22,0.30).
-  - Seluruh dimensi, padding, font size, border radius, dan interaktivitas tetap 100% konsisten (zero layout shift).
-- Bump Versi Atomik v4.3.2 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
-
-[v4.3.1 - Beta] - 2026-11-08
-- Perbaikan Cepat (Hotfix) Runtime ReferenceError NoticeMarquee: Menambahkan parameter isOnline pada deklarasi NoticeMarquee di FlyoutShell.tsx, mengeliminasi galat fatal 'Failed to Load View: isOnline is not defined'.
-- Bump Versi Atomik v4.3.1 Beta.
-
-## [v4.3.0 - Beta] - 2026-11-08
-
-- Penuntasan Definitif Akses Terkunci (Access Denied) In-App Updater: Mengonfigurasi hak akses Inno Setup menjadi elevated (`PrivilegesRequired=admin` dan `PrivilegesRequiredOverridesAllowed=commandline`) serta menambahkan flag `runasoriginaluser` pada eksekusi aplikasi paska-instalasi. Dengan elevasi ini, installer memiliki hak penuh untuk mematikan daemon background elevated EasyTier (`easytier-core.exe` & `easytier-cli.exe`), menuntaskan galat `DeleteFile failed; code 5. Access is denied` saat update berlangsung.
-- Penguatan Backend Pre-Installer Termination: Menambahkan penutupan paksa proses EasyTier via `taskkill` dan jeda `time.sleep(1.5)` pada handler backend `/api/download_and_install_update` sebelum installer dijalankan, memastikan seluruh open file handle kernel terlepas sempurna.
-- Tampilan UI Mode OFFLINE Murni (1:1 Acuan v4.2.7 Beta):
-  - Mengadopsi 4 kartu CRT standby elegan berbasis SVG terbaru pengguna (`Backup Card (offline).svg`, `File Manager Card (offline).svg`, `Apps Card (offline).svg`, dan `Options card (offline).svg`) dengan tampilan CRT monitor standby gelap (`#121212`).
-  - Penyelarasan Logo CRT: Kata "Server" pada bezel monitor bertransformasi menjadi dot-matrix merah `#E60004` (glow `#FF001E`), 100% selaras dengan status "Offline" pada kartu server bawah.
-  - Kartu Server Bawah (`FooterStatus`): Mengadopsi glow merah `#FF001E`, nama server font dots abu-abu `#2D2D2D`, status koneksi "Offline" merah `#E60004`, dan lonceng notifikasi abu-abu `#2E2E2E` (Idle).
-  - Mini Tray Dock Telemetri: Unit telemetri kiri menampilkan readout strip standby (`–`) dan titik LED unlit dalam font dots abu-abu `#2E2E2E`.
-  - Flyout Background Grid Merah: Mengintegrasikan tekstur latar belakang grid merah halus khusus mode offline untuk Dark Mode dan Light Mode.
-- Penyelarasan Menyeluruh Seluruh Font Hijau Menjadi Merah saat Offline (Zero Layout Shift):
-  - Mengimplementasikan CSS semantic token remapping otomatis `[data-server-status="offline"]` di `index.css`, meremap `--color-brand` dan `--color-success` ke `#E60004`.
-  - Seluruh font teks, badge, checkmark, dan aksen hijau pada seluruh menu (Server & Network, Settings & Preferences, Server Power Control, Backup & Sync, Web Apps, dan Storage & Files) otomatis bertransformasi menjadi merah `#E60004` saat server offline, tanpa mengubah margin, padding, ukuran font, maupun dimensi layout 1 pixel pun.
-- Bump Versi Atomik v4.3.0 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest untuk deteksi instan oleh GitHub Auto-Update Checker.
-
-
-[v4.2.7 - Beta] - 2026-11-07
-- Perbaikan Penguncian Packet.dll pada In-App Update (Kill Daemon EasyTier)
-- Perbaikan & Dukungan Penuh Pembaruan via Berkas ZIP Portabel
-- Penyelarasan Layout Chip Modal Power Subsystem (Margin Seimbang & Zero Overflow)
-- Penghapusan Toggle Legacy Auto-connect ZeroTier di Pengaturan
-- Penyelarasan Tombol Change Log Folder (Teks Rapi di Dalam Pill)
-- Kamus Bilingual Lengkap Tombol Aksi Remote & Modal Edit Remote ID Kontekstual
-- Jarak Header Kartu Remote Lega & Indikator Titik Blooming (Dock Bawah Terjaga 100%)
-- Bump Versi Atomik v4.2.7 Beta
-
-[v4.2.6 - Beta] - 2026-11-07
-- Perbaikan Layout & Overflow Tombol Remote ID (Pencil Button) di dalam batas kartu
-- Penyelarasan UX Tombol Remote Seragam (EasyTier & ZeroTier)
-- Verifikasi Integritas Failover & Multi-Remote SMB serta Web Apps
-- Bump Versi Atomik v4.2.6 Beta
-
-[v4.2.6 - Beta] - 2026-11-07
-- Restorasi Ikon Pensil Edit Remote/Network ID pada kartu EasyTier dan ZeroTier (tampil tegas dan presisi)
-- Sinkronisasi Versi Atomik v4.2.6 Beta untuk deteksi pembaruan otomatis GitHub
-
-[v4.2.5 - Beta] - 2026-11-07
-- Perbaikan Klasifikasi Tipe Rute Remote (Eliminasi Salah Deteksi LAN)
-- Auto-Failover Tangguh EasyTier -> ZeroTier saat EasyTier tidak merespons
-- Resolusi Dinamis SMB WAN Multi-Kandidat untuk jaminan keberhasilan mounting disk
-- Web Apps WAN Failover Otomatis ke IP remote yang responsif
-- Bump Versi Atomik v4.2.5 Beta
-
-[v4.2.4 - Beta] - 2026-11-07
-- Penyelarasan Penuh Standar Zima Client v2.3.5 untuk EasyTier Mesh
-- Eliminasi Freeze / Timeout RPC Telemetri
-- Resolusi Wintun Virtual Adapter Otomatis
-- SMB & Web Apps WAN Failover Dinamis
-- Bump Versi Atomik v4.2.4 Beta
-
-[v4.2.2 - Beta] - 2026-11-07
-- Perbaikan Driver Wintun Virtual Adapter (Hak Akses Administrator / UAC)
-- Standardisasi Subnet ZimaNet EasyTier (10.126.126.0/24)
-- Mounting SMB WAN Dinamis EasyTier/ZeroTier
-- Routing Dinamis Web Apps di Rute WAN
-- Bump Versi Atomik v4.2.2 Beta
-
-[v4.2.1 - Beta] - 2026-11-07
-1. Perbaikan Layout Tombol Remote ID: Tombol edit pensil EasyTier rapi di dalam batas kartu (zero overflow).
-2. Penyelarasan UX Tombol ZeroTier: Memisahkan tombol Connect/Disconnect dengan tombol edit pensil Network ID.
-3. Dual Remote Engine Failover & Manual Mode: Otomatis failover EasyTier <-> ZeroTier serta kontrol manual (Auto, EasyTier, ZeroTier).
-4. Kartu Rute Remote Dinamis Tunggal: Hanya memunculkan 1 kartu rute remote di daftar rute yang berubah mulus sesuai engine aktif.
-5. Visual Kartu Auto Failover Solid: Fill solid bg-surface dengan stroke hijau saat aktif (Dark & Light mode).
-6. Mounting SMB WAN Dinamis: Mengarahkan SMB WAN ke IP remote aktif secara dinamis.
-7. Web Apps WAN Dinamis: URL aplikasi kontainer di rute WAN menggunakan IP remote aktif (kecuali link ZimaOS).
-8. Masking URL Seragam '••••': Format masking popover rute menjadi tepat 4 titik tanpa http://.
-
-[v4.2.0 - Beta] - 2026-11-07
-1. Integrasi EasyTier P2P Mesh sebagai Remote Engine Utama: Mengadopsi arsitektur embedded daemon Zima Client v2.3.5 (easytier-core.exe & wintun.dll) untuk koneksi remote P2P multi-protokol tanpa blokir firewall dan tanpa wajib install ZeroTier di awal.
-2. Orkestrasi Failover Cerdas ke ZeroTier: Menjadikan ZeroTier sebagai engine cadangan otomatis saat EasyTier terkendala.
-3. Background Worker Auto-Update (45 Menit) & Notifikasi Tray: Loop periodik pemeriksaan rilis GitHub setiap 45 menit dan notifikasi balon Windows di pojok kanan bawah saat update tersedia ketika jendela tertutup.
-4. Sinkronisasi Versi Atomik v4.2.0 Beta: Menyelaraskan seluruh konstanta versi aplikasi.
-
-[v4.1.1 - Beta] - 2026-11-06
-1. Perbaikan Form Web App (RPC Argument Swap Fix): Memperbaiki bug pada jembatan antarmuka Tauri RPC (api.real.ts) dan endpoint core service (/api/add_web_app) di mana nama aplikasi sebelumnya menimpa alamat URL (url: args[0]). Sekarang nama aplikasi dan URL tersimpan murni sesuai kolom input pengguna secara presisi 1:1 tanpa tertukar maupun terabaikan.
-2. Sinkronisasi Versi Atomik v4.1.1 Beta: Menyelaraskan seluruh konstanta versi pada UI frontend, Core Service backend, metadata biner PE Windows, Inno Setup installer, dan Cargo manifest.
-
-﻿===================================================
-[v4.1.0 - Beta] - 2026-11-06
 Catatan:
-1. Tombol Centang Auto Cek Update (Native UI): Menambahkan baris preferensi auto-check update di menu Pengaturan (Hero Header & Accordion) dengan gaya visual asli MyServer.
-2. Pembersihan Otomatis Berkas Pembaruan di %TEMP%: Menambahkan mekanisme pembersihan aman berkas sisa update MyServer di %TEMP% (> 60 detik) saat aplikasi dijalankan.
-3. Standardisasi Bahasa Bilingual: Memperbaiki inkonsistensi bahasa pada menu Apps dan Backup ke kamus i18n agar konsisten berbahasa Inggris saat bahasa Inggris aktif.
-4. Sinkronisasi Versi Atomik v4.1.0 Beta: Menyelaraskan seluruh konstanta versi aplikasi.
-===================================================
-===================================================
-[v4.0.6 - Beta] - 2026-11-05
-Catatan:
-1. Restorasi Menyeluruh Animasi CRT Suite (1:1 v4.0.0 Standard): Memulihkan seluruh efek elektronik CRT retro pada 4 kartu utama (Backup, File Manager, Apps, Options) mencakup Fine Scanlines Mesh, 60Hz Ground AC Hum Bar, Tube Warmth Flicker, dan V-Sync Tracking Line Flash.
-2. Eliminasi Screen Tearing File Manager Card: Memperbaiki nesting DOM pada FILES_SVG dengan memindahkan background monitor hitam (#1B1B1B) ke luar grup .crt-glitch-content, mengeliminasi robeknya layar saat di-hover sehingga hanya piksel matriks hijau yang bergetar secara presisi.
-3. Rekonstruksi V-Sync Tracking Band Flash: Mengembalikan elemen .crt-tracking-band ke spesifikasi asli (garis fosfor hijau #86efac 3px dengan opacity awal 0), memulihkan animasi kilatan tracking horizontal saat kartu di-hover.
-4. Isolasi Namespace Defs SVG (Zero ID Collision): Mengalokasikan ID defs unik per kartu (crt-scanlines-backup/files/apps/options, crt-vignette, crt-hum-grad) untuk mencegah tabrakan ID pada DOM HTML dan memastikan koordinat gradien akurat 100%.
-5. Transform-Box Fill-Box & Elevasi Natural: Menambahkan transform-box: fill-box pada kelompok glitch SVG dan mengembalikan bayangan skeuomorfik natural v4.0.0 (drop-shadow 10px 20px rgba(0,0,0,0.40)) saat hover.
-6. Sinkronisasi Versi Atomik v4.0.6: Memperbarui seluruh konstanta versi aplikasi (version.ts, core service, biner PE metadata, Inno Setup, dan Tauri manifest).
+1. Pengalihan Otomatis Rute Terminal SSH via Remote P2P saat Rute WAN Aktif: Terminal SSH ZimaOS secara cerdas mendeteksi rute WAN dan secara otomatis mengalihkan target koneksi ke Virtual IP Remote P2P (EasyTier / ZeroTier) di mana port 22 terbuka, persis seperti mekanisme akses Web App dan mount SMB.
+2. Resolusi Cerdas REST API Backend ZimaOS pada Jaringan Eksternal (WAN): Memperbaiki kegagalan koneksi REST API backend (port 8080) saat pengguna berada di luar jaringan rumah dengan mengalihkan endpoint backend ke Remote P2P IP secara dinamis, sehingga daftar VM sisi server tidak lagi menghilang.
+3. Penyelarasan Schema Pydantic Backend ZimaOS (v1.2.1) & Persistensi Otomasi 24/7: Menyelaraskan field schema Pydantic untuk menerima format camelCase dari desktop (keepAliveEnabled, apiKey, machineId, runtimeMinutes) serta membongkar struktur nested autoRestart dan autoOn, menjamin otomasi tersimpan di SQLite server dan tersinkronisasi 100% antar-perangkat.
+4. Sinkronisasi Status Riil VM InstaBox (Case-Insensitive) & Durasi Timer Uptime: Memperbaiki pengecekan status microVM menjadi case-insensitive (running / active), membaca durasi runtime riil dari API InstaBox (currentRunSeconds / uptimeSeconds), serta memperbaiki interval loop scheduler server berbasis timestamp riil untuk mencegah inflasi waktu runtime.
 ===================================================
 
 ===================================================
@@ -256,7 +90,7 @@ Catatan:
 2. Independent Task Routing: Pembuatan task backup langsung memetakan kredensial, Device ID, dan rute efektif server tujuan terpilih secara terisolasi.
 3. Smart Identity Inheritance Architecture: MyServer secara cerdas mewarisi dan mengamankan sertifikat digital (cert.pem & key.pem) dari instalasi lama ke direktori internal MyServer, menjamin 0% re-pairing dan mencegah laptop dibaca sebagai device baru.
 4. Zero-Bias Native Protocol Verification: Terbukti secara empiris melalui pengujian koneksi TLSv1.3 langsung bahwa kode Python MyServer dapat berkomunikasi dengan Syncthing di sisi server (BEP Magic 0x2EA7D90B & Protobuf Hello) saat Syncthing laptop dimatikan.
-5. Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (ðŸŽ¯ Primary-Server / ðŸŽ¯ Secondary-Server) dengan visual penanda server aktif.
+5. Target Server Visual Badging: Setiap kartu jalur backup pada daftar task kini menampilkan label badge server tujuan (🎯 Primary-Server / 🎯 Secondary-Server) dengan visual penanda server aktif.
 6. Single-Command Multi-File Version Synchronizer: Utilitas terpusat sync_version.py untuk sinkronisasi versi atomik lintas seluruh ekosistem berkas MyServer.
 ===================================================
 
@@ -279,7 +113,7 @@ Catatan:
 1. Redesain Pill Footer HomeView: Tampilan nama rute ringkas (LAN, Remote, WAN) dengan ikon spesifik (LAN/Ethernet, Remote Wifi, WAN Globe) bebas distraksi.
 2. Quick Route Switcher Pop-up: Modal ganti cepat rute dengan status aktif, latensi ms, opsi otomatis failover, dan masked URL/IP dengan tombol toggle unmask.
 3. Harmonisasi Dialog WinForms ke React: Penggantian seluruh popup skrip PowerShell Windows Forms klasik ke Modal React mengambang terpadu di dalam antarmuka companion.
-4. Hover Telemetri Mendalam: Pengukuran suhu CPU (Â°C), konsumsi daya (Watt), pembagian RAM GB/GB riil, serta jumlah dan kapasitas partisi disk.
+4. Hover Telemetri Mendalam: Pengukuran suhu CPU (°C), konsumsi daya (Watt), pembagian RAM GB/GB riil, serta jumlah dan kapasitas partisi disk.
 5. Label DISK Anti-Patah Baris: Penyelarasan label MEM menjadi DISK dengan whitespace-nowrap.
 6. Pembersihan Dwibahasa Penuh: 100% bebas hardcode pada seluruh kartu (kartu Opsi), chip, notifikasi, dan form.
 ===================================================
@@ -344,7 +178,7 @@ Catatan:
 Catatan:
 1. URL Web App Dinamis via Remote IP: Kontainer aplikasi ZimaOS di menu Apps otomatis diarahkan ke Remote IP (ZeroTier) saat server diakses melalui rute Domain publik, menembus batasan port-forwarding router secara native tanpa hardcode.
 2. Rekayasa Alur File Manager: Tombol File Manager di menu utama Mini Tray kini langsung membuka Windows File Explorer ke disk SMB terpasang untuk akses cepat berkas.
-3. Tombol Menu File Manager Baru: Menambahkan tombol navigasi [Menu â†’] di kartu File Manager pada menu utama untuk membuka antarmuka lengkap manajemen disk & storage.
+3. Tombol Menu File Manager Baru: Menambahkan tombol navigasi [Menu →] di kartu File Manager pada menu utama untuk membuka antarmuka lengkap manajemen disk & storage.
 4. Opsi Ganda Peluncur Berkas: Menyediakan tombol terpisah di menu File Manager untuk membuka File Explorer (Windows SMB) dan ZimaOS File Manager (Web Files), serta opsi preferensi aksi klik cepat.
 5. Deskripsi Hak Akses Dinamis (Nol Hardcode): Menggantikan teks statis dengan deskripsi peran real dari API resmi ZimaOS (/v1/users/current), membedakan izin Administrator vs Pengguna Standar secara presisi.
 6. Opsi Switch Auto Buka Mini Tray: Pengguna dapat memilih apakah jendela mini tray otomatis terbuka di layar saat startup Windows atau tetap berjalan senyap di system tray.
@@ -465,8 +299,8 @@ Catatan:
 ===================================================
 [v3.8.8 - Beta] - 2026-10-24 05:30
 Catatan:
-1. Perbaikan Font & Tampilan Simbol Garis Miring ('/') pada Menu Baki Sistem: Mengganti karakter ampersand ('&') yang sebelumnya disembunyikan oleh Windows Win32 Menu Accelerator menjadi garis miring (' / ') eksplisit pada seluruh tombol menu (seperti 'ðŸ“‚ Penyimpanan / Berkas', 'ðŸŒ Jaringan / Status', 'ðŸ‘¥ Akun / Server', dan 'ðŸŒ Web Apps / Bookmarks').
-2. Eliminasi Duplikasi Ikon Pengaturan (Gear): Menghilangkan penambahan ikon manual ganda pada item menu baki sistem sehingga ikon 'âš™ï¸' hanya tampil tepat satu kali pada 'âš™ï¸ Pengaturan / Preferensi'.
+1. Perbaikan Font & Tampilan Simbol Garis Miring ('/') pada Menu Baki Sistem: Mengganti karakter ampersand ('&') yang sebelumnya disembunyikan oleh Windows Win32 Menu Accelerator menjadi garis miring (' / ') eksplisit pada seluruh tombol menu (seperti '📂 Penyimpanan / Berkas', '🌐 Jaringan / Status', '👥 Akun / Server', dan '🌐 Web Apps / Bookmarks').
+2. Eliminasi Duplikasi Ikon Pengaturan (Gear): Menghilangkan penambahan ikon manual ganda pada item menu baki sistem sehingga ikon '⚙️' hanya tampil tepat satu kali pada '⚙️ Pengaturan / Preferensi'.
 ===================================================
 
 ===================================================
@@ -592,7 +426,7 @@ Catatan:
 3. Failover Rute Otomatis pada Autentikasi Metrik & Status: Autentikasi ZimaOS kini secara cerdas menguji base_url dan seluruh daftar jalur server_connections (LAN IP maupun Domain WAN) sampai menemukan rute yang dapat dihubungi.
 4. Dekopling Validasi Kredensial dari URL Webview Aktif: Dialog konfigurasi kredensial kini mengarahkan validasi secara spesifik ke server target, mencegah validasi kredensial server kantor terlempar ke URL server utama.
 5. Wizard Tambah Server 4-Field Interaktif: Penambahan server baru kini langsung menyertakan input Username dan Password dengan verifikasi koneksi live dan opsi instan beralih ke server baru.
-6. Submenu Manajemen Kredensial Cepat di Baki Sistem: Menambahkan menu 'ðŸ”‘ Kredensial Server' pada system tray untuk memudahkan konfigurasi akun login setiap server secara mandiri tanpa harus mengganti server aktif terlebih dahulu.
+6. Submenu Manajemen Kredensial Cepat di Baki Sistem: Menambahkan menu '🔑 Kredensial Server' pada system tray untuk memudahkan konfigurasi akun login setiap server secara mandiri tanpa harus mengganti server aktif terlebih dahulu.
 ===================================================
 
 ===================================================
@@ -609,7 +443,7 @@ Catatan:
 [v3.6.8 - Alpha] - 2026-09-23 15:35
 Catatan:
 1. Manajemen Perangkat Syncthing Dinamis: Menambahkan fitur penambahan perangkat Syncthing terhubung (Laptop ke Server, Laptop ke Laptop rekan kantor/P2P, dan Mutual Pairing 2-Arah).
-2. Dialog Pop-up Real-Time Izin/Tolak Koneksi: Sistem secara otonom memantau permintaan perangkat masuk dan menampilkan dialog pop-up konfirmasi interaktif ([âœ” Izinkan & Hubungkan] atau [âœ– Tolak Permintaan]).
+2. Dialog Pop-up Real-Time Izin/Tolak Koneksi: Sistem secara otonom memantau permintaan perangkat masuk dan menampilkan dialog pop-up konfirmasi interaktif ([✔ Izinkan & Hubungkan] atau [✖ Tolak Permintaan]).
 3. Tampilan & Penyalinan Device ID Mandiri: Dialog untuk melihat dan menyalin Device ID Laptop dan Server dengan 1-klik ke clipboard untuk kemudahan bertukar ID antar-perangkat.
 4. Menu Kontrol & Pemutusan Perangkat di System Tray: Memungkinkan jeda, lanjutkan, peninjauan permintaan masuk, serta pemutusan/penghapusan perangkat Syncthing langsung dari baki sistem.
 ===================================================
@@ -681,7 +515,7 @@ Catatan:
 ===================================================
 [v3.6.0 - Alpha] - 2026-09-21 22:40
 Catatan:
-1. Pemantauan Suhu CPU Server Real-Time (Â°C) & Peringatan Termal Otomatis.
+1. Pemantauan Suhu CPU Server Real-Time (°C) & Peringatan Termal Otomatis.
 2. Peringatan Kesehatan Server (S.M.A.R.T Disk Failure & Storage Critical Alert).
 3. Penyempurnaan Bahasa Menu Monitoring Baki Sistem ('Performa & Daya Server').
 4. Pengecekan & Pemasangan Pembaruan Online GitHub Releases API serta integrasi update ZIP.
@@ -719,4 +553,3 @@ Catatan:
 3. Dialog konfigurasi interaktif Dual-Route di dialogs.ps1.
 4. Dukungan protokol HTTPS aman untuk subdomain reverse proxy (port 443).
 ===================================================
-

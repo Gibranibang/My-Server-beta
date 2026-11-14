@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_all
+
+ROOT_DIR = SPECPATH
 
 datas = []
 binaries = []
@@ -14,8 +17,8 @@ for pkg in ['webview', 'paramiko', 'cryptography', 'bcrypt', 'nacl']:
         pass
 
 a = Analysis(
-    ['D:/Projek/MyServer/Beta/myserver_core_service.py'],
-    pathex=['D:/Projek/MyServer/Beta'],
+    [os.path.join(ROOT_DIR, 'myserver_core_service.py')],
+    pathex=[ROOT_DIR],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

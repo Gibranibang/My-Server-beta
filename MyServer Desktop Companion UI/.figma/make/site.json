@@ -1,0 +1,10 @@
+{
+  "description": "Manage private homelab servers from one desktop companion with system monitoring, file storage, backups, apps, settings, and remote power controls.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

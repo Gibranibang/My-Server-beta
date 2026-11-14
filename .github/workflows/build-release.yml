@@ -1,0 +1,200 @@
+name: Build Windows Desktop Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional existing or new GitHub Release tag (e.g. v4.5.6-beta) to attach built assets to'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      SYNCTHING_VERSION: v2.1.7
+      EASYTIER_VERSION: v2.6.4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag and app version
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = ""
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+          } elseif ("${{ inputs.release_tag }}" -ne "") {
+            $tag = "${{ inputs.release_tag }}".Trim()
+          }
+
+          $verLine = Select-String -Path "build_installer_package.py" -Pattern '^VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $verLine) {
+            throw "Could not determine VERSION from build_installer_package.py"
+          }
+          $ver = $verLine.Matches[0].Groups[1].Value
+          Write-Host "Resolved app version: $ver"
+          Write-Host "Resolved release tag: $tag"
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'MyServer Desktop Companion UI/package-lock.json'
+
+      - name: Build Companion Frontend UI
+        working-directory: MyServer Desktop Companion UI
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build Tauri shell (MyServer-Beta.exe)
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo build --release
+          if (-not (Test-Path "target\release\MyServer-Beta.exe")) {
+            throw "MyServer-Beta.exe was not generated"
+          }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python build and runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pywebview pythonnet paramiko cryptography bcrypt pynacl
+
+      - name: Build Core Service (myserver-core.exe)
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm myserver-core.spec
+          if (-not (Test-Path "dist\myserver-core.exe")) {
+            throw "dist\myserver-core.exe was not generated"
+          }
+
+      - name: Download Syncthing and EasyTier Windows binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "bin\easytier" | Out-Null
+          New-Item -ItemType Directory -Force -Path "resources\deps\easytier\win32\x64" | Out-Null
+          $tmpDir = Join-Path $env:RUNNER_TEMP "myserver_deps"
+          New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+
+          # 1. Syncthing
+          $stZip = Join-Path $tmpDir "syncthing.zip"
+          $stExtract = Join-Path $tmpDir "syncthing"
+          $stUrl = "https://github.com/syncthing/syncthing/releases/download/$($env:SYNCTHING_VERSION)/syncthing-windows-amd64-$($env:SYNCTHING_VERSION).zip"
+          Write-Host "Downloading Syncthing from $stUrl"
+          Invoke-WebRequest -Uri $stUrl -OutFile $stZip
+          Expand-Archive -Path $stZip -DestinationPath $stExtract -Force
+          $stExe = Get-ChildItem -Path $stExtract -Recurse -Filter "syncthing.exe" | Select-Object -First 1
+          if (-not $stExe) { throw "syncthing.exe not found in downloaded archive" }
+          Copy-Item -Path $stExe.FullName -Destination "bin\syncthing.exe" -Force
+
+          # 2. EasyTier
+          $etZip = Join-Path $tmpDir "easytier.zip"
+          $etExtract = Join-Path $tmpDir "easytier"
+          $etUrl = "https://github.com/EasyTier/EasyTier/releases/download/$($env:EASYTIER_VERSION)/easytier-windows-x86_64-$($env:EASYTIER_VERSION).zip"
+          Write-Host "Downloading EasyTier from $etUrl"
+          Invoke-WebRequest -Uri $etUrl -OutFile $etZip
+          Expand-Archive -Path $etZip -DestinationPath $etExtract -Force
+          $requiredFiles = @("easytier-core.exe", "easytier-cli.exe", "wintun.dll", "Packet.dll", "WinDivert64.sys")
+          foreach ($fname in $requiredFiles) {
+            $found = Get-ChildItem -Path $etExtract -Recurse -Filter $fname | Select-Object -First 1
+            if (-not $found) { throw "$fname not found in EasyTier archive" }
+            Copy-Item -Path $found.FullName -Destination "bin\easytier\$fname" -Force
+            Copy-Item -Path $found.FullName -Destination "resources\deps\easytier\win32\x64\$fname" -Force
+          }
+
+      - name: Ensure Inno Setup 6 is installed
+        shell: pwsh
+        run: |
+          $isccCandidates = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          )
+          $found = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) {
+            Write-Host "Installing Inno Setup 6 via Chocolatey..."
+            choco install innosetup -y --no-progress
+            $found = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $found) {
+            throw "ISCC.exe (Inno Setup 6) not found after installation"
+          }
+          Write-Host "Using ISCC.exe at: $found"
+          "ISCC_PATH=$found" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Package portable ZIP and Inno Setup installer
+        shell: pwsh
+        run: |
+          python build_installer_package.py
+          $ver = "${{ steps.meta.outputs.version }}"
+          $expected = @(
+            "dist\MyServer-v$ver-Beta.zip",
+            "dist\MyServer-v$ver-Beta-Setup.exe",
+            "dist\MyServer-Setup.exe"
+          )
+          foreach ($f in $expected) {
+            if (-not (Test-Path $f)) {
+              throw "Expected package missing: $f"
+            }
+          }
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: myserver-windows-v${{ steps.meta.outputs.version }}-beta
+          path: |
+            dist/MyServer-v*-Beta.zip
+            dist/MyServer-v*-Beta-Setup.exe
+            dist/MyServer-Setup.exe
+
+      - name: Upload assets to GitHub Release
+        if: steps.meta.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $ver = "${{ steps.meta.outputs.version }}"
+          $zipPath = "dist\MyServer-v$ver-Beta.zip"
+          $setupVerPath = "dist\MyServer-v$ver-Beta-Setup.exe"
+          $setupGenericPath = "dist\MyServer-Setup.exe"
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Creating release $tag..."
+            gh release create $tag --target "${{ github.sha }}" --title "MyServer v$ver Beta" --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create release $tag" }
+          }
+
+          Write-Host "Uploading Windows desktop packages to release $tag..."
+          gh release upload $tag $zipPath $setupVerPath $setupGenericPath --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload assets to release $tag" }

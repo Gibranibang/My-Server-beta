@@ -51,7 +51,7 @@ archive/
 node_modules/
 MyServer Desktop Companion UI/node_modules/
 MyServer Desktop Companion UI/dist/
-MyServer Desktop Companion UI/.figma/
+MyServer Desktop Companion UI/.figma/design-context/
 pnpm-lock.yaml
 
 # Temporary scripts & maintenance files

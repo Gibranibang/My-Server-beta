@@ -32,7 +32,7 @@ import zipfile
 
 
 
-BASE_BETA = r"D:\Projek\MyServer\Beta"
+BASE_BETA = os.path.dirname(os.path.abspath(__file__))
 
 DIST_DIR = os.path.join(BASE_BETA, "dist")
 
@@ -42,7 +42,25 @@ VERSION = "4.5.6"
 
 APP_NAME = "My-Server by algitha BETA"
 
-ISCC_PATH = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe")
+
+def _find_iscc():
+    env_path = os.environ.get("ISCC_PATH", "").strip()
+    if env_path and os.path.exists(env_path):
+        return env_path
+    which_path = shutil.which("ISCC.exe") or shutil.which("iscc")
+    if which_path:
+        return which_path
+    for cand in [
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"),
+        r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        r"C:\Program Files\Inno Setup 6\ISCC.exe",
+    ]:
+        if os.path.exists(cand):
+            return cand
+    return os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe")
+
+
+ISCC_PATH = _find_iscc()
 
 
 
@@ -327,9 +345,11 @@ print(f"  [v] ZIP Portabel siap: {zip_target} ({os.path.getsize(zip_target):,} b
 
 sw_dist = r"D:\Softwares\MyServer\dist"
 
-os.makedirs(sw_dist, exist_ok=True)
+if os.path.isdir(r"D:\Softwares\MyServer"):
 
-shutil.copy2(zip_target, os.path.join(sw_dist, zip_filename))
+    os.makedirs(sw_dist, exist_ok=True)
+
+    shutil.copy2(zip_target, os.path.join(sw_dist, zip_filename))
 
 
 
@@ -572,9 +592,11 @@ if iscc_res.returncode == 0:
 
         shutil.copy2(setup_output, setup_generic)
 
-        shutil.copy2(setup_output, os.path.join(sw_dist, f"MyServer-v{VERSION}-Beta-Setup.exe"))
+        if os.path.isdir(sw_dist):
 
-        shutil.copy2(setup_output, os.path.join(sw_dist, "MyServer-Setup.exe"))
+            shutil.copy2(setup_output, os.path.join(sw_dist, f"MyServer-v{VERSION}-Beta-Setup.exe"))
+
+            shutil.copy2(setup_output, os.path.join(sw_dist, "MyServer-Setup.exe"))
 
         print(f"  [v] SUKSES! Installer Inno Setup 6 siap:")
 
@@ -586,9 +608,13 @@ if iscc_res.returncode == 0:
 
         print(f"  [!] ISCC selesai tapi target berkas tidak ditemukan di {setup_output}")
 
+        sys.exit(1)
+
 else:
 
     print(f"  [X] ISCC Compiler Error:\n{iscc_res.stderr}\n{iscc_res.stdout}")
+
+    sys.exit(1)
 
 
 

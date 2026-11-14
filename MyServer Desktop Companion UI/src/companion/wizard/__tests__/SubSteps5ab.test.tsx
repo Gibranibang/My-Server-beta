@@ -1,30 +1,12 @@
 import React from "react"
+import "@testing-library/jest-dom/vitest"
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { createMockApi, setCompanionApi, type CompanionApi } from "../../api"
-import type { Language } from "../../i18n"
 import type { VirtualMachine, WizardDraft } from "../../types"
 import { StepFinishHub } from "../StepFinishHub"
 import { SubStepSyncthing } from "../SubStepSyncthing"
-
-interface SubStepVmProps {
-  draft: WizardDraft
-  onPatchDraft: (patch: Partial<WizardDraft>) => void
-  onDoneSubStep: () => void
-  onSkip?: () => void
-  onBack: () => void
-  language: Language
-  onNotify?: (msg: string, type?: "info" | "success" | "error" | "warning") => void
-  onErrorChange?: (hasError: boolean) => void
-}
-
-async function loadSubStepVmComponent(): Promise<React.ComponentType<SubStepVmProps>> {
-  const moduleSpecifier = "../SubStepVm"
-  const mod = (await import(/* @vite-ignore */ moduleSpecifier)) as {
-    SubStepVm: React.ComponentType<SubStepVmProps>
-  }
-  return mod.SubStepVm
-}
+import { SubStepVm } from "../SubStepVm"
 
 function makeDraft(overrides: Partial<WizardDraft> = {}): WizardDraft {
   return {
@@ -241,7 +223,6 @@ describe("Wizard Step 5 Hub and Sub-steps 5a / 5b", () => {
   })
 
   it("SubStepVm switches provider, scope, and screenOpenTarget without emitting invalid provider", async () => {
-    const SubStepVm = await loadSubStepVmComponent()
     const baseApi = createMockApi()
     const existingVm: VirtualMachine = {
       id: "vm-existing-1",
@@ -311,7 +292,6 @@ describe("Wizard Step 5 Hub and Sub-steps 5a / 5b", () => {
   })
 
   it("SubStepVm prevents duplicate VMs on rapid double-click and invokes syncInstaBoxVm for instabox", async () => {
-    const SubStepVm = await loadSubStepVmComponent()
     const baseApi = createMockApi()
     const loadVms = vi.fn().mockResolvedValue([])
     let resolveSave!: () => void

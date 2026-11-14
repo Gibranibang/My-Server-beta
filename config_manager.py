@@ -17,6 +17,7 @@ if sys.platform == "win32":
     from ctypes import wintypes
 
 SALT_KEY = b'MyServer_ZimaOS_Vault_Salt_2026'
+DEFAULT_GITHUB_REPO = "Gibranibang/My-Server-beta"
 _config_lock = threading.RLock()
 
 if sys.platform == "win32":
@@ -441,6 +442,7 @@ def get_default_config():
         },
         "web_apps": [],
         "first_run_setup": True,
+        "github_repo": DEFAULT_GITHUB_REPO,
         "language": "en",
         "notifications_enabled": True,
         "popup_alerts_enabled": False,
@@ -448,6 +450,121 @@ def get_default_config():
         "auto_clean_cache": False,
         "open_dashboard_on_launch": False
     }
+
+
+def _is_valid_cred_pair(username, decrypted_password):
+    u_clean = str(username or "").strip()
+    p_raw = str(decrypted_password or "")
+    if not u_clean or not p_raw.strip():
+        return False
+    if p_raw.startswith(("dpapi:", "enc:")):
+        return False
+    return True
+
+
+def _server_has_valid_credentials(srv):
+    if not isinstance(srv, dict):
+        return False
+    creds_dict = srv.get("credentials")
+    if not isinstance(creds_dict, dict) or not creds_dict:
+        return False
+
+    seen_profiles = []
+    active_prof = srv.get("active_profile")
+    if active_prof:
+        seen_profiles.append(active_prof)
+    for k in creds_dict.keys():
+        if k not in seen_profiles:
+            seen_profiles.append(k)
+
+    for prof_key in seen_profiles:
+        raw_entry = creds_dict.get(prof_key)
+        if isinstance(raw_entry, dict):
+            c = get_server_credentials(srv, prof_key)
+            if _is_valid_cred_pair(c.get("username"), c.get("password")):
+                return True
+
+    # Fallback for flat legacy credentials dict: {"username": ..., "password": ...}
+    if isinstance(creds_dict.get("username"), str) and isinstance(creds_dict.get("password"), str):
+        p_enc = creds_dict.get("password", "")
+        p_dec = decrypt_credential(p_enc) if p_enc else ""
+        if _is_valid_cred_pair(creds_dict.get("username"), p_dec):
+            return True
+
+    # Final fallback via get_server_credentials(srv)
+    c_fb = get_server_credentials(srv)
+    if _is_valid_cred_pair(c_fb.get("username"), c_fb.get("password")):
+        return True
+
+    return False
+
+
+def is_placeholder_default_server(srv):
+    if not isinstance(srv, dict):
+        return False
+    if str(srv.get("id") or "").strip() != "srv_default":
+        return False
+
+    top_url = str(srv.get("url") or "").strip().rstrip("/").lower()
+    if top_url and top_url != "http://zimaos.local":
+        return False
+
+    for c in srv.get("connections") or []:
+        if isinstance(c, dict):
+            cu = str(c.get("url") or "").strip().rstrip("/").lower()
+            if cu and cu != "http://zimaos.local":
+                return False
+
+    if _server_has_valid_credentials(srv):
+        return False
+
+    for k in ("zerotier_network_id", "remote_id", "zerotierNetworkId", "remoteId"):
+        if str(srv.get(k) or "").strip():
+            return False
+
+    return True
+
+
+def has_valid_configured_server(cfg):
+    if not isinstance(cfg, dict):
+        return False
+    easytier_cfg = cfg.get("easytier")
+    easytier_remote_id = str(easytier_cfg.get("remote_id") or "").strip() if isinstance(easytier_cfg, dict) else ""
+
+    for srv in cfg.get("servers") or []:
+        if not isinstance(srv, dict):
+            continue
+        srv_id = str(srv.get("id") or "").strip()
+        if not srv_id:
+            continue
+        if not _server_has_valid_credentials(srv):
+            continue
+
+        has_non_default_id = (srv_id != "srv_default")
+        has_remote_id = any(
+            bool(str(srv.get(k) or "").strip())
+            for k in ("zerotier_network_id", "remote_id", "zerotierNetworkId", "remoteId")
+        ) or bool(easytier_remote_id)
+        has_conn_url = any(
+            isinstance(c, dict) and bool(str(c.get("url") or "").strip())
+            for c in (srv.get("connections") or [])
+        ) or bool(str(srv.get("url") or "").strip())
+
+        if has_non_default_id or has_remote_id or has_conn_url:
+            return True
+
+    return False
+
+
+def evaluate_first_run_setup(cfg):
+    if not isinstance(cfg, dict):
+        return True
+    if has_valid_configured_server(cfg):
+        return False
+    raw_flag = cfg.get("first_run_setup")
+    if raw_flag is None:
+        return True
+    return bool(raw_flag)
 
 
 def migrate_config_schema(cfg):
@@ -578,6 +695,23 @@ def migrate_config_schema(cfg):
     if "language" not in cfg:
         cfg["language"] = "en"
         modified = True
+
+    if not str(cfg.get("github_repo") or "").strip():
+        cfg["github_repo"] = DEFAULT_GITHUB_REPO
+        modified = True
+
+    if "first_run_setup" not in cfg or cfg.get("first_run_setup") is None:
+        cfg["first_run_setup"] = False if has_valid_configured_server(cfg) else True
+        modified = True
+    elif cfg.get("first_run_setup") is False:
+        pass
+    else:
+        if has_valid_configured_server(cfg):
+            cfg["first_run_setup"] = False
+            modified = True
+        elif cfg.get("first_run_setup") is not True:
+            cfg["first_run_setup"] = True
+            modified = True
 
     return cfg, modified
 
@@ -1287,11 +1421,33 @@ def get_effective_backup_app_target(server, cfg=None, current_loaded_url=None, c
         wan_target = (wan_host, wan_p, api_key, clean_wan_url, f"WAN / Subdomain ({wan_host})", wan_https)
 
     zt_target = None
-    zt_ip = str(server.get("zerotier_virtual_ip") or "").strip()
-    if zt_ip:
-        zt_p = lan_port or "8384"
-        zt_url = f"http://{zt_ip}:{zt_p}"
-        zt_target = (zt_ip, zt_p, api_key, zt_url, f"ZeroTier ({zt_ip}:{zt_p})", False)
+    explicit_remote_ip = str(b_app.get("remote_ip") or "").strip()
+    zt_ip_raw = explicit_remote_ip or str(server.get("zerotier_virtual_ip") or "").strip()
+    if zt_ip_raw:
+        if explicit_remote_ip:
+            zt_p = str(b_app.get("remote_port") or "").strip() or lan_port or "8384"
+            zt_https = bool(b_app.get("remote_https", False))
+        else:
+            zt_p = lan_port or "8384"
+            zt_https = False
+
+        zt_ip = zt_ip_raw
+        if "://" in zt_ip_raw:
+            p_zt = urllib.parse.urlparse(zt_ip_raw)
+            zt_ip = p_zt.hostname or zt_ip_raw
+            if p_zt.port:
+                zt_p = str(p_zt.port)
+            zt_https = (p_zt.scheme.lower() == "https") or zt_https
+        elif ":" in zt_ip_raw and not zt_ip_raw.startswith("["):
+            parts = zt_ip_raw.split(":")
+            if len(parts) == 2 and parts[1].isdigit():
+                zt_ip = parts[0]
+                zt_p = parts[1]
+
+        zt_scheme = "https" if zt_https else "http"
+        zt_url = f"{zt_scheme}://{zt_ip}:{zt_p}"
+        zt_label = "Remote IP" if explicit_remote_ip else "ZeroTier"
+        zt_target = (zt_ip, zt_p, api_key, zt_url, f"{zt_label} ({zt_ip}:{zt_p})", zt_https)
 
     # 3. Pemilihan Rute berdasarkan mode
     if route_mode == "lan":
@@ -1322,11 +1478,12 @@ def get_effective_backup_app_target(server, cfg=None, current_loaded_url=None, c
         _SYNCTHING_ROUTE_CACHE[srv_id] = {"target": res, "time": now}
         return res
 
-    # B. Jika LAN tidak aktif, uji jalur ZeroTier Virtual IP jika ada
+    # B. Jika LAN tidak aktif, uji jalur Remote IP / ZeroTier Virtual IP jika ada
     if zt_target:
         zt_ok, zt_lat = check_syncthing_ping(zt_target[3], timeout=1.2)
         if zt_ok:
-            active_route_name = f"ZeroTier Remote ({zt_target[0]}:{zt_target[1]} - {zt_lat}ms)"
+            active_route_label = "Remote IP" if explicit_remote_ip else "ZeroTier Remote"
+            active_route_name = f"{active_route_label} ({zt_target[0]}:{zt_target[1]} - {zt_lat}ms)"
             res = (zt_target[0], zt_target[1], api_key, zt_target[3], active_route_name, zt_target[5])
             _SYNCTHING_ROUTE_CACHE[srv_id] = {"target": res, "time": now}
             return res

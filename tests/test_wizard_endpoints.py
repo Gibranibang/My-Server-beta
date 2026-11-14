@@ -197,7 +197,7 @@ class WizardEndpointsTests(unittest.TestCase):
         self.assertIs(after_blocked.get("firstRunSetup"), True)
 
         # Once a valid server exists, firstRunSetup=False can be saved and reopened
-        cfg = config_manager.load_config()
+        cfg = config_manager.load_or_create_config()
         cfg["servers"][0]["name"] = "My Home NAS"
         cfg["servers"][0]["connections"] = [
             {"id": "conn_lan", "name": "LAN", "url": "http://192.168.1.50:80"}
@@ -220,16 +220,14 @@ class WizardEndpointsTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIs(after_done.get("firstRunSetup"), False)
 
-        # Manual reopen
+        # Manual reopen writes first_run_setup=True to disk
         status, _ = self._request_json(
             "POST",
             "/api/save_settings",
             {"settings": {"firstRunSetup": True}},
         )
         self.assertEqual(status, 200)
-        status, reopened = self._request_json("POST", "/api/load_settings", {})
-        self.assertEqual(status, 200)
-        self.assertIs(reopened.get("firstRunSetup"), True)
+        self.assertIs(self._read_disk_config().get("first_run_setup"), True)
 
     def test_wizard_verify_zimaos_success_and_errors_without_password_leak(self):
         secret_pw = "UltraSecretZimaPass!987"

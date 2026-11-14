@@ -3763,6 +3763,235 @@ def _apply_recent_vm_mutation(vm):
     return vm
 
 
+_wizard_commit_lock = threading.RLock()
+_ORIG_ZIMA_METRICS_CLIENT = zima_metrics_manager.ZimaMetricsClient
+ZimaMetricsClient = _ORIG_ZIMA_METRICS_CLIENT
+
+
+def _handle_wizard_verify_zimaos(body):
+    """Verify ZimaOS HTTP/S URL and Admin credentials without persisting or logging secrets."""
+    if not isinstance(body, dict):
+        return 400, {"success": False, "error": "invalid_payload", "message": "Payload tidak valid"}
+
+    raw_url = str(body.get("url") or body.get("localUrl") or body.get("baseUrl") or "").strip()
+    username = str(body.get("username") or "").strip()
+    password = str(body.get("password") or "")
+
+    if not raw_url or not username or not password:
+        return 400, {
+            "success": False,
+            "error": "missing_fields",
+            "message": "URL, username, dan password ZimaOS wajib diisi",
+        }
+
+    resolved_url = config_manager.format_server_url(raw_url)
+    if not resolved_url:
+        return 400, {
+            "success": False,
+            "error": "invalid_url",
+            "message": "Format URL ZimaOS tidak valid",
+        }
+
+    client_cls = (
+        ZimaMetricsClient
+        if ZimaMetricsClient is not _ORIG_ZIMA_METRICS_CLIENT
+        else zima_metrics_manager.ZimaMetricsClient
+    )
+    client = client_cls(
+        base_url=resolved_url,
+        username=username,
+        password=password,
+        allow_multi_route_failover=False,
+    )
+
+    try:
+        authenticated = bool(client.authenticate())
+    except Exception as exc:
+        safe_err = str(exc).replace(password, "***") if password else str(exc)
+        logger_manager.log_warning(f"[WizardVerify] Gagal menghubungi {resolved_url}: {type(exc).__name__}: {safe_err}")
+        return 503, {
+            "success": False,
+            "error": "unreachable",
+            "message": f"Gagal terhubung ke ZimaOS: {safe_err}",
+        }
+
+    if not authenticated:
+        logger_manager.log_warning(f"[WizardVerify] Autentikasi gagal untuk user '{username}' di {resolved_url}")
+        return 401, {
+            "success": False,
+            "error": "auth_failed",
+            "message": "Username atau password ZimaOS salah",
+        }
+
+    zt_info = {}
+    try:
+        fetched = client.fetch_zerotier_network_info()
+        if isinstance(fetched, dict):
+            zt_info = fetched
+    except Exception:
+        zt_info = {}
+
+    final_url = str(getattr(client, "base_url", None) or resolved_url).strip()
+    return 200, {
+        "success": True,
+        "username": username,
+        "resolvedUrl": final_url,
+        "isAdmin": bool(getattr(client, "is_admin", False)),
+        "zerotierNetworkId": str(zt_info.get("network_id") or "").strip(),
+        "zerotierIp": str(zt_info.get("remote_ipv4") or "").strip(),
+        "ztStatus": str(zt_info.get("status") or "").strip(),
+    }
+
+
+def _handle_wizard_commit_server(body):
+    """Persist verified wizard server details atomically with DPAPI-encrypted credentials."""
+    if not isinstance(body, dict):
+        return 400, {"success": False, "error": "invalid_payload", "message": "Payload tidak valid"}
+
+    name = str(body.get("name") or body.get("serverName") or "").strip() or "My Server"
+    local_url_raw = str(body.get("localUrl") or body.get("local_url") or body.get("url") or "").strip()
+    wan_url_raw = str(body.get("wanUrl") or body.get("wan_url") or "").strip()
+    zt_nwid = str(
+        body.get("zerotierNetworkId") or body.get("zerotier_network_id") or body.get("remoteId") or ""
+    ).strip().lower()
+    zt_vip = str(
+        body.get("zerotierVirtualIp") or body.get("zerotier_virtual_ip") or body.get("zerotierIp") or ""
+    ).strip()
+    username = str(body.get("username") or "").strip()
+    password = str(body.get("password") or "")
+    requested_id = str(body.get("serverId") or body.get("id") or "").strip()
+    ssh_user = str(body.get("sshUser") or body.get("ssh_user") or "").strip()
+
+    has_local = bool(local_url_raw and local_url_raw not in ("http://", "https://"))
+    has_wan = bool(wan_url_raw and wan_url_raw not in ("http://", "https://"))
+    if not has_local and not has_wan:
+        return 400, {
+            "success": False,
+            "error": "missing_url",
+            "message": "URL lokal atau WAN ZimaOS wajib diisi",
+        }
+    if not username:
+        return 400, {
+            "success": False,
+            "error": "missing_username",
+            "message": "Username ZimaOS wajib diisi",
+        }
+
+    with _wizard_commit_lock, config_manager._config_lock:
+        cfg = config_manager.load_or_create_config()
+        servers = cfg.setdefault("servers", [])
+
+        target = None
+        if requested_id:
+            target = next((s for s in servers if isinstance(s, dict) and s.get("id") == requested_id), None)
+        if target is None:
+            target = next(
+                (s for s in servers if isinstance(s, dict) and config_manager.is_placeholder_default_server(s)),
+                None,
+            )
+        if target is None and len(servers) == 1 and isinstance(servers[0], dict) and servers[0].get("id") == "srv_default":
+            target = servers[0]
+
+        if target is None:
+            new_id = requested_id or f"srv_{int(time.time() * 1000)}"
+            target = {
+                "id": new_id,
+                "name": name,
+                "connections": [],
+                "credentials": {},
+                "profiles": ["Admin"],
+                "active_profile": "Admin",
+            }
+            servers.append(target)
+
+        existing_creds = target.get("credentials") if isinstance(target.get("credentials"), dict) else {}
+        existing_admin = existing_creds.get("Admin") if isinstance(existing_creds.get("Admin"), dict) else {}
+        if not password and not str(existing_admin.get("password") or "").strip():
+            return 400, {
+                "success": False,
+                "error": "missing_password",
+                "message": "Password ZimaOS wajib diisi",
+            }
+
+        existing_conns = target.get("connections") if isinstance(target.get("connections"), list) else []
+        conns = []
+        if has_local:
+            lan_id = (
+                existing_conns[0].get("id")
+                if existing_conns and isinstance(existing_conns[0], dict) and existing_conns[0].get("id")
+                else "conn_lan"
+            )
+            conns.append(
+                {
+                    "id": lan_id,
+                    "name": "LAN",
+                    "type": "lan",
+                    "url": config_manager.format_server_url(local_url_raw),
+                }
+            )
+        if has_wan:
+            conns.append(
+                {
+                    "id": "conn_wan",
+                    "name": "Domain / WAN",
+                    "type": "domain",
+                    "url": config_manager.format_server_url(wan_url_raw),
+                }
+            )
+
+        target["name"] = name
+        target["connections"] = conns
+        if conns:
+            target["active_connection_id"] = conns[0]["id"]
+        if zt_nwid:
+            target["zerotier_network_id"] = zt_nwid
+            target["remote_id"] = zt_nwid
+        if zt_vip:
+            target["zerotier_virtual_ip"] = zt_vip
+        if ssh_user:
+            target["ssh_user"] = ssh_user
+
+        profiles = target.get("profiles") if isinstance(target.get("profiles"), list) else []
+        if "Admin" not in profiles:
+            profiles.append("Admin")
+        target["profiles"] = profiles
+        target["active_profile"] = "Admin"
+        cfg["active_server_id"] = target["id"]
+
+        config_manager.save_config(cfg)
+        if password:
+            config_manager.save_server_credentials(cfg, target["id"], "Admin", username, password)
+        else:
+            existing_creds["Admin"] = {**existing_admin, "username": username}
+            target["credentials"] = existing_creds
+            config_manager.save_config(cfg)
+
+        logger_manager.log_info(f"[WizardCommit] Server '{name}' (id={target['id']}) tersimpan")
+        return 200, {
+            "success": True,
+            "serverId": target["id"],
+            "name": name,
+            "zerotierNetworkId": str(target.get("zerotier_network_id") or ""),
+            "zerotierVirtualIp": str(target.get("zerotier_virtual_ip") or ""),
+        }
+
+
+def _handle_wizard_complete(_body=None):
+    """Gate and mark first-run setup complete only when a valid server configuration exists."""
+    with _wizard_commit_lock, config_manager._config_lock:
+        cfg = config_manager.load_or_create_config()
+        if not config_manager.has_valid_configured_server(cfg):
+            return 400, {
+                "success": False,
+                "error": "wizard_incomplete",
+                "message": "Selesaikan koneksi & login dulu",
+            }
+        cfg["first_run_setup"] = False
+        config_manager.save_config(cfg)
+        logger_manager.log_info("[WizardComplete] First-run setup selesai")
+        return 200, {"success": True, "firstRunSetup": False}
+
+
 def _prepare_vm_payload_for_backend(vm):
     """Mengharmonisasi payload VM ke format dual camelCase & snake_case untuk backend ZimaOS."""
     if not isinstance(vm, dict):
@@ -25750,6 +25979,30 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+                    "remote_ip": str(b_app.get("remote_ip") or srv.get("zerotier_virtual_ip") or ""),
+
+
+
+
+
+
+
+                    "remote_port": str(b_app.get("remote_port") or "8384"),
+
+
+
+
+
+
+
+                    "remote_https": bool(b_app.get("remote_https", False)),
+
+
+
+
+
+
+
                 }
 
 
@@ -25959,6 +26212,54 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 b_app["wan_https"] = bool(body["wan_https"])
+
+
+
+
+
+
+
+            if "remote_ip" in body:
+
+
+
+
+
+
+
+                b_app["remote_ip"] = str(body["remote_ip"]).strip()
+
+
+
+
+
+
+
+            if "remote_port" in body:
+
+
+
+
+
+
+
+                b_app["remote_port"] = str(body["remote_port"]).strip() or "8384"
+
+
+
+
+
+
+
+            if "remote_https" in body:
+
+
+
+
+
+
+
+                b_app["remote_https"] = bool(body["remote_https"])
 
 
 
@@ -28845,6 +29146,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 "language": str(cfg.get("language", "en")),
                 "theme": str(cfg.get("theme", "dark")) if str(cfg.get("theme", "")).lower() in ("dark", "light") else "dark",
                 "dpapiActive": bool(config_manager.is_dpapi_supported()),
+                "firstRunSetup": bool(config_manager.evaluate_first_run_setup(cfg)),
         "backend": _get_backend_health_info(cfg),
 
 
@@ -29074,6 +29376,13 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     theme_val = str(settings["theme"]).lower().strip()
                     if theme_val in ("dark", "light"):
                         cfg["theme"] = theme_val
+                if "firstRunSetup" in settings:
+                    want_frs = bool(settings["firstRunSetup"])
+                    if not want_frs:
+                        if config_manager.has_valid_configured_server(cfg):
+                            cfg["first_run_setup"] = False
+                    else:
+                        cfg["first_run_setup"] = True
 
 
 
@@ -29276,6 +29585,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 path = "/api/vms/delete"
             elif ep in ("vms/migrate", "vms_migrate"):
                 path = "/api/vms/migrate"
+            elif ep in ("probe_url", "probe-url"):
+                target_url = str(body.get("url") or body.get("arg") or "").strip()
+                self._send_json(probe_url_endpoint(target_url))
+                return
+            elif ep in ("wizard/verify_zimaos", "wizard_verify_zimaos"):
+                path = "/api/wizard/verify_zimaos"
+            elif ep in ("wizard/commit_server", "wizard_commit_server"):
+                path = "/api/wizard/commit_server"
+            elif ep in ("wizard/complete", "wizard_complete"):
+                path = "/api/wizard/complete"
 
         # --- Endpoints Persisten VM, Migrasi Server & Terminal SSH (v4.5.5 Beta) ---
         if path in ("/api/vms/delete", "/api/vms_delete"):
@@ -29495,6 +29814,21 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 config_manager.save_config(cfg)
                 self._send_json({"status": "ok", "success": True, "vm": target_vm})
                 return
+
+        if path in ("/api/wizard/verify_zimaos", "/api/wizard_verify_zimaos"):
+            status_code, res = _handle_wizard_verify_zimaos(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path in ("/api/wizard/commit_server", "/api/wizard_commit_server"):
+            status_code, res = _handle_wizard_commit_server(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path in ("/api/wizard/complete", "/api/wizard_complete"):
+            status_code, res = _handle_wizard_complete(body)
+            self._send_json(res, status=status_code)
+            return
 
         if path in ("/api/server/backend_status", "/api/server_backend_status"):
             req_srv_id = (body.get("serverId") or body.get("server_id") or "").strip() or None if isinstance(body, dict) else None
@@ -31891,6 +32225,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                         target["connections"][0]["url"] = config_manager.format_server_url(raw_u)
+                        if not target["connections"][0].get("name"):
+                            target["connections"][0]["name"] = "Primary"
 
 
 
@@ -31915,6 +32251,18 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                     target["zerotier_virtual_ip"] = zt_vip
+                if u_name or p_pass:
+                    act_prof = target.get("active_profile") or "Admin"
+                    profs = target.setdefault("profiles", [])
+                    if act_prof not in profs:
+                        profs.append(act_prof)
+                    creds = target.setdefault("credentials", {})
+                    if p_pass:
+                        curr_u = u_name or (creds.get(act_prof, {}).get("username") if isinstance(creds.get(act_prof), dict) else "") or "admin"
+                        config_manager.save_server_credentials(cfg, target.get("id"), act_prof, curr_u, p_pass)
+                    elif u_name:
+                        prof_entry = creds.setdefault(act_prof, {})
+                        prof_entry["username"] = u_name
 
 
 
@@ -32015,6 +32363,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 servers.append(new_srv)
+                if body.get("setActive", True) is not False:
+                    cfg["active_server_id"] = s_id
 
 
 

@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.6",
+        "channel": "Beta",
+        "date": "2026-11-14",
+        "title": "Stabilisasi Menyeluruh VM Manager, Proteksi Runtime 8 Jam, Optimistic Mutation Lock, dan Backend ZimaOS v1.2.4",
+        "notes": [
+            "Proteksi Progress Waktu VM (Anti-Reset): Mempertahankan durasi runtimeMinutes saat sinkronisasi list API maupun pembaruan konfigurasi SQLite, menyelaraskan batas siklus ke 8 jam (480 menit), dan membatasi Smart Reset hanya saat otomasi aktif.",
+            "Respon Instan & Stabilitas Saklar Power/Otomasi: Memperbaiki scope variabel pada toggle Always-On 24/7, memangkas pemanggilan sinkronisasi ganda pada aksi Wake/Sleep, serta menambahkan per-VM Optimistic Mutation Lock (UI, Core Service, dan Backend 20s Grace Window) agar status tombol tidak membal kembali.",
+            "Eliminasi Total Ghost/Zombie VM Saat Penghapusan: Menghapus kartu VM seketika dari state, memperbaiki fallback array kosong pada VM lokal terakhir, dan menyinkronkan Delete Tombstone 60 detik di seluruh lapisan (Frontend, Core Service, dan SQLite ZimaOS Backend v1.2.4).",
+            "Kelengkapan Otomasi & Sinkronisasi ZimaOS Backend v1.2.4: Mengimplementasikan mode jadwal Auto-On 'after_off' (beserta satuan delay dan cooldown 65 detik), menonaktifkan Always-On otomatis saat VM ditidurkan manual, serta menyelaraskan parameter migrasi VM."
+        ],
+        "features": [
+            "Proteksi Progress Waktu VM 8 Jam (Bebas Reset Runtime)",
+            "Per-VM Optimistic Mutation Lock & Grace Window Transisi Power",
+            "Delete Tombstone 60 Detik Lintas Lapisan (Zero Ghost VM)",
+            "Integrasi ZimaOS Backend v1.2.4 & Penjadwal Auto-On After-Off"
+        ]
+    },
+    {
         "version": "4.5.5",
         "channel": "Beta",
         "date": "2026-11-10",

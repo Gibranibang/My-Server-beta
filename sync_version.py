@@ -51,6 +51,27 @@ def sync_version(version_str, channel="Beta"):
             f.write(f'export const APP_VERSION = "{clean_ver}"\nexport const APP_CHANNEL = "{channel}"\n')
         print(f"  [v] version.ts tersinkronisasi ({clean_ver}, {channel}).")
 
+
+    # 2b. package.json
+    pkg_json = os.path.join(ROOT_DIR, "MyServer Desktop Companion UI", "package.json")
+    if os.path.exists(pkg_json):
+        with open(pkg_json, "r", encoding="utf-8") as f:
+            c = f.read()
+        c = re.sub(r'"version":\s*"[0-9\.]+"', f'"version": "{clean_ver}"', c, count=1)
+        with open(pkg_json, "w", encoding="utf-8") as f:
+            f.write(c)
+        print(f"  [v] package.json tersinkronisasi ({clean_ver}).")
+
+    # 3b. Cargo.lock
+    cargo_lock = os.path.join(ROOT_DIR, "src-tauri", "Cargo.lock")
+    if os.path.exists(cargo_lock):
+        with open(cargo_lock, "r", encoding="utf-8") as f:
+            c = f.read()
+        c = re.sub(r'(name = "app"\r?\nversion = )"[0-9\.]+"', rf'\g<1>"{clean_ver}"', c, count=1)
+        with open(cargo_lock, "w", encoding="utf-8") as f:
+            f.write(c)
+        print(f"  [v] src-tauri/Cargo.lock tersinkronisasi ({clean_ver}).")
+
     # 3. Cargo.toml
     for c_rel in [os.path.join("src-tauri", "Cargo.toml"), os.path.join("sandbox", "tauri_shell", "src-tauri", "Cargo.toml")]:
         cargo_p = os.path.join(ROOT_DIR, c_rel)
@@ -112,7 +133,7 @@ def sync_version(version_str, channel="Beta"):
         ]
     }},
 '''
-            c = c.replace('CHANGELOG_DATA = [\n', f'CHANGELOG_DATA = [\n{new_entry}')
+            c = c.replace('CHANGELOG_HISTORY = [\n', f'CHANGELOG_HISTORY = [\n{new_entry}')
             with open(chg_p, "w", encoding="utf-8") as f:
                 f.write(c)
         print(f"  [v] changelog_manager.py tersinkronisasi.")

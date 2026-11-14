@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.5"
+APP_VERSION_NUMBER = "4.5.6"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3709,6 +3709,58 @@ def probe_url_endpoint(target_url, timeout=1.2):
 
 _deleted_vms_tombstone: dict = {}  # vm_id -> expiry_timestamp (TTL 60s)
 _backend_url_cache: dict = {}      # srv_id -> (url, expiry_timestamp) (TTL 25s)
+_recent_vm_mutations: dict = {}    # vm_id -> {"expires_at": float, "patch": dict}
+
+
+def _record_recent_vm_mutation(vm_id, patch, ttl=12.0):
+    """Mencatat mutasi VM terbaru (optimistic lock) agar polling 4 detik tidak menimpa state transisi."""
+    if not vm_id or not isinstance(patch, dict):
+        return
+    now = time.time()
+    existing = _recent_vm_mutations.get(vm_id)
+    merged_patch = {}
+    if existing and now < existing.get("expires_at", 0) and isinstance(existing.get("patch"), dict):
+        merged_patch.update(existing["patch"])
+    for k, v in patch.items():
+        if v is not None:
+            merged_patch[k] = v
+    _recent_vm_mutations[vm_id] = {
+        "expires_at": now + ttl,
+        "patch": merged_patch,
+    }
+
+
+def _apply_recent_vm_mutation(vm):
+    """Menerapkan patch mutasi terbaru ke objek VM hasil polling jika masih dalam masa grace period."""
+    if not isinstance(vm, dict):
+        return vm
+    vid = vm.get("id")
+    if not vid:
+        return vm
+    entry = _recent_vm_mutations.get(vid)
+    if not entry:
+        return vm
+    if time.time() >= entry.get("expires_at", 0):
+        _recent_vm_mutations.pop(vid, None)
+        return vm
+    patch = entry.get("patch") or {}
+    for k, v in patch.items():
+        if k in ("autoRestart", "autoOn") and isinstance(v, dict) and isinstance(vm.get(k), dict):
+            vm[k] = {**vm[k], **v}
+        else:
+            vm[k] = v
+    # Sinkronkan properti boolean camelCase <-> snake_case
+    if "keepAliveEnabled" in patch:
+        vm["keep_alive_enabled"] = bool(patch["keepAliveEnabled"])
+    elif "keep_alive_enabled" in patch:
+        vm["keepAliveEnabled"] = bool(patch["keep_alive_enabled"])
+    if "autoRestart" in patch and isinstance(patch["autoRestart"], dict) and "enabled" in patch["autoRestart"]:
+        vm["auto_restart_enabled"] = bool(patch["autoRestart"]["enabled"])
+        vm["autoRestartEnabled"] = bool(patch["autoRestart"]["enabled"])
+    if "autoOn" in patch and isinstance(patch["autoOn"], dict) and "enabled" in patch["autoOn"]:
+        vm["auto_on_enabled"] = bool(patch["autoOn"]["enabled"])
+        vm["autoOnEnabled"] = bool(patch["autoOn"]["enabled"])
+    return vm
 
 
 def _prepare_vm_payload_for_backend(vm):
@@ -3766,6 +3818,8 @@ def _prepare_vm_payload_for_backend(vm):
             p["auto_on_time"] = str(ao.get("clockTime") or "07:00")
         if "delayValue" in ao:
             p["auto_on_delay_min"] = int(ao.get("delayValue") or 60)
+        if "delayUnit" in ao:
+            p["auto_on_delay_unit"] = str(ao.get("delayUnit") or "minutes")
         if "days" in ao and isinstance(ao.get("days"), list):
             conv_days = []
             for d in ao.get("days", []):
@@ -21673,20 +21727,29 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"running": False, "error": "easytier_manager not available"})
         elif path in ("/api/vms", "/api/vms/load"):
             cfg = config_manager.load_or_create_config()
-            local_vms = cfg.get("vms", [])
+            now_ts = time.time()
+            local_vms = [
+                v for v in (cfg.get("vms", []) or [])
+                if isinstance(v, dict) and _deleted_vms_tombstone.get(v.get("id"), 0) <= now_ts
+            ]
             for vm in local_vms:
                 if not vm.get("scope"):
                     vm["scope"] = "local"
+                _apply_recent_vm_mutation(vm)
 
             srv = config_manager.get_active_server(cfg)
             backend_url = _get_active_server_backend_url(cfg)
             server_vms = []
+            server_online = False
             if srv and backend_url:
                 try:
-                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.0)
+                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.5)
                     if ok and isinstance(data, dict):
+                        server_online = True
                         raw_server_vms = data.get("vms", [])
                         for svm in raw_server_vms:
+                            if _deleted_vms_tombstone.get(svm.get("id"), 0) > now_ts:
+                                continue
                             svm["scope"] = "server"
                             svm["serverId"] = srv.get("id")
                             svm["serverName"] = srv.get("name")
@@ -21715,8 +21778,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                                     "mode": svm.get("auto_on_mode", "clock"),
                                     "clockTime": svm.get("auto_on_time", "07:00"),
                                     "delayValue": svm.get("auto_on_delay_min", 60),
+                                    "delayUnit": svm.get("auto_on_delay_unit", "minutes"),
                                     "days": svm.get("auto_on_days", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
                                 }
+                            _apply_recent_vm_mutation(svm)
                             server_vms.append(svm)
                 except Exception as be:
                     logger_manager.log_debug(f"[api/vms] Gagal sync server VMs dari backend ZimaOS: {be}")
@@ -21729,9 +21794,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             for vm in local_vms:
                 if not isinstance(vm, dict):
                     continue
+                vid = vm.get("id")
                 vscope = vm.get("scope") or ("server" if vm.get("serverId") or vm.get("serverName") else "local")
-                if vscope != "server" and vm.get("id") not in seen_ids:
-                    combined.append(vm)
+                if vid not in seen_ids:
+                    if vscope != "server" or not server_online:
+                        seen_ids.add(vid)
+                        combined.append(vm)
+
+            if combined != cfg.get("vms"):
+                cfg["vms"] = combined
+                config_manager.save_config(cfg)
 
             self._send_json({"status": "ok", "vms": combined})
         elif path == "/api/instabox/vms":
@@ -28672,17 +28744,20 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 if found_v:
                     server_id = found_v.get("serverId", "")
 
-            # Daftarkan ke tombstone Core Service (TTL 60 detik) untuk proteksi anti-resurrection multi-device
+            # Daftarkan ke tombstone Core Service (TTL 60 detik) & bersihkan cache mutasi
             _deleted_vms_tombstone[vm_id] = time.time() + 60.0
+            _recent_vm_mutations.pop(vm_id, None)
 
             cfg["vms"] = [v for v in local_vms if isinstance(v, dict) and v.get("id") != vm_id]
+            if isinstance(cfg.get("instabox_vms"), list):
+                cfg["instabox_vms"] = [v for v in cfg["instabox_vms"] if isinstance(v, dict) and v.get("id") != vm_id]
             config_manager.save_config(cfg)
 
             backend_url = _get_active_server_backend_url(cfg, target_server_id=server_id)
             server_deleted = False
             if backend_url:
                 try:
-                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0)
+                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0, retries=1)
                     server_deleted = ok
                     logger_manager.log_info(f"[/api/vms/delete] VM {vm_id} berhasil dihapus dari ZimaOS: {ok} (code {code})")
                 except Exception as de:
@@ -28699,6 +28774,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
             updates = body.get("vm") or body.get("updates") or {}
             server_id = (body.get("serverId") or updates.get("serverId") or "").strip()
+
+            if isinstance(updates, dict):
+                _record_recent_vm_mutation(vm_id, updates, ttl=12.0)
 
             cfg = config_manager.load_or_create_config()
             local_vms = cfg.get("vms", []) or []
@@ -28741,7 +28819,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 config_manager.save_config(cfg)
 
                 for vm in vms_list:
-                    if vm.get("scope") == "server":
+                    if vm.get("scope") == "server" and _deleted_vms_tombstone.get(vm.get("id"), 0) <= time.time():
                         backend_url = _get_active_server_backend_url(cfg, target_server_id=vm.get("serverId"))
                         if backend_url:
                             try:
@@ -28758,6 +28836,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 for vm in cached_vms:
                     if not vm.get("scope"):
                         vm["scope"] = "local"
+                    _apply_recent_vm_mutation(vm)
 
                 srv = config_manager.get_active_server(cfg)
                 backend_url = _get_active_server_backend_url(cfg)
@@ -28771,11 +28850,12 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             raw_server_vms = data.get("vms", [])
                             for svm in raw_server_vms:
                                 # Lindungi dari tombstone penghapusan multi-perangkat
-                                if _deleted_vms_tombstone.get(svm.get("id"), 0) > now_ts:
+                                if _deleted_vms_tombstone.get(svm.get("id"), 0) > time.time():
                                     continue
                                 svm["scope"] = "server"
                                 svm["serverId"] = srv.get("id")
                                 svm["serverName"] = srv.get("name")
+                                _apply_recent_vm_mutation(svm)
                                 server_vms.append(svm)
                     except Exception as be:
                         logger_manager.log_debug(f"[api/vms/load] Info: Server VMs belum tersedia dari backend ZimaOS: {be}")
@@ -28790,6 +28870,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     if not isinstance(vm, dict):
                         continue
                     vid = vm.get("id")
+                    if _deleted_vms_tombstone.get(vid, 0) > time.time():
+                        continue
                     vscope = vm.get("scope") or ("server" if vm.get("serverId") or vm.get("serverName") else "local")
                     if vid not in seen_ids:
                         if vscope != "server" or not server_online:
@@ -28808,6 +28890,20 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             if isinstance(vms_list, list):
                 # Saring VM yang dalam tombstone
                 vms_list = [v for v in vms_list if isinstance(v, dict) and _deleted_vms_tombstone.get(v.get("id"), 0) <= now_ts]
+                # Pertahankan runtimeMinutes yang lebih baru dari cfg["vms"] jika payload mengirim 0 pada VM running
+                existing_by_id = {
+                    v.get("id"): v for v in (cfg.get("vms", []) or [])
+                    if isinstance(v, dict) and v.get("id")
+                }
+                for v in vms_list:
+                    vid = v.get("id")
+                    old_v = existing_by_id.get(vid)
+                    if old_v and v.get("status") == "running" and not v.get("runtimeMinutes") and old_v.get("runtimeMinutes"):
+                        v["runtimeMinutes"] = old_v.get("runtimeMinutes")
+                    if old_v and not v.get("telemetry") and old_v.get("telemetry"):
+                        v["telemetry"] = old_v.get("telemetry")
+                    _apply_recent_vm_mutation(v)
+
                 prev_server_ids = {
                     v.get("id") for v in (cfg.get("vms", []) or [])
                     if isinstance(v, dict) and v.get("scope") == "server" and v.get("id")
@@ -28839,13 +28935,15 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         except Exception as de:
                             logger_manager.log_debug(f"[api/vms/save] Gagal hapus VM {gone_id} di server: {de}")
                     for vm in vms_list:
-                        if isinstance(vm, dict) and vm.get("scope") == "server":
+                        vid = vm.get("id")
+                        # Cek ulang tombstone tepat sebelum POST agar delete paralel tidak ter-resurrect!
+                        if isinstance(vm, dict) and vm.get("scope") == "server" and _deleted_vms_tombstone.get(vid, 0) <= time.time():
                             try:
                                 b_payload = _prepare_vm_payload_for_backend(vm)
                                 target_srv_url = _get_active_server_backend_url(cfg, target_server_id=vm.get("serverId")) or backend_url
                                 _backend_http_request(f"{target_srv_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=2.5)
                             except Exception as be:
-                                logger_manager.log_debug(f"[api/vms/save] Gagal sync server VM {vm.get('id')}: {be}")
+                                logger_manager.log_debug(f"[api/vms/save] Gagal sync server VM {vid}: {be}")
 
                 self._send_json({"status": "ok", "success": True})
             else:
@@ -28853,11 +28951,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/vms/migrate":
-            vm_id = body.get("vmId")
-            target_scope = body.get("targetScope") # "server" or "local"
+            vm_id = body.get("vmId") or body.get("vm_id") or body.get("id")
+            target_scope = body.get("targetScope") or body.get("target_scope")  # "server" or "local"
             vm_data = body.get("vm")
             cfg = config_manager.load_or_create_config()
-            local_vms = cfg.get("vms", [])
+            local_vms = cfg.get("vms", []) or []
             srv = config_manager.get_active_server(cfg)
             backend_url = _get_active_server_backend_url(cfg)
 
@@ -28865,7 +28963,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 if not backend_url or not srv:
                     self._send_json({"status": "error", "message": "Server ZimaOS tidak terhubung atau offline"}, status=400)
                     return
-                target_vm = vm_data or next((v for v in local_vms if v.get("id") == vm_id), None)
+                target_vm = vm_data or next((v for v in local_vms if isinstance(v, dict) and v.get("id") == vm_id), None)
                 if not target_vm:
                     self._send_json({"status": "error", "message": f"VM '{vm_id}' tidak ditemukan"}, status=404)
                     return
@@ -28873,29 +28971,32 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 target_vm["serverId"] = srv.get("id")
                 target_vm["serverName"] = srv.get("name")
                 try:
-                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="POST", json_body=target_vm, timeout=3.0)
+                    b_payload = _prepare_vm_payload_for_backend(target_vm)
+                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=3.0)
                     if not ok:
                         self._send_json({"status": "error", "message": f"Gagal migrasi ke ZimaOS: {data}"}, status=500)
                         return
                 except Exception as be:
                     self._send_json({"status": "error", "message": f"Gagal migrasi ke ZimaOS: {be}"}, status=500)
                     return
-                cfg["vms"] = [v for v in local_vms if v.get("id") != vm_id]
+                updated_list = [v for v in local_vms if isinstance(v, dict) and v.get("id") != vm_id]
+                updated_list.append(target_vm)
+                cfg["vms"] = updated_list
                 config_manager.save_config(cfg)
                 self._send_json({"status": "ok", "success": True, "vm": target_vm})
                 return
 
             elif target_scope == "local":
-                target_vm = vm_data or {}
+                target_vm = vm_data or next((v for v in local_vms if isinstance(v, dict) and v.get("id") == vm_id), {})
                 target_vm["scope"] = "local"
                 target_vm.pop("serverId", None)
                 target_vm.pop("serverName", None)
-                if backend_url:
+                if backend_url and vm_id:
                     try:
                         _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0)
                     except Exception as be:
                         logger_manager.log_debug(f"[api/vms/migrate] Warning: Gagal hapus dari backend saat migrasi ke lokal: {be}")
-                filtered = [v for v in local_vms if v.get("id") != vm_id]
+                filtered = [v for v in local_vms if isinstance(v, dict) and v.get("id") != vm_id]
                 filtered.append(target_vm)
                 cfg["vms"] = filtered
                 config_manager.save_config(cfg)
@@ -29046,8 +29147,19 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             # Isolasi: VM scope server dieksekusi oleh backend ZimaOS, bukan dari PC ini
             if _find_server_vm(cfg, vm_id):
                 srv_action = "wake" if action_type == "resume" else "sleep"
+                patch_data = {"status": new_status}
+                if new_status != "running":
+                    patch_data["runtimeMinutes"] = 0
+                _record_recent_vm_mutation(vm_id, patch_data, ttl=15.0)
                 ok, data, code = _proxy_server_vm_action(cfg, vm_id, srv_action)
                 if ok:
+                    for v in cfg.get("vms", []):
+                        if isinstance(v, dict) and v.get("id") == vm_id:
+                            v["status"] = new_status
+                            if new_status != "running":
+                                v["runtimeMinutes"] = 0
+                    if config_manager:
+                        config_manager.save_config(cfg)
                     self._send_json({
                         "status": "ok",
                         "message": f"VM berhasil {action_name} (dieksekusi oleh server).",
@@ -29057,6 +29169,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         "result": data,
                     })
                 else:
+                    _recent_vm_mutations.pop(vm_id, None)
                     self._send_json({"status": "error", "message": str(data)}, status=code)
                 return
 
@@ -29117,6 +29230,12 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     raw_b = resp.read()
                     resp_data = json.loads(raw_b.decode("utf-8")) if raw_b else {"status": "ok"}
 
+                if vm_id:
+                    patch_data = {"status": new_status, "machineId": machine_id}
+                    if new_status != "running":
+                        patch_data["runtimeMinutes"] = 0
+                    _record_recent_vm_mutation(vm_id, patch_data, ttl=15.0)
+
                 # Update status secara persisten di config
                 changed = False
                 for v in cfg.get("vms", []):
@@ -29124,6 +29243,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         v["status"] = new_status
                         v["machineId"] = machine_id
                         v["apiKey"] = api_key
+                        if new_status != "running":
+                            v["runtimeMinutes"] = 0
+                            v["sleepingSince"] = int(time.time() * 1000)
+                        else:
+                            v.pop("sleepingSince", None)
                         v["lastActive"] = "Just now" if new_status == "running" else "Sleeping"
                         changed = True
                 if changed and config_manager:
@@ -29159,13 +29283,27 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             vm_id = body.get("id") or body.get("vmId")
             _sr_cfg = config_manager.load_or_create_config() if config_manager else {}
             if _find_server_vm(_sr_cfg, vm_id):
+                _record_recent_vm_mutation(vm_id, {"status": "running", "runtimeMinutes": 0, "_lastResetAt": time.time()}, ttl=25.0)
                 ok, data, code = _proxy_server_vm_action(_sr_cfg, vm_id, "smart-reset", timeout=60.0)
                 if ok:
+                    for v in _sr_cfg.get("vms", []):
+                        if isinstance(v, dict) and v.get("id") == vm_id:
+                            v["status"] = "running"
+                            v["runtimeMinutes"] = 0
+                    if config_manager:
+                        config_manager.save_config(_sr_cfg)
                     self._send_json({"success": True, "status": "ok", "executedBy": "server",
                                      "message": "Smart reset dieksekusi oleh server ZimaOS.", "result": data})
                 else:
+                    _recent_vm_mutations.pop(vm_id, None)
                     self._send_json({"success": False, "status": "error", "error": str(data), "message": str(data)}, status=code)
                 return
+            if not machine_id and vm_id:
+                for v in _sr_cfg.get("vms", []):
+                    if isinstance(v, dict) and v.get("id") == vm_id:
+                        machine_id = machine_id or v.get("machineId", "")
+                        api_key = api_key or v.get("apiKey", "")
+                        break
             if not machine_id and instabox_manager and vm_id:
                 vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
                 if vm_rec:
@@ -29181,9 +29319,17 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 try:
                     p_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{machine_id}/suspend", data=b"{}", headers=headers, method="POST")
                     urllib.request.urlopen(p_req, timeout=10)
-                    time.sleep(5)
+                    time.sleep(3)
                     r_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{machine_id}/resume", data=b"{}", headers=headers, method="POST")
                     urllib.request.urlopen(r_req, timeout=10)
+                    if vm_id:
+                        _record_recent_vm_mutation(vm_id, {"status": "running", "runtimeMinutes": 0, "_lastResetAt": time.time()}, ttl=25.0)
+                        for v in _sr_cfg.get("vms", []):
+                            if isinstance(v, dict) and v.get("id") == vm_id:
+                                v["status"] = "running"
+                                v["runtimeMinutes"] = 0
+                        if config_manager:
+                            config_manager.save_config(_sr_cfg)
                     self._send_json({"success": True, "status": "ok", "message": "Time limit 8 jam berhasil direset ke 0."})
                     return
                 except Exception as ex:
@@ -29203,6 +29349,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             if _find_server_vm(_sy_cfg, _sy_vm_id):
                 ok, data, code = _proxy_server_vm_action(_sy_cfg, _sy_vm_id, "sync", timeout=20.0)
                 if ok and isinstance(data, dict):
+                    _apply_recent_vm_mutation(data)
                     st = str(data.get("status") or "").lower()
                     self._send_json({
                         "success": True,
@@ -29223,6 +29370,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             vm_name = (body.get("vmName") or "").strip()
             machine_id = (body.get("machineId") or "").strip()
             vm_id = (body.get("vmId") or "").strip()
+            existing_local_vm = next((v for v in (_sy_cfg.get("vms", []) or []) if isinstance(v, dict) and v.get("id") == vm_id), None)
+            if not api_key and existing_local_vm:
+                api_key = existing_local_vm.get("apiKey", "")
+                machine_id = machine_id or existing_local_vm.get("machineId", "")
+                vm_name = vm_name or existing_local_vm.get("name", "")
             if not api_key and instabox_manager and vm_id:
                 vm_rec = instabox_manager.InstaBoxManager.get_vm(vm_id)
                 if vm_rec:
@@ -29264,23 +29416,67 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         target = next((m for m in machines if str(m.get("state", "")).lower() == "running"), machines[0])
 
                     mid = target.get("id")
-                    state = target.get("state", "running")
 
-                    # v4.5.2 Beta: Ekstraksi durasi runtime riil dari seluruh kemungkinan field InstaBox
+                    # Ambil detail mesin /v1/machines/{mid} jika runStartedAt tidak ada di list item
+                    if mid and not (target.get("runStartedAt") or target.get("currentRunSeconds")):
+                        try:
+                            d_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{mid}", headers=headers)
+                            with urllib.request.urlopen(d_req, timeout=6) as d_resp:
+                                d_raw = json.loads(d_resp.read().decode())
+                                d_obj = d_raw.get("machine") if isinstance(d_raw.get("machine"), dict) else d_raw
+                                if isinstance(d_obj, dict):
+                                    target = {**target, **d_obj}
+                        except Exception:
+                            pass
+
+                    state = str(target.get("state") or target.get("status") or "running").lower()
+                    desired = str(target.get("desiredState") or "").lower()
+                    if desired == "running" and state in ("starting", "resuming", "waking", "provisioning"):
+                        state = "running"
+                    elif desired == "suspended" and state in ("suspending", "stopping"):
+                        state = "suspended"
+
+                    # Hormati recent mutation lock jika user baru saja klik Wake/Sleep/Reset
+                    mut_entry = _recent_vm_mutations.get(vm_id) if vm_id else None
+                    last_reset_at = None
+                    if mut_entry and time.time() < mut_entry.get("expires_at", 0):
+                        mpatch = mut_entry.get("patch") or {}
+                        if mpatch.get("status") == "running":
+                            state = "running"
+                        elif mpatch.get("status") in ("sleeping", "stopped"):
+                            state = "suspended"
+                        if mpatch.get("_lastResetAt"):
+                            last_reset_at = float(mpatch["_lastResetAt"])
+
+                    is_running = state in ("running", "active")
+
+                    # v4.5.2+ Beta: Ekstraksi durasi runtime riil dari seluruh kemungkinan field InstaBox
                     runtime_mins = 0
-                    run_secs = target.get("currentRunSeconds") or target.get("uptimeSeconds") or target.get("runDurationSeconds")
-                    if run_secs and run_secs > 0:
-                        runtime_mins = max(0, min(480, int(run_secs // 60)))
-                    else:
-                        run_started_at = target.get("runStartedAt") or target.get("startedAt") or target.get("createdAt")
-                        if run_started_at and str(state).lower() in ("running", "active"):
-                            try:
-                                clean_iso = str(run_started_at).replace("Z", "+00:00")
-                                dt = datetime.datetime.fromisoformat(clean_iso)
-                                now = datetime.datetime.now(datetime.timezone.utc)
-                                runtime_mins = max(0, min(480, int((now - dt).total_seconds() / 60)))
-                            except Exception:
-                                runtime_mins = 0
+                    if is_running:
+                        if last_reset_at and (time.time() - last_reset_at < 25.0):
+                            runtime_mins = 0
+                        else:
+                            run_secs = target.get("currentRunSeconds") or target.get("uptimeSeconds") or target.get("runDurationSeconds")
+                            run_started_at = target.get("runStartedAt") or target.get("startedAt")
+                            if run_started_at:
+                                try:
+                                    clean_iso = str(run_started_at).replace("Z", "+00:00")
+                                    dt = datetime.datetime.fromisoformat(clean_iso)
+                                    if dt.tzinfo is None:
+                                        dt = dt.replace(tzinfo=datetime.timezone.utc)
+                                    if last_reset_at:
+                                        reset_dt = datetime.datetime.fromtimestamp(last_reset_at, tz=datetime.timezone.utc)
+                                        if reset_dt > dt:
+                                            dt = reset_dt
+                                    now = datetime.datetime.now(datetime.timezone.utc)
+                                    runtime_mins = max(0, min(480, int((now - dt).total_seconds() / 60)))
+                                except Exception:
+                                    runtime_mins = int((existing_local_vm or {}).get("runtimeMinutes") or 0)
+                            elif run_secs and run_secs > 0:
+                                runtime_mins = max(0, min(480, int(run_secs // 60)))
+                            else:
+                                # Pertahankan runtimeMinutes sebelumnya jika API tidak mengembalikan runStartedAt
+                                runtime_mins = int((existing_local_vm or {}).get("runtimeMinutes") or 0)
 
                     # 2. Spec fallback for RAM and Disk sizing
                     spec = target.get("spec") or {}
@@ -29303,7 +29499,6 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             disk_info = m_raw.get("disk", {})
                             if samples:
                                 latest = samples[-1]
-                                # OpenAPI MachineMetric: cpuUsedPct, memUsed, memTotal, diskUsed, diskTotal
                                 cpu_val = latest.get("cpuUsedPct") if latest.get("cpuUsedPct") is not None else latest.get("cpuPct")
                                 if cpu_val is not None:
                                     metrics_res["cpuPct"] = round(float(cpu_val), 1)
@@ -29338,7 +29533,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         logger_manager.log_warn(f"[InstaBox] Gagal mengambil metrics VM {mid}: {me}")
 
                     # Jika mesin dalam kondisi tidur/suspended, metrik aktif tidak valid (CPU 0/kosong)
-                    if str(state).lower() not in ("running", "active"):
+                    if not is_running:
                         metrics_res["cpuPct"] = None
                         metrics_res["ramUsedBytes"] = None
                         metrics_res["diskUsedBytes"] = None
@@ -29353,9 +29548,21 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             ci_data = json.loads(ci_resp.read().decode())
                             conn_host = ci_data.get("host") or conn_host
                             conn_port = ci_data.get("port") or conn_port
-                            conn_user = ci_data.get("username")
+                            conn_user = ci_data.get("username") or ci_data.get("user")
                     except Exception:
                         pass
+
+                    # Simpan hasil sinkronisasi ke cfg["vms"] agar loadVms (polling 4s) tidak menimpa runtimeMinutes ke 0!
+                    if existing_local_vm and config_manager and _deleted_vms_tombstone.get(vm_id, 0) <= time.time():
+                        existing_local_vm["machineId"] = mid
+                        existing_local_vm["status"] = "running" if is_running else "sleeping"
+                        existing_local_vm["runtimeMinutes"] = runtime_mins
+                        existing_local_vm["maxRuntimeMinutes"] = target.get("maxRunMinutes", 480)
+                        existing_local_vm["sshHost"] = conn_host or "ssh.instabox.sh"
+                        existing_local_vm["sshPort"] = conn_port or 2222
+                        existing_local_vm["sshUser"] = conn_user or mid
+                        existing_local_vm["telemetry"] = metrics_res
+                        config_manager.save_config(_sy_cfg)
 
                     self._send_json({
                         "success": True,
@@ -32399,7 +32606,7 @@ def _find_server_vm(cfg, vm_id):
     if not vm_id:
         return None
     for v in (cfg.get("vms", []) or []):
-        if isinstance(v, dict) and v.get("id") == vm_id and v.get("scope") == "server":
+        if isinstance(v, dict) and v.get("id") == vm_id and (v.get("scope") == "server" or bool(v.get("serverId"))):
             return v
     return None
 
@@ -32448,15 +32655,27 @@ def vm_power_scheduler_loop():
                 now_dt = datetime.datetime.now()
                 curr_hhmm = f"{now_dt.hour:02d}:{now_dt.minute:02d}"
                 curr_day_js = (now_dt.weekday() + 1) % 7  # 0=Sun, 1=Mon, ..., 6=Sat
-                changed = False
+                daemon_patches = {}
 
                 for vm in vms:
                     if not isinstance(vm, dict):
                         continue
-                    # Isolasi: VM scope server dikontrol 100% oleh daemon backend ZimaOS
-                    if vm.get("scope") == "server":
-                        continue
                     vm_id = str(vm.get("id") or "")
+                    if not vm_id or vm_id in _deleted_vms_tombstone:
+                        continue
+                    # Isolasi: VM scope server dikontrol 100% oleh daemon backend ZimaOS
+                    if vm.get("scope") == "server" or bool(vm.get("serverId")):
+                        continue
+
+                    # Terapkan mutasi terbaru bila ada agar daemon membaca status/toggle paling mutakhir
+                    vm = _apply_recent_vm_mutation(dict(vm))
+                    recent_mut = _recent_vm_mutations.get(vm_id)
+                    in_power_grace = bool(
+                        recent_mut
+                        and now_ts < recent_mut.get("expires_at", 0)
+                        and "status" in (recent_mut.get("patch") or {})
+                    )
+
                     provider = str(vm.get("provider") or "instabox")
                     api_key = str(vm.get("apiKey") or "").strip()
                     mid = str(vm.get("machineId") or "").strip()
@@ -32464,6 +32683,8 @@ def vm_power_scheduler_loop():
                         ssh_u = str(vm.get("sshUser") or "").strip()
                         if ssh_u.startswith("m_"):
                             mid = ssh_u
+
+                    patch = {}
 
                     # Sinkronisasi status & Keep-Alive untuk InstaBox
                     last_ka = _vm_daemon_state["last_keepalive"].get(vm_id, 0.0)
@@ -32488,36 +32709,63 @@ def vm_power_scheduler_loop():
                                     mid = target.get("id") or mid
                                     if mid and not vm.get("machineId"):
                                         vm["machineId"] = mid
-                                        changed = True
-                                    state = target.get("state", "running")
-                                    real_status = "running" if state == "running" else "sleeping"
-                                    if vm.get("status") != real_status:
+                                        patch["machineId"] = mid
+                                    state = str(target.get("state", "running")).lower()
+                                    real_status = "running" if state in ("running", "active", "starting", "resuming") else "sleeping"
+                                    if in_power_grace:
+                                        real_status = vm.get("status", real_status)
+                                    elif vm.get("status") != real_status:
                                         vm["status"] = real_status
+                                        patch["status"] = real_status
                                         if real_status != "running" and not vm.get("sleepingSince"):
                                             vm["sleepingSince"] = now_ms
+                                            patch["sleepingSince"] = now_ms
                                         elif real_status == "running":
                                             vm.pop("sleepingSince", None)
-                                        changed = True
+                                            patch["sleepingSince"] = None
 
-                                    # Hitung runtimeMinutes dari runStartedAt
+                                    # Ambil detail mesin bila runStartedAt tidak disertakan di endpoint list
                                     run_started = target.get("runStartedAt")
-                                    runtime_mins = int(vm.get("runtimeMinutes") or 0)
-                                    if run_started and real_status == "running":
+                                    if not run_started and mid and real_status == "running":
                                         try:
-                                            dt = datetime.datetime.fromisoformat(run_started.replace("Z", "+00:00"))
+                                            d_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{mid}", headers=headers)
+                                            with urllib.request.urlopen(d_req, timeout=6) as d_resp:
+                                                d_json = json.loads(d_resp.read().decode("utf-8") or "{}")
+                                                d_obj = d_json.get("machine", d_json) if isinstance(d_json, dict) else {}
+                                                if isinstance(d_obj, dict):
+                                                    run_started = d_obj.get("runStartedAt")
+                                        except Exception:
+                                            pass
+
+                                    runtime_mins = int(vm.get("runtimeMinutes") or 0)
+                                    if real_status != "running":
+                                        runtime_mins = 0
+                                        if vm.get("runtimeMinutes") != 0:
+                                            vm["runtimeMinutes"] = 0
+                                            patch["runtimeMinutes"] = 0
+                                    elif run_started:
+                                        try:
+                                            dt = datetime.datetime.fromisoformat(str(run_started).replace("Z", "+00:00"))
+                                            last_reset_ms = int(vm.get("lastResetAt") or 0)
+                                            if last_reset_ms > 0:
+                                                reset_dt = datetime.datetime.fromtimestamp(last_reset_ms / 1000.0, tz=datetime.timezone.utc)
+                                                if reset_dt > dt:
+                                                    dt = reset_dt
                                             runtime_mins = max(0, min(480, int((datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() / 60)))
                                             vm["runtimeMinutes"] = runtime_mins
+                                            patch["runtimeMinutes"] = runtime_mins
                                         except Exception:
                                             pass
 
                                     # 1. Always-On (keepAliveEnabled)
-                                    if vm.get("keepAliveEnabled"):
+                                    if vm.get("keepAliveEnabled") and not in_power_grace:
                                         if real_status != "running" and mid:
                                             logger_manager.log_info(f"[VMDaemon] Always-On aktif: membangunkan VM InstaBox {vm.get('name')} ({mid})")
                                             _instabox_api_action(api_key, mid, "resume")
                                             vm["status"] = "running"
                                             vm.pop("sleepingSince", None)
-                                            changed = True
+                                            patch["status"] = "running"
+                                            patch["sleepingSince"] = None
                                         elif real_status == "running" and mid:
                                             if runtime_mins >= 450:
                                                 logger_manager.log_info(f"[VMDaemon] Always-On 8h guard: mereset siklus runtime VM {vm.get('name')} ({mid})")
@@ -32525,7 +32773,9 @@ def vm_power_scheduler_loop():
                                                 time.sleep(5.0)
                                                 _instabox_api_action(api_key, mid, "resume")
                                                 vm["runtimeMinutes"] = 0
-                                                changed = True
+                                                vm["lastResetAt"] = int(time.time() * 1000)
+                                                patch["runtimeMinutes"] = 0
+                                                patch["lastResetAt"] = vm["lastResetAt"]
                                             else:
                                                 # Anti-idle heartbeat setiap 10 menit (600 detik)
                                                 last_hb = _vm_daemon_state["last_heartbeat"].get(vm_id, 0.0)
@@ -32550,7 +32800,7 @@ def vm_power_scheduler_loop():
 
                     # 2. Auto-On Scheduler
                     auto_on = vm.get("autoOn")
-                    if isinstance(auto_on, dict) and auto_on.get("enabled") and vm.get("status") != "running":
+                    if isinstance(auto_on, dict) and auto_on.get("enabled") and vm.get("status") != "running" and not in_power_grace:
                         should_wake = False
                         mode_on = auto_on.get("mode", "clock")
                         last_trig = int(auto_on.get("lastTriggeredAt") or 0)
@@ -32565,7 +32815,7 @@ def vm_power_scheduler_loop():
                             sleep_since = int(vm.get("sleepingSince") or 0)
                             if sleep_since <= 0:
                                 vm["sleepingSince"] = now_ms
-                                changed = True
+                                patch["sleepingSince"] = now_ms
                             else:
                                 d_val = max(1, int(auto_on.get("delayValue") or 30))
                                 d_unit = str(auto_on.get("delayUnit") or "minutes")
@@ -32575,10 +32825,11 @@ def vm_power_scheduler_loop():
                                     should_wake = True
 
                         if should_wake:
-                            auto_on["lastTriggeredAt"] = now_ms
+                            patch["autoOn_lastTriggeredAt"] = now_ms
                             vm["status"] = "running"
                             vm.pop("sleepingSince", None)
-                            changed = True
+                            patch["status"] = "running"
+                            patch["sleepingSince"] = None
                             if provider == "instabox" and api_key and mid:
                                 try:
                                     logger_manager.log_info(f"[VMDaemon] Auto-On mengeksekusi nyala otomatis untuk {vm.get('name')} ({mid})")
@@ -32588,14 +32839,13 @@ def vm_power_scheduler_loop():
 
                     # 3. Auto-Restart Scheduler
                     auto_res = vm.get("autoRestart")
-                    if isinstance(auto_res, dict) and auto_res.get("enabled") and vm.get("status") == "running":
+                    if isinstance(auto_res, dict) and auto_res.get("enabled") and vm.get("status") == "running" and not in_power_grace:
                         should_restart = False
                         mode_res = auto_res.get("mode", "interval")
                         last_run = int(auto_res.get("lastRunTimestamp") or 0)
                         if mode_res == "interval":
                             if last_run <= 0:
-                                auto_res["lastRunTimestamp"] = now_ms
-                                changed = True
+                                patch["autoRestart_lastRunTimestamp"] = now_ms
                             else:
                                 i_val = max(1, int(auto_res.get("intervalValue") or 6))
                                 i_unit = str(auto_res.get("intervalUnit") or "hours")
@@ -32608,21 +32858,66 @@ def vm_power_scheduler_loop():
                                 should_restart = True
 
                         if should_restart:
-                            auto_res["lastRunTimestamp"] = now_ms
-                            auto_res["lastExecuted"] = now_dt.strftime("%H:%M:%S")
-                            changed = True
+                            patch["autoRestart_lastRunTimestamp"] = now_ms
+                            patch["autoRestart_lastExecuted"] = now_dt.strftime("%H:%M:%S")
                             if provider == "instabox" and api_key and mid:
                                 try:
                                     logger_manager.log_info(f"[VMDaemon] Auto-Restart mengeksekusi siklus reset untuk {vm.get('name')} ({mid})")
                                     _instabox_api_action(api_key, mid, "suspend")
                                     time.sleep(5.0)
                                     _instabox_api_action(api_key, mid, "resume")
-                                    vm["runtimeMinutes"] = 0
+                                    patch["runtimeMinutes"] = 0
+                                    patch["lastResetAt"] = int(time.time() * 1000)
                                 except Exception as e_res:
                                     logger_manager.log_warn(f"[VMDaemon] Auto-Restart gagal pada {vm.get('name')}: {e_res}")
 
-                if changed:
-                    config_manager.save_config(cfg)
+                    if patch and vm_id not in _deleted_vms_tombstone:
+                        daemon_patches[vm_id] = patch
+
+                if daemon_patches:
+                    fresh_cfg = config_manager.load_or_create_config()
+                    fresh_vms = [
+                        v for v in (fresh_cfg.get("vms", []) or [])
+                        if isinstance(v, dict) and v.get("id") not in _deleted_vms_tombstone
+                    ]
+                    any_applied = False
+                    for fv in fresh_vms:
+                        fid = str(fv.get("id") or "")
+                        if fid in daemon_patches:
+                            # Jangan timpa status bila user baru saja melakukan aksi selama loop berjalan
+                            rm = _recent_vm_mutations.get(fid)
+                            rm_active = bool(rm and time.time() < rm.get("expires_at", 0))
+                            rm_patch = (rm.get("patch") or {}) if rm_active else {}
+                            p = daemon_patches[fid]
+                            for k, val in p.items():
+                                if k == "sleepingSince":
+                                    if "status" in rm_patch:
+                                        continue
+                                    if val is None:
+                                        fv.pop("sleepingSince", None)
+                                    else:
+                                        fv["sleepingSince"] = val
+                                    any_applied = True
+                                elif k == "autoOn_lastTriggeredAt":
+                                    if isinstance(fv.get("autoOn"), dict):
+                                        fv["autoOn"]["lastTriggeredAt"] = val
+                                        any_applied = True
+                                elif k == "autoRestart_lastRunTimestamp":
+                                    if isinstance(fv.get("autoRestart"), dict):
+                                        fv["autoRestart"]["lastRunTimestamp"] = val
+                                        any_applied = True
+                                elif k == "autoRestart_lastExecuted":
+                                    if isinstance(fv.get("autoRestart"), dict):
+                                        fv["autoRestart"]["lastExecuted"] = val
+                                        any_applied = True
+                                else:
+                                    if k in rm_patch:
+                                        continue
+                                    fv[k] = val
+                                    any_applied = True
+                    if any_applied:
+                        fresh_cfg["vms"] = fresh_vms
+                        config_manager.save_config(fresh_cfg)
         except Exception as e:
             logger_manager.log_debug(f"[VMDaemon] Loop warning: {e}")
         time.sleep(20.0)

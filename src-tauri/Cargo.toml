@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "4.5.5"
+version = "4.5.6"
 description = "MyServer Companion"
 authors = ["Algitha Project"]
 license = ""

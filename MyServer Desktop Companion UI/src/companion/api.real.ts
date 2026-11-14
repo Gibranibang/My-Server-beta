@@ -1123,10 +1123,11 @@ export function createRealApi(): CompanionApi {
     },
 
     async migrateVm(vmId: string, targetScope: "server" | "local") {
+      const payload = { vmId, targetScope, vm_id: vmId, target_scope: targetScope }
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'vms/migrate', payload: { vm_id: vmId, target_scope: targetScope } })
+          return await invoke('call_core_api', { endpoint: 'vms/migrate', payload })
         } catch (err) {
           console.warn('[RealApi] migrateVm invoke error:', err)
         }
@@ -1134,7 +1135,7 @@ export function createRealApi(): CompanionApi {
       try {
         const api = await getPyApi()
         if (api && api['vms/migrate']) {
-          return await api['vms/migrate']({ vm_id: vmId, target_scope: targetScope })
+          return await api['vms/migrate'](payload)
         }
       } catch (err) {
         console.warn('[RealApi] migrateVm error:', err)

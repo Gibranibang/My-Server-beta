@@ -163,7 +163,10 @@ export default function ServerView({ go }: ViewProps) {
         : { success: false, message: "API tidak tersedia" }
 
       if (res && (res.success || res.status === "ok")) {
-        notify(t("server_backend_success", "Backend server berhasil diperbarui!"), "success")
+        notify(
+          res?.message || t("server_backend_success", "Backend server berhasil diperbarui!"),
+          res?.rebuildRecommended ? "warning" : "success"
+        )
         const updated = await api.getServerDetails()
         setDetails(updated)
       } else {

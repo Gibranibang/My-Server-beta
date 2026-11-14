@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.8"
+APP_VERSION_NUMBER = "4.5.9"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -4536,6 +4536,39 @@ def _get_backend_health_info(cfg=None, force=False, target_server_id=None):
     return dict(info)
 
 
+def _resolve_ssh_admin_credentials(srv):
+    """Mengambil kredensial admin (prioritas profil Admin) untuk sesi SSH & verifikasi OTA."""
+    creds = config_manager.get_server_credentials(srv, "Admin") if config_manager else {}
+    user = (creds.get("username") or "").strip()
+    pwd = (creds.get("password") or "").strip()
+    if not user or not pwd:
+        active_p = srv.get("active_profile", "")
+        creds = config_manager.get_server_credentials(srv, active_p) if config_manager else {}
+        user = (creds.get("username") or "").strip()
+        pwd = (creds.get("password") or "").strip()
+    if not user:
+        user = srv.get("default_user") or srv.get("username") or "admin"
+    return user, pwd
+
+
+def _set_backend_health_cache(srv_id, online, version, latest_version, url):
+    """Memperbarui cache status kesehatan & rute URL backend secara konsisten."""
+    now_ts = time.time() if online else 0
+    if online and url:
+        _backend_url_cache[srv_id] = (url, now_ts + 25.0)
+    else:
+        _backend_url_cache.pop(srv_id, None)
+    _cached_backend_info["timestamp"] = now_ts
+    _cached_backend_info["server_id"] = srv_id
+    _cached_backend_info["data"] = {
+        "online": bool(online),
+        "version": version,
+        "latestVersion": latest_version,
+        "url": url,
+    }
+    return dict(_cached_backend_info["data"])
+
+
 def handle_remote_backend_action(body):
     """
     Eksekusi 1-Klik Fresh Install atau Update OTA Backend ZimaOS via SSH & GitHub Release.
@@ -4577,6 +4610,7 @@ def handle_remote_backend_action(body):
                 body_bytes = b"".join(parts)
 
                 ota_succeeded_url = None
+                ota_resp_data = {}
                 last_ota_err = None
                 for cand_ota_url in ota_urls:
                     try:
@@ -4593,38 +4627,83 @@ def handle_remote_backend_action(body):
                             resp_data = json.loads(resp.read().decode("utf-8"))
                             if resp_data.get("status") == "success":
                                 ota_succeeded_url = cand_ota_url
+                                ota_resp_data = resp_data if isinstance(resp_data, dict) else {}
                                 break
                     except Exception as cand_err:
                         last_ota_err = cand_err
                 if ota_succeeded_url:
-                    logger_manager.log_info("[handle_remote_backend_action] HTTP OTA berhasil! Menunggu restart server...")
-                    time.sleep(3.5)
-                    h_ok, h_data, _ = _backend_http_request(f"{ota_succeeded_url}/health", method="GET", timeout=3.0, retries=5)
-                    ver = (h_data.get("version") or "").strip() if (h_ok and isinstance(h_data, dict)) else ""
-                    active_target_ver = target_ver or ver
-                    now_ts = time.time()
-                    _backend_url_cache[srv_id] = (ota_succeeded_url, now_ts + 25.0)
-                    _cached_backend_info["timestamp"] = now_ts
-                    _cached_backend_info["server_id"] = srv_id
-                    _cached_backend_info["data"] = {
-                        "online": True,
-                        "version": ver or active_target_ver,
-                        "latestVersion": active_target_ver,
-                        "url": ota_succeeded_url
-                    }
-                    if target_ver and ver and _compare_backend_versions(ver, target_ver) < 0:
-                        logger_manager.log_warning(f"[handle_remote_backend_action] HTTP OTA selesai namun versi server {ver} < {target_ver}")
+                    pre_boot_id = (ota_resp_data.get("boot_id") or "").strip()
+                    rebuild_required = bool(ota_resp_data.get("rebuild_required"))
+                    has_ssh_creds = bool(_resolve_ssh_admin_credentials(srv)[1])
+                    logger_manager.log_info("[handle_remote_backend_action] HTTP OTA diterima! Menunggu proses restart & verifikasi /health...")
+
+                    # Bersihkan cache lama agar status versi pra-restart tidak terbaca sebagai sukses palsu
+                    offline_backend = _set_backend_health_cache(srv_id, False, "", target_ver, ota_succeeded_url)
+
+                    # Backend menjadwalkan exit setelah ~1.5 detik; beri jeda awal lalu polling hingga 30 detik
+                    time.sleep(2.5)
+                    poll_ok = False
+                    health_data = {}
+                    last_poll_data = None
+                    for _ in range(15):
+                        h_ok, h_data, _ = _backend_http_request(f"{ota_succeeded_url}/health", method="GET", timeout=2.0, retries=0)
+                        if h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok":
+                            last_poll_data = h_data
+                            cand_ver = (h_data.get("version") or "").strip()
+                            post_boot_id = (h_data.get("boot_id") or "").strip()
+                            same_boot_id = bool(pre_boot_id and post_boot_id and post_boot_id == pre_boot_id)
+                            older_ver = bool(target_ver and cand_ver and _compare_backend_versions(cand_ver, target_ver) < 0)
+                            if not same_boot_id and not older_ver:
+                                poll_ok = True
+                                health_data = h_data
+                                break
+                        time.sleep(2.0)
+
+                    if poll_ok:
+                        ver = (health_data.get("version") or "").strip()
+                        active_target_ver = target_ver or ver
+                        backend_state = _set_backend_health_cache(srv_id, True, ver, active_target_ver, ota_succeeded_url)
+                        msg = f"Backend ZimaOS v{ver or active_target_ver} berhasil diperbarui!"
+                        if rebuild_required:
+                            msg += " Perubahan Dockerfile/requirements.txt terdeteksi; disarankan rebuild image container via SSH."
                         return {
-                            "success": False,
-                            "status": "error",
-                            "message": f"Update OTA selesai namun versi server tetap v{ver} (target v{target_ver}).",
-                            "backend": dict(_cached_backend_info["data"])
+                            "success": True,
+                            "status": "ok",
+                            "message": msg,
+                            "rebuildRecommended": rebuild_required,
+                            "backend": backend_state
                         }
+
+                    if isinstance(last_poll_data, dict):
+                        last_ver = (last_poll_data.get("version") or "").strip()
+                        last_boot_id = (last_poll_data.get("boot_id") or "").strip()
+                        active_target_ver = target_ver or last_ver
+                        backend_state = _set_backend_health_cache(srv_id, True, last_ver, active_target_ver, ota_succeeded_url)
+                        if target_ver and last_ver and _compare_backend_versions(last_ver, target_ver) < 0:
+                            logger_manager.log_warning(f"[handle_remote_backend_action] HTTP OTA selesai namun versi server tetap v{last_ver} (< v{target_ver})")
+                            return {
+                                "success": False,
+                                "status": "error",
+                                "message": f"Update OTA selesai namun versi server tetap v{last_ver} (target v{target_ver}).",
+                                "backend": backend_state
+                            }
+                        if pre_boot_id and last_boot_id and last_boot_id == pre_boot_id:
+                            if has_ssh_creds:
+                                raise RuntimeError("Backend merespons tetapi tidak me-restart (boot_id tidak berubah); melanjutkan pemulihan via SSH.")
+                            return {
+                                "success": False,
+                                "status": "error",
+                                "message": "Paket OTA dikirim, namun proses backend tidak ter-restart (boot_id tidak berubah) dan SSH belum terkonfigurasi.",
+                                "backend": backend_state
+                            }
+
+                    if has_ssh_creds:
+                        raise RuntimeError("Backend tidak kembali online dalam 32 detik pasca HTTP OTA; melanjutkan pemulihan via SSH.")
                     return {
-                        "success": True,
-                        "status": "ok",
-                        "message": f"Backend ZimaOS v{ver or active_target_ver} berhasil diperbarui!",
-                        "backend": dict(_cached_backend_info["data"])
+                        "success": False,
+                        "status": "error",
+                        "message": "Paket OTA dikirim, namun backend tidak kembali merespons /health dalam 32 detik dan SSH belum terkonfigurasi.",
+                        "backend": offline_backend
                     }
                 elif last_ota_err:
                     raise last_ota_err
@@ -4654,16 +4733,7 @@ def handle_remote_backend_action(body):
             return {"success": False, "status": "error", "message": "Tidak ada alamat host IP yang dapat dihubungi."}
 
         # 2. Ambil kredensial admin (prioritaskan 'Admin' untuk izin sudo)
-        creds = config_manager.get_server_credentials(srv, "Admin") if config_manager else {}
-        user = (creds.get("username") or "").strip()
-        pwd = (creds.get("password") or "").strip()
-        if not user or not pwd:
-            active_p = srv.get("active_profile", "")
-            creds = config_manager.get_server_credentials(srv, active_p) if config_manager else {}
-            user = (creds.get("username") or "").strip()
-            pwd = (creds.get("password") or "").strip()
-        if not user:
-            user = srv.get("default_user") or srv.get("username") or "admin"
+        user, pwd = _resolve_ssh_admin_credentials(srv)
 
         # 3. Hubungkan via Paramiko SSH
         ssh_client = None
@@ -4729,14 +4799,15 @@ def handle_remote_backend_action(body):
                         "message": "Paket installer backend tidak dapat diunggah via SFTP maupun diunduh dari GitHub."
                     }
 
-            # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo
+            # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo (timeout 180s untuk docker build)
             import shlex
             logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
             exec_script = f"cd {deploy_dir} && tar -xzf backend.tar.gz && printf '%s\\n' {shlex.quote(pwd)} | sudo -S bash install_zimaos.sh"
-            _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=60)
+            _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=180)
             exec_exit = exec_stdout.channel.recv_exit_status()
             exec_out_text = exec_stdout.read().decode("utf-8", errors="replace")
-            logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi: {exec_out_text[-500:]}")
+            exec_err_text = exec_stderr.read().decode("utf-8", errors="replace")
+            logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi (exit={exec_exit}): {exec_out_text[-500:]}")
 
             # 6. Polling endpoint /health di port 8080 selama maksimal 30 detik
             backend_url = f"http://{connected_host}:8080"
@@ -4754,23 +4825,14 @@ def handle_remote_backend_action(body):
             if poll_ok:
                 ver = (health_data.get("version") or "").strip()
                 active_target_ver = target_ver or ver
-                now_ts = time.time()
-                _backend_url_cache[srv_id] = (backend_url, now_ts + 25.0)
-                _cached_backend_info["timestamp"] = now_ts
-                _cached_backend_info["server_id"] = srv_id
-                _cached_backend_info["data"] = {
-                    "online": True,
-                    "version": ver,
-                    "latestVersion": active_target_ver,
-                    "url": backend_url
-                }
+                backend_state = _set_backend_health_cache(srv_id, True, ver, active_target_ver, backend_url)
                 if target_ver and ver and _compare_backend_versions(ver, target_ver) < 0:
                     logger_manager.log_error(f"[handle_remote_backend_action] Versi aktif ({ver}) lebih rendah dari target ({target_ver}).")
                     return {
                         "success": False,
                         "status": "error",
                         "message": f"Instalasi backend selesai, namun versi server tetap v{ver} (seharusnya v{target_ver}).",
-                        "backend": dict(_cached_backend_info["data"])
+                        "backend": backend_state
                     }
                 msg = f"Backend server berhasil diperbarui ke v{ver or active_target_ver}!" if action == "update" else f"Backend server v{ver or active_target_ver} berhasil dipasang!"
                 logger_manager.log_info(f"[handle_remote_backend_action] Sukses! Versi aktif: {ver}")
@@ -4778,13 +4840,19 @@ def handle_remote_backend_action(body):
                     "success": True,
                     "status": "ok",
                     "message": msg,
-                    "backend": dict(_cached_backend_info["data"])
+                    "backend": backend_state
                 }
             else:
+                offline_backend = _set_backend_health_cache(srv_id, False, "", target_ver, backend_url)
+                err_detail = ""
+                if exec_exit != 0:
+                    tail = (exec_err_text or exec_out_text).strip()[-240:]
+                    err_detail = f" (install exit={exec_exit}: {tail})" if tail else f" (install exit={exec_exit})"
                 return {
                     "success": False,
                     "status": "error",
-                    "message": "Instalasi selesai namun healthcheck port 8080 tidak merespons dalam 30 detik."
+                    "message": f"Instalasi selesai namun healthcheck port 8080 tidak merespons dalam 30 detik.{err_detail}",
+                    "backend": offline_backend
                 }
 
         finally:

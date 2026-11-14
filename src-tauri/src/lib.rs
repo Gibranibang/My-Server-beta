@@ -152,7 +152,12 @@ async fn call_core_api(endpoint: String, payload: serde_json::Value) -> Result<s
 
     let mut stream = TcpStream::connect("127.0.0.1:48123")
         .map_err(|e| format!("Gagal terhubung ke Core Service (127.0.0.1:48123): {}", e))?;
-    stream.set_read_timeout(Some(Duration::from_millis(60000))).ok();
+    let read_timeout_ms = if endpoint.starts_with("server/backend_action") || endpoint.starts_with("server_backend_action") {
+        240000
+    } else {
+        60000
+    };
+    stream.set_read_timeout(Some(Duration::from_millis(read_timeout_ms))).ok();
     stream.set_write_timeout(Some(Duration::from_millis(15000))).ok();
 
     let body = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());

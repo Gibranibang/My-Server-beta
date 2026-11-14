@@ -1164,12 +1164,14 @@ export function createRealApi(): CompanionApi {
     },
 
     async triggerBackendAction(action: "install" | "update", serverId?: string) {
+      const toErrMsg = (err: any) => (typeof err === 'string' ? err : (err?.message || String(err || 'Gagal memproses aksi backend')))
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
           return await invoke('call_core_api', { endpoint: 'server/backend_action', payload: { action, serverId } })
         } catch (err) {
           console.warn('[RealApi] triggerBackendAction invoke error:', err)
+          return { success: false, status: 'error', message: toErrMsg(err) }
         }
       }
       try {
@@ -1179,6 +1181,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.warn('[RealApi] triggerBackendAction error:', err)
+        return { success: false, status: 'error', message: toErrMsg(err) }
       }
       return { success: false, status: 'error', message: 'API tidak tersedia' }
     },

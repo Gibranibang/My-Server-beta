@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.9",
+        "channel": "Beta",
+        "date": "2026-11-14",
+        "title": "Perbaikan Menyeluruh Reliabilitas Update OTA & Auto-Restart Backend ZimaOS v1.2.7",
+        "notes": [
+            "Verifikasi Restart Nyata & Anti-Sukses Palsu (Bug 1): Endpoint /health dan /api/v1/system/update backend kini menyertakan boot_id unik per proses; Core Service (handle_remote_backend_action) menunggu jeda awal 2,5 detik lalu mem-polling /health hingga 30 detik (15 x 2,0 detik), menolak respons lama pra-restart yang memiliki boot_id atau versi lama identik, tidak pernah lagi memalsukan status online/versi saat backend gagal menyala kembali, serta otomatis melakukan failover ke instalasi SSH jika kredensial admin tersedia.",
+            "Penutupan Scheduler Lintas-Thread & Exit Code Restart Universal (Bug 2): stop_vm_scheduler() kini thread-safe melalui loop.call_soon_threadsafe(), dan _delayed_restart() menghentikan scheduler lebih dahulu sebelum keluar dengan os._exit(1) agar Docker (unless-stopped maupun on-failure) dan systemd Restart=on-failure selalu me-restart kontainer; dev_server.py standalone kini juga memiliki import typing yang lengkap dan melakukan os.execv() untuk self-restart in-place.",
+            "Keselarasan Timeout SSH Build & Propagasi Galat Tauri UI (Bug 3): Menaikkan timeout eksekusi SSH install_zimaos.sh menjadi 180 detik, menaikkan read timeout call_core_api Tauri menjadi 240 detik untuk endpoint server/backend_action, mengembalikan pesan galat asli pada api.real.ts triggerBackendAction, serta menampilkan notifikasi peringatan ketika image Docker perlu di-rebuild.",
+            "Sinkronisasi Bersih OTA Tanpa File Yatim & Rotasi Cadangan Disk (Bug 4): Ekstraksi OTA pada app/services/ota_utils.py dan install_zimaos.sh kini menggunakan direktori staging sementara, menghapus berkas/pycache usang yang tidak ada di rilis baru dengan rollback otomatis bila gagal, membatasi isolasi skrip installer agar tidak mengotori /app/, mendeteksi perubahan Dockerfile/requirements.txt (rebuild_required), dan memangkas cadangan backup_app_* lama dengan menyisakan 3 terbaru."
+        ],
+        "features": [
+            "Verifikasi boot_id Pasca-OTA & Failover SSH Otomatis (Zero Fake Success)",
+            "Shutdown Scheduler Thread-Safe & Restart Universal Exit Code 1 (v1.2.7)",
+            "Timeout Build Docker 180s/240s & Propagasi Galat Nyata UI Tauri",
+            "Staging & Clean Sync Direktori app/, Deteksi Rebuild, & Rotasi Backup (Keep 3)"
+        ]
+    },
+    {
         "version": "4.5.8",
         "channel": "Beta",
         "date": "2026-11-14",

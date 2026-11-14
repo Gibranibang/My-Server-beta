@@ -104,7 +104,7 @@ class TestBackendDetection(unittest.TestCase):
         core._remote_backend_manifest_cache["version"] = ""
 
     def test_real_workspace_resources_bundled_and_git_tracked(self):
-        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.2.6")
+        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.2.7")
         zip_pkg, tar_pkg = core._get_bundled_backend_packages()
         self.assertIsNotNone(zip_pkg)
         self.assertIsNotNone(tar_pkg)
@@ -417,6 +417,176 @@ class TestBackendDetection(unittest.TestCase):
                 self.assertEqual(data, {"status": "ok", "version": "1.2.3"})
             finally:
                 httpd.shutdown()
+
+    def test_http_ota_waits_for_real_restart_boot_id_and_surfaces_rebuild_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = os.path.join(tmp, "MyServer-Backend-ZimaOS.zip")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.2.7"\n')
+
+            cfg = {
+                "active_server_id": "srv1",
+                "servers": [{"id": "srv1", "name": "Zima1", "connections": [{"id": "c1", "url": "http://127.0.0.1"}]}],
+            }
+            sleep_calls = []
+            poll_seq = [
+                (True, {"status": "ok", "version": "1.2.6", "boot_id": "boot-old"}, 200),
+                (False, {}, 0),
+                (True, {"status": "ok", "version": "1.2.7", "boot_id": "boot-new"}, 200),
+            ]
+
+            with (
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"),
+                mock.patch.object(core, "_get_bundled_backend_version", return_value="1.2.7"),
+                mock.patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)),
+                mock.patch(
+                    "urllib.request.urlopen",
+                    return_value=_FakeHttpResponse({
+                        "status": "success",
+                        "boot_id": "boot-old",
+                        "rebuild_required": True,
+                    }),
+                ),
+                mock.patch.object(core, "_backend_http_request", side_effect=poll_seq),
+                mock.patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)),
+            ):
+                res = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertTrue(res["success"])
+            self.assertTrue(res["rebuildRecommended"])
+            self.assertEqual(res["backend"]["version"], "1.2.7")
+            self.assertGreaterEqual(len(sleep_calls), 3)
+            self.assertEqual(sleep_calls[0], 2.5)
+
+    def test_http_ota_never_fabricates_online_success_when_backend_stays_unreachable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = os.path.join(tmp, "MyServer-Backend-ZimaOS.zip")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.2.7"\n')
+
+            cfg = {
+                "active_server_id": "srv1",
+                "servers": [{"id": "srv1", "name": "Zima1", "connections": [{"id": "c1", "url": "http://127.0.0.1"}]}],
+            }
+
+            with (
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"),
+                mock.patch.object(core, "_get_bundled_backend_version", return_value="1.2.7"),
+                mock.patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)),
+                mock.patch("urllib.request.urlopen", return_value=_FakeHttpResponse({"status": "success", "boot_id": "boot-1"})),
+                mock.patch.object(core, "_backend_http_request", return_value=(False, {}, 0)),
+                mock.patch("time.sleep", return_value=None),
+            ):
+                res = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertFalse(res["success"])
+            self.assertFalse(res["backend"]["online"])
+            self.assertEqual(res["backend"]["version"], "")
+            self.assertFalse(core._cached_backend_info["data"]["online"])
+
+    def test_http_ota_unchanged_boot_id_rejects_without_ssh_and_falls_back_with_ssh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = os.path.join(tmp, "MyServer-Backend-ZimaOS.zip")
+            tar_path = os.path.join(tmp, "MyServer-Backend-ZimaOS.tar.gz")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.2.7"\n')
+            with tarfile.open(tar_path, "w:gz") as tf:
+                info = tarfile.TarInfo("app/config.py")
+                data = b'SERVER_VERSION = "1.2.7"\n'
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+
+            cfg_no_ssh = {
+                "active_server_id": "srv1",
+                "servers": [{"id": "srv1", "name": "Zima1", "connections": [{"id": "c1", "url": "http://127.0.0.1"}]}],
+            }
+            with (
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg_no_ssh),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"),
+                mock.patch.object(core, "_get_bundled_backend_version", return_value="1.2.7"),
+                mock.patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, tar_path)),
+                mock.patch("urllib.request.urlopen", return_value=_FakeHttpResponse({"status": "success", "boot_id": "boot-same"})),
+                mock.patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.2.7", "boot_id": "boot-same"}, 200)),
+                mock.patch("time.sleep", return_value=None),
+            ):
+                res_no_ssh = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertFalse(res_no_ssh["success"])
+            self.assertIn("boot_id", res_no_ssh["message"])
+
+            recorded_cmds = []
+
+            class _FakeStream:
+                def __init__(self, text=b"", exit_code=0):
+                    self._text = text
+                    self.channel = types.SimpleNamespace(recv_exit_status=lambda: exit_code)
+
+                def read(self):
+                    return self._text
+
+            class _FakeSftp:
+                def put(self, local_path, remote_path):
+                    return None
+
+                def close(self):
+                    return None
+
+            class _FakeSshClient:
+                def set_missing_host_key_policy(self, policy):
+                    return None
+
+                def connect(self, *args, **kwargs):
+                    return None
+
+                def open_sftp(self):
+                    return _FakeSftp()
+
+                def exec_command(self, cmd, timeout=None):
+                    recorded_cmds.append((cmd, timeout))
+                    return None, _FakeStream(b"ok", 0), _FakeStream(b"", 0)
+
+                def close(self):
+                    return None
+
+            fake_paramiko = types.SimpleNamespace(
+                SSHClient=lambda: _FakeSshClient(),
+                AutoAddPolicy=lambda: object(),
+            )
+            cfg_with_ssh = {
+                "active_server_id": "srv1",
+                "servers": [{
+                    "id": "srv1",
+                    "name": "Zima1",
+                    "connections": [{"id": "c1", "url": "http://127.0.0.1"}],
+                    "credentials": {"Admin": {"username": "algitha", "password": "secret"}},
+                }],
+            }
+            poll_http_fail_then_ssh_ok = ([(False, {}, 0)] * 15) + [(True, {"status": "ok", "version": "1.2.7", "boot_id": "boot-ssh"}, 200)]
+
+            with (
+                mock.patch.dict(sys.modules, {"paramiko": fake_paramiko}),
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg_with_ssh),
+                mock.patch.object(core.config_manager, "get_server_credentials", return_value={"username": "algitha", "password": "secret"}),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"),
+                mock.patch.object(core, "_get_bundled_backend_version", return_value="1.2.7"),
+                mock.patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, tar_path)),
+                mock.patch("urllib.request.urlopen", return_value=_FakeHttpResponse({"status": "success", "boot_id": "boot-1"})),
+                mock.patch.object(core, "_backend_http_request", side_effect=poll_http_fail_then_ssh_ok),
+                mock.patch("time.sleep", return_value=None),
+            ):
+                res_ssh = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertTrue(res_ssh["success"])
+            self.assertEqual(res_ssh["backend"]["version"], "1.2.7")
+            install_cmds = [c for c in recorded_cmds if "install_zimaos.sh" in c[0]]
+            self.assertEqual(len(install_cmds), 1)
+            self.assertGreaterEqual(install_cmds[0][1], 180)
 
 
 if __name__ == "__main__":

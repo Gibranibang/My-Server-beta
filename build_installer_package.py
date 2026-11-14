@@ -38,7 +38,7 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 
-VERSION = "4.5.6"
+VERSION = "4.5.7"
 
 APP_NAME = "My-Server by algitha BETA"
 
@@ -75,15 +75,15 @@ else:
 print(f"[*] Menggunakan biner Companion: {src_tauri_exe}")
 
 src_core_cands = [
-    os.path.join(BASE_BETA, r"dist\myserver-core.exe"),
-    os.path.join(BASE_BETA, r"sandbox\dist\myserver-core.exe"),
-    r"D:\Projek\dist\myserver-core.exe"
+    os.path.join(BASE_BETA, "dist", "myserver-core.exe"),
+    os.path.join(BASE_BETA, "sandbox", "dist", "myserver-core.exe"),
+    os.path.join(os.path.dirname(BASE_BETA), "dist", "myserver-core.exe")
 ]
 existing_core_cands = [c for c in src_core_cands if os.path.exists(c)]
 if existing_core_cands:
     src_core_exe = max(existing_core_cands, key=os.path.getmtime)
 else:
-    src_core_exe = os.path.join(BASE_BETA, r"sandbox\dist\myserver-core.exe")
+    src_core_exe = os.path.join(BASE_BETA, "sandbox", "dist", "myserver-core.exe")
 
 
 
@@ -181,9 +181,9 @@ st_exe_src = os.path.join(BASE_BETA, "bin", "syncthing.exe")
 
 if not os.path.exists(st_exe_src):
 
-    st_exe_src = r"D:\Softwares\Syncthing\syncthing.exe"
+    st_exe_src = os.environ.get("MYSERVER_SYNCTHING_PATH", "") or shutil.which("syncthing.exe") or ""
 
-if os.path.exists(st_exe_src):
+if st_exe_src and os.path.exists(st_exe_src):
 
     shutil.copy2(st_exe_src, os.path.join(STAGING_DIR, "bin", "syncthing.exe"))
 
@@ -208,10 +208,6 @@ if os.path.exists(ico_src):
 # Salin dialogs.ps1
 
 ps1_src = os.path.join(BASE_BETA, "dialogs.ps1")
-
-if not os.path.exists(ps1_src):
-
-    ps1_src = r"D:\Softwares\MyServer\dialogs.ps1"
 
 if os.path.exists(ps1_src):
 
@@ -283,13 +279,13 @@ with open(os.path.join(STAGING_DIR, "config.json"), "w", encoding="utf-8") as f:
 
 extra_files = [
 
-    (r"D:\Softwares\MyServer\1_Buka_Blokir_Windows_Unblock.bat", "1_Buka_Blokir_Windows_Unblock.bat"),
+    (os.path.join(BASE_BETA, "1_Buka_Blokir_Windows_Unblock.bat"), "1_Buka_Blokir_Windows_Unblock.bat"),
 
-    (r"D:\Softwares\MyServer\2_Pasang_Sertifikat_Kepercayaan_Admin.bat", "2_Pasang_Sertifikat_Kepercayaan_Admin.bat"),
+    (os.path.join(BASE_BETA, "2_Pasang_Sertifikat_Kepercayaan_Admin.bat"), "2_Pasang_Sertifikat_Kepercayaan_Admin.bat"),
 
-    (r"D:\Softwares\MyServer\Algitha_Project_Security_Certificate.cer", "Algitha_Project_Security_Certificate.cer"),
+    (os.path.join(BASE_BETA, "Algitha_Project_Security_Certificate.cer"), "Algitha_Project_Security_Certificate.cer"),
 
-    (r"D:\Softwares\MyServer\PANDUAN_KEAMANAN_WINDOWS.txt", "PANDUAN_KEAMANAN_WINDOWS.txt"),
+    (os.path.join(BASE_BETA, "PANDUAN_KEAMANAN_WINDOWS.txt"), "PANDUAN_KEAMANAN_WINDOWS.txt"),
 
     (os.path.join(BASE_BETA, "CHANGELOG.md"), "CHANGELOG.md"),
 
@@ -341,11 +337,9 @@ print(f"  [v] ZIP Portabel siap: {zip_target} ({os.path.getsize(zip_target):,} b
 
 
 
-# Salin juga ke D:\Softwares\MyServer\dist jika folder ada
+sw_dist = os.environ.get("MYSERVER_EXTRA_DIST_DIR", "").strip()
 
-sw_dist = r"D:\Softwares\MyServer\dist"
-
-if os.path.isdir(r"D:\Softwares\MyServer"):
+if sw_dist and os.path.isdir(os.path.dirname(sw_dist)):
 
     os.makedirs(sw_dist, exist_ok=True)
 
@@ -507,10 +501,7 @@ begin
   else if RegQueryStringValue(HKLM, 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}}_is1', 'Inno Setup: App Path', S) and (S <> '') then
     Result := S
   else if RegQueryStringValue(HKLM, 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}}_is1', 'InstallLocation', S) and (S <> '') then
-    Result := S
-  // 3. Fallback jika biner MyServer ditemukan langsung di D:\Softwares\MyServer
-  else if FileExists('D:\\Softwares\\MyServer\\MyServer-Beta.exe') then
-    Result := 'D:\\Softwares\\MyServer';
+    Result := S;
 end;
 
 function GetInstallDir(Param: String): String;
@@ -592,7 +583,7 @@ if iscc_res.returncode == 0:
 
         shutil.copy2(setup_output, setup_generic)
 
-        if os.path.isdir(sw_dist):
+        if sw_dist and os.path.isdir(sw_dist):
 
             shutil.copy2(setup_output, os.path.join(sw_dist, f"MyServer-v{VERSION}-Beta-Setup.exe"))
 

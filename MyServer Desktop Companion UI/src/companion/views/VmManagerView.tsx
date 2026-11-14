@@ -422,22 +422,9 @@ export default function VmManagerView({ go }: ViewProps) {
       keepAlivePing()
     }, 30000)
 
-    // Local 60-second runtime progression untuk VM lokal/manual yang sedang berjalan
-    const runtimeTicker = setInterval(() => {
-      setVms((prev) =>
-        prev.map((v) => {
-          if (v.status !== "running" || v.scope === "server") return v
-          const maxRun = v.maxRuntimeMinutes || 480
-          const nextMins = Math.min(maxRun, (v.runtimeMinutes || 0) + 1)
-          return { ...v, runtimeMinutes: nextMins }
-        })
-      )
-    }, 60000)
-
     return () => {
       clearInterval(syncInterval)
       clearInterval(keepAliveInterval)
-      clearInterval(runtimeTicker)
     }
   }, [vms.length, isOnline, syncActiveInstaboxVms])
 
@@ -1025,7 +1012,7 @@ export default function VmManagerView({ go }: ViewProps) {
         id: targetId,
         name: finalName,
         provider: addVmTab,
-        status: "running",
+        status: "sleeping",
         scope: formScope,
         serverId: targetServerId,
         serverName: formScope === "server" ? activeServerName : undefined,
@@ -1040,7 +1027,7 @@ export default function VmManagerView({ go }: ViewProps) {
         runtimeMinutes: 0,
         maxRuntimeMinutes: addVmTab === "instabox" ? 480 : undefined,
         idleTimeoutMinutes: addVmTab === "instabox" ? 30 : undefined,
-        lastActive: "Just now",
+        lastActive: language === "id" ? "Baru ditambahkan" : "Just added",
         telemetry: {
           cpuPct: null,
           ramUsedBytes: null,

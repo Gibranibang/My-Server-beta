@@ -97,25 +97,6 @@ def format_dynamic_bytes(size_bytes):
         return f"{int(size_bytes)} B"
 
 
-def parse_size_hint_from_name(name):
-    """Mendeteksi petunjuk kapasitas dari nama drive (contoh: 'Toshiba 1TB' -> 1000204886016 bytes)."""
-    if not name or not isinstance(name, str):
-        return 0
-    m_tb = re.search(r"(\d+(?:\.\d+)?)\s*tb\b", name, re.IGNORECASE)
-    if m_tb:
-        try:
-            return int(float(m_tb.group(1)) * 1000 * 1000 * 1000 * 1000)
-        except Exception:
-            pass
-    m_gb = re.search(r"(\d+(?:\.\d+)?)\s*gb\b", name, re.IGNORECASE)
-    if m_gb:
-        try:
-            return int(float(m_gb.group(1)) * 1000 * 1000 * 1000)
-        except Exception:
-            pass
-    return 0
-
-
 def decode_jwt_payload(token_str):
     """Mengekstrak payload JSON dari token JWT tanpa HTTP request tambahan."""
     if not token_str or not isinstance(token_str, str):
@@ -1645,16 +1626,6 @@ class ZimaMetricsClient:
                         except Exception:
                             self._failed_dev_paths.add(dev_base)
 
-                # E. Cek petunjuk kapasitas dari nama drive (contoh: "Toshiba 1TB" -> 1 TB)
-                hint_size = parse_size_hint_from_name(p_name)
-                if (not p_info or p_info.get("total_bytes", 0) <= 0) and m_size <= 0 and hint_size > 0:
-                    p_info = {
-                        "used_bytes": 0,
-                        "total_bytes": hint_size,
-                        "pct": 0.0,
-                        "formatted_str": f"0.0 GB / {format_dynamic_bytes(hint_size)} (0.0%)",
-                    }
-
                 if p_info and p_info.get("total_bytes", 0) > 0:
                     d_let = p_info.get("drive_letter", "")
                     p_fs = fs or p_info.get("fs_type", "")
@@ -1768,18 +1739,6 @@ class ZimaMetricsClient:
                     tot_p_size += p_sz
                     tot_p_used += p_us
 
-            # Rekonsiliasi used_bytes jika ada disk berukuran > 0 tetapi used_bytes == 0 dan sys_used > tot_p_used
-            if sys_used > tot_p_used:
-                unmeasured = [p for p in partitions if p.get("total_bytes", 0) > 0 and p.get("used_bytes", 0) == 0]
-                if len(unmeasured) == 1:
-                    target_p = unmeasured[0]
-                    diff_used = sys_used - tot_p_used
-                    target_p["used_bytes"] = diff_used
-                    t_pct = (diff_used / target_p["total_bytes"] * 100.0) if target_p["total_bytes"] > 0 else 0.0
-                    target_p["pct"] = round(t_pct, 1)
-                    target_p["formatted_str"] = f"{format_dynamic_bytes(diff_used)} / {format_dynamic_bytes(target_p['total_bytes'])} ({t_pct:.1f}%)"
-                    tot_p_used += diff_used
-
             if tot_p_size > 0:
                 tot_p_pct = (tot_p_used / tot_p_size * 100.0) if tot_p_size > 0 else 0.0
                 self.last_storage_cache = {
@@ -1871,17 +1830,6 @@ class ZimaMetricsClient:
                                 if p_path.startswith(mp) or str(mp).startswith(p_path):
                                     p_info = info
                                     break
-
-                        # Fallback kapasitas dari nama disk (contoh: Toshiba 1TB -> 1 TB)
-                        if not p_info or p_info.get("total_bytes", 0) <= 0:
-                            hint_sz = parse_size_hint_from_name(share_name)
-                            if hint_sz > 0:
-                                p_info = {
-                                    "used_bytes": 0,
-                                    "total_bytes": hint_sz,
-                                    "pct": 0.0,
-                                    "formatted_str": f"0.0 GB / {format_dynamic_bytes(hint_sz)} (0.0%)",
-                                }
 
                         if p_info and p_info.get("total_bytes", 0) > 0:
                             p_used = p_info["used_bytes"]

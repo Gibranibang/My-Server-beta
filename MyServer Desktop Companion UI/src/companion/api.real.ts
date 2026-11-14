@@ -640,7 +640,7 @@ export function createRealApi(): CompanionApi {
 
       }
 
-      return { file: `myserver-backup-${new Date().toISOString().slice(0, 10)}.zip` }
+      return { file: "" }
 
     },
 
@@ -668,7 +668,7 @@ export function createRealApi(): CompanionApi {
 
       }
 
-      return { rollbackFile: "myserver-config.bak" }
+      return { rollbackFile: "" }
 
     },
 
@@ -857,7 +857,7 @@ export function createRealApi(): CompanionApi {
       } catch (err) {
         console.warn('[RealApi] probeUrl error:', err)
       }
-      return { reachable: true, latency_ms: 0, url }
+      return { reachable: false, latency_ms: -1, url }
     },
 
     async getActivityLog() {
@@ -2005,8 +2005,9 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] dialogConfigureLocalSyncthing error:", err)
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
       }
-      return { success: true }
+      return { success: false, error: "Core service API tidak tersedia." }
     },
 
     async dialogConfigureServerSyncthing() {
@@ -2018,8 +2019,9 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] dialogConfigureServerSyncthing error:", err)
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
       }
-      return { success: true }
+      return { success: false, error: "Core service API tidak tersedia." }
     },
 
     async getSyncthingFullStatus(): Promise<SyncthingFullStatus> {

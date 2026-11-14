@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.7",
+        "channel": "Beta",
+        "date": "2026-11-14",
+        "title": "Audit Forensik & Eliminasi Hardcoding, Autentikasi Backend Ketat, Verifikasi Telemetri VM Nyata, dan Backend ZimaOS v1.2.5",
+        "notes": [
+            "Eliminasi Telemetri & Timer Palsu VM: Menghapus interval increment runtime 60 detik di UI, menginisialisasi VM baru dengan status tidur yang jujur, meniadakan fallback kapasitas RAM/Disk fiktif, serta menerapkan verifikasi status TCP/SSH nyata untuk VM manual di Backend v1.2.5.",
+            "Penguatan Keamanan & Autentikasi (Zero Bypass): Menolak login tanpa kata sandi/token (HTTP 401), membatasi token bypass/dev mode di belakang flag lingkungan eksplisit (MYSERVER_ALLOW_DEV_TOKENS & MYSERVER_DEV_MODE), serta mengamankan escaping kata sandi sudo SSH OTA dengan shlex.quote.",
+            "Penghapusan Respons Fallback Palsu & Tebakan Metrik ZimaOS: Mengganti fallback nama berkas/sukses semu pada backup, probe URL (latency_ms -1), dan dialog Syncthing dengan pesan galat eksplisit; serta menghapus tebakan kapasitas dari nama folder dan rekonsiliasi partisi fiktif.",
+            "Portabilitas Path & Pembatasan Profil InstaBox: Menghapus seluruh path pengembang hardcoded pada skrip build, installer, launcher backend, dan router penyimpanan, serta membatasi spesifikasi default InstaBox hanya untuk provider instabox."
+        ],
+        "features": [
+            "Eliminasi Hardcoding & Fallback Palsu Lintas Desktop-Backend",
+            "Autentikasi Backend Ketat & Escaping Perintah SSH OTA",
+            "Probing Status TCP/SSH Nyata untuk VM Manual (Backend v1.2.5)",
+            "Metrik Disk ZimaOS & Konfigurasi Build 100% Portabel"
+        ]
+    },
+    {
         "version": "4.5.6",
         "channel": "Beta",
         "date": "2026-11-14",

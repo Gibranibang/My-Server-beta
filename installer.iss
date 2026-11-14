@@ -8,7 +8,7 @@
 
 #define MyAppName "My-Server by algitha BETA"
 
-#define MyAppVersion "4.5.6"
+#define MyAppVersion "4.5.7"
 
 #define MyAppPublisher "Algitha Project"
 
@@ -43,7 +43,7 @@ AllowNoIcons=yes
 
 OutputDir=dist
 
-OutputBaseFilename=MyServer-v4.5.6-Beta-Setup
+OutputBaseFilename=MyServer-v4.5.7-Beta-Setup
 
 SetupIconFile=app_icon.ico
 
@@ -144,10 +144,7 @@ begin
   else if RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}_is1', 'Inno Setup: App Path', S) and (S <> '') then
     Result := S
   else if RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5D8C7A3B-8C4E-4B1C-9A5F-2D3E6F7A8B9C}_is1', 'InstallLocation', S) and (S <> '') then
-    Result := S
-  // 3. Fallback jika biner MyServer ditemukan langsung di D:\Softwares\MyServer
-  else if FileExists('D:\Softwares\MyServer\MyServer-Beta.exe') then
-    Result := 'D:\Softwares\MyServer';
+    Result := S;
 end;
 
 function GetInstallDir(Param: String): String;

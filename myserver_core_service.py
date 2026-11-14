@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.6"
+APP_VERSION_NUMBER = "4.5.7"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -4240,8 +4240,9 @@ def handle_remote_backend_action(body):
                     }
 
             # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo
+            import shlex
             logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
-            exec_script = f"cd {deploy_dir} && tar -xzf backend.tar.gz && echo '{pwd}' | sudo -S bash install_zimaos.sh"
+            exec_script = f"cd {deploy_dir} && tar -xzf backend.tar.gz && printf '%s\\n' {shlex.quote(pwd)} | sudo -S bash install_zimaos.sh"
             _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=60)
             exec_exit = exec_stdout.channel.recv_exit_status()
             exec_out_text = exec_stdout.read().decode("utf-8", errors="replace")

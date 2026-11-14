@@ -2299,9 +2299,9 @@ class LocalSyncthingDaemon:
             candidates.append(os.path.join(b, "data", "syncthing", "syncthing.exe"))
 
         candidates.extend([
+            os.environ.get("MYSERVER_SYNCTHING_PATH", ""),
             os.path.expandvars(r"%LOCALAPPDATA%\Syncthing\syncthing.exe"),
             os.path.expandvars(r"%PROGRAMFILES%\Syncthing\syncthing.exe"),
-            r"D:\Softwares\Syncthing\syncthing.exe",
         ])
 
         for c in candidates:

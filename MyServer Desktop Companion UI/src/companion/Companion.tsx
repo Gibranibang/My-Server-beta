@@ -11,7 +11,7 @@ import {
 } from "lucide-react"
 import FlyoutShell, { FlyoutHeader, HeaderTitle } from "./FlyoutShell"
 import TrayDock from "./TrayDock"
-import { NoticeProvider, SERVER_IP, useCompanion, useNotice } from "./store"
+import { NoticeProvider, SERVER_IP, SERVER_URL, useCompanion, useNotice } from "./store"
 import { getTranslation } from "./i18n"
 import { Button, IconBadge, IconButton } from "./ui"
 import type { ViewId } from "./types"
@@ -258,7 +258,7 @@ function CompanionFrame({
             icon={ExternalLink}
             label={t("open_in_browser", "Open console in browser")}
             onClick={() => {
-              void api.openUrl(`http://${SERVER_IP}`)
+              void api.openUrl(SERVER_URL || `http://${SERVER_IP}`)
             }}
           />
         }

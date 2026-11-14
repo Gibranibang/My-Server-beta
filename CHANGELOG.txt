@@ -1,4 +1,13 @@
 ===================================================
+[v4.5.7 - Beta] - 2026-11-14
+Catatan:
+1. Eliminasi Telemetri & Timer Palsu VM: Menghapus interval increment runtime 60 detik di UI, menginisialisasi VM baru dengan status tidur yang jujur, meniadakan fallback kapasitas RAM/Disk fiktif, serta menerapkan verifikasi status TCP/SSH nyata untuk VM manual di Backend v1.2.5.
+2. Penguatan Keamanan & Autentikasi (Zero Bypass): Menolak login tanpa kata sandi/token (HTTP 401), membatasi token bypass/dev mode di belakang flag lingkungan eksplisit (MYSERVER_ALLOW_DEV_TOKENS & MYSERVER_DEV_MODE), serta mengamankan escaping kata sandi sudo SSH OTA dengan shlex.quote.
+3. Penghapusan Respons Fallback Palsu & Tebakan Metrik ZimaOS: Mengganti fallback nama berkas/sukses semu pada backup, probe URL (latency_ms -1), dan dialog Syncthing dengan pesan galat eksplisit; serta menghapus tebakan kapasitas dari nama folder dan rekonsiliasi partisi fiktif.
+4. Portabilitas Path & Pembatasan Profil InstaBox: Menghapus seluruh path pengembang hardcoded pada skrip build, installer, launcher backend, dan router penyimpanan, serta membatasi spesifikasi default InstaBox hanya untuk provider instabox.
+===================================================
+
+===================================================
 [v4.5.6 - Beta] - 2026-11-14
 Catatan:
 1. Proteksi Progress Waktu VM (Anti-Reset): Mempertahankan durasi runtimeMinutes saat sinkronisasi list API maupun pembaruan konfigurasi SQLite, menyelaraskan batas siklus ke 8 jam (480 menit), dan membatasi Smart Reset hanya saat otomasi aktif.

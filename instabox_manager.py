@@ -92,24 +92,25 @@ class InstaBoxManager:
             vms = []
 
         vm_id = vm_data.get("id") or f"vm-{uuid.uuid4().hex[:8]}"
+        provider = vm_data.get("provider") or "instabox"
         new_vm = {
             "id": vm_id,
-            "name": vm_data.get("name") or "InstaBox Cloud VM",
-            "provider": "instabox",
+            "name": vm_data.get("name") or ("InstaBox Cloud VM" if provider == "instabox" else "Linux VPS"),
+            "provider": provider,
             "apiKey": vm_data.get("apiKey", "").strip(),
             "machineId": vm_data.get("machineId", "").strip(),
             "ip": vm_data.get("ip", "").strip(),
-            "sshPort": int(vm_data.get("sshPort") or 2222),
+            "sshPort": int(vm_data.get("sshPort") or (2222 if provider == "instabox" else 22)),
             "antigravityPort": int(vm_data.get("antigravityPort") or 8080),
-            "specs": vm_data.get("specs") or {
+            "specs": vm_data.get("specs") or ({
                 "cpu": "4 vCPU AMD EPYC",
                 "ram": "8 GB DDR5",
                 "storage": "20 GB NVMe"
-            },
+            } if provider == "instabox" else {}),
             "status": "sleeping",
             "runtimeMinutes": 0,
-            "maxRuntimeMinutes": 480,
-            "idleTimeoutMinutes": 30,
+            "maxRuntimeMinutes": 480 if provider == "instabox" else 0,
+            "idleTimeoutMinutes": 30 if provider == "instabox" else 0,
             "cooldownUntil": 0,
             "lastActive": "Just added"
         }

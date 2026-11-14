@@ -4,9 +4,9 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { StepConnection } from "../StepConnection"
 import { StepWanDomain } from "../StepWanDomain"
 import { StepZimaLogin } from "../StepZimaLogin"
-import { createMockApi, setCompanionApi } from "../../api"
+import { createMockApi, setCompanionApi, type CompanionApi } from "../../api"
 import { I18N, type Language } from "../../i18n"
-import type { CompanionApi, WizardDraft } from "../../types"
+import type { WizardDraft } from "../../types"
 
 function makeDraft(overrides: Partial<WizardDraft> = {}): WizardDraft {
   return {
@@ -100,7 +100,7 @@ describe("Wizard Steps 1-3", () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
-    setCompanionApi(null)
+    setCompanionApi(createMockApi())
   })
 
   describe("StepConnection (Step 1)", () => {

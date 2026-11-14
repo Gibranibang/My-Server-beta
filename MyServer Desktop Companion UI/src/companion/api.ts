@@ -1,4 +1,21 @@
-import type { Drive, Metrics, PowerState, Settings, ServerDetails, WebApp, SyncthingFullStatus, SyncthingFolderTask, SyncthingConfigData, VirtualMachine } from "./types"
+import type {
+  Drive,
+  Metrics,
+  PowerState,
+  Settings,
+  ServerDetails,
+  WebApp,
+  SyncthingFullStatus,
+  SyncthingFolderTask,
+  SyncthingConfigData,
+  VirtualMachine,
+  WizardVerifyZimaResponse,
+  WizardCommitServerPayload,
+  WizardCommitServerResult,
+  BackendDeploySource,
+  BackendActionResult,
+  SyncthingAutoDetectResult,
+} from "./types"
 
 import { APP_VERSION, APP_CHANNEL } from "./version"
 
@@ -24,7 +41,7 @@ export interface CompanionApi {
 
   refreshMetrics?(): Promise<Metrics>
 
-  probeUrl?: (url: string) => Promise<any>
+  probeUrl?: (url: string) => Promise<{ reachable: boolean; latency_ms?: number; status?: number; url?: string; error?: string }>
 
   /** Push every server power-state change (including ones not started by the UI). */
 
@@ -119,6 +136,12 @@ export interface CompanionApi {
   /** Real OS / Native Desktop Actions */
 
   hideFlyout(): Promise<void>
+
+  hideWindow(): Promise<void>
+
+  startDrag(): Promise<void>
+
+  setWizardMode(active: boolean, width?: number, height?: number): Promise<void>
 
   minimizeWindow(): Promise<void>
 
@@ -244,6 +267,12 @@ export interface CompanionApi {
 
     lan_https?: boolean
 
+    remote_ip?: string
+
+    remote_port?: string
+
+    remote_https?: boolean
+
     wan_url?: string
 
     wan_port?: string
@@ -253,6 +282,8 @@ export interface CompanionApi {
     api_key?: string
 
   }): Promise<{ success: boolean }>
+
+  detectLocalSyncthing(): Promise<SyncthingAutoDetectResult>
 
   saveSyncthingLocalConfig(payload: {
 
@@ -324,9 +355,31 @@ export interface CompanionApi {
 
   executeRestoreDialog(targetFile?: string): Promise<{ success: boolean; rollbackFile?: string; restarting?: boolean; cancelled?: boolean; error?: string }>
 
-  triggerBackendAction?(action: "install" | "update", serverId?: string): Promise<{ success: boolean; status?: string; message?: string; backend?: any }>
+  triggerBackendAction?(
+    action: "install" | "update",
+    serverId?: string,
+    options?: {
+      source?: BackendDeploySource
+      sshHost?: string
+      sshPort?: number
+      sshUser?: string
+      sshPassword?: string
+    },
+  ): Promise<BackendActionResult>
 
-  getBackendStatus?(serverId?: string): Promise<{ online: boolean; version?: string; latestVersion?: string }>
+  getBackendStatus?(serverId?: string): Promise<{ online: boolean; version?: string; latestVersion?: string; url?: string }>
+
+  verifyZimaLogin(payload: {
+    url?: string
+    remoteId?: string
+    wanUrl?: string
+    username: string
+    password: string
+  }): Promise<WizardVerifyZimaResponse>
+
+  commitWizardServer(payload: WizardCommitServerPayload): Promise<WizardCommitServerResult>
+
+  completeWizard(): Promise<{ success: boolean; firstRunSetup?: boolean; message?: string; error?: string }>
 
 }
 
@@ -739,7 +792,17 @@ export function createMockApi(): CompanionApi {
 
     },
 
+    async probeUrl(url: string) {
+      return { reachable: true, latency_ms: 12, status: 200, url }
+    },
+
     async hideFlyout() {},
+
+    async hideWindow() {},
+
+    async startDrag() {},
+
+    async setWizardMode() {},
 
     async minimizeWindow() {},
 
@@ -972,12 +1035,12 @@ export function createMockApi(): CompanionApi {
 
     async joinZeroTier(): Promise<void> {},
 
-    async triggerBackendAction(action: "install" | "update", serverId?: string) {
-      return { success: true, status: "ok", message: "Mock backend updated", backend: { online: true, version: "", latestVersion: "" } }
+    async triggerBackendAction(_action: "install" | "update", _serverId?: string, _options?: { source?: BackendDeploySource; sshHost?: string; sshPort?: number; sshUser?: string; sshPassword?: string }) {
+      return { success: true, status: "ok", stage: "done", version: "1.0.0", latestVersion: "1.0.0", message: "Mock backend updated", backend: { online: true, version: "1.0.0", latestVersion: "1.0.0" } }
     },
 
-    async getBackendStatus(serverId?: string) {
-      return { online: true, version: "", latestVersion: "" }
+    async getBackendStatus(_serverId?: string) {
+      return { online: true, version: "1.0.0", latestVersion: "1.0.0", url: "http://192.168.1.50:8788" }
     },
 
     async getEasyTierStatus() {
@@ -1026,6 +1089,15 @@ export function createMockApi(): CompanionApi {
     },
 
     async saveSyncthingServerRoute() { return { success: true } },
+
+    async detectLocalSyncthing() {
+      return {
+        detected: true,
+        localPort: "8384",
+        localApiKey: "MOCK_LOCAL_KEY",
+        serverApiKey: "MOCK_SERVER_KEY",
+      }
+    },
 
     async saveSyncthingLocalConfig() { return { success: true } },
 
@@ -1177,7 +1249,29 @@ export function createMockApi(): CompanionApi {
 
     async executeBackupDialog() { return { success: true, file: "myserver-backup.zip" } },
 
-    async executeRestoreDialog() { return { success: true, rollbackFile: "config.json.bak" } }
+    async executeRestoreDialog() { return { success: true, rollbackFile: "config.json.bak" } },
+
+    async verifyZimaLogin(payload) {
+      return {
+        success: true,
+        username: payload.username,
+        resolvedUrl: payload.url || "http://192.168.1.50",
+        isAdmin: true,
+      }
+    },
+
+    async commitWizardServer(payload) {
+      return {
+        success: true,
+        serverId: payload.serverId || "srv_mock_1",
+        name: payload.name || "Server Utama",
+      }
+    },
+
+    async completeWizard() {
+      settings = { ...settings, firstRunSetup: false }
+      return { success: true, firstRunSetup: false }
+    },
 
   }
 

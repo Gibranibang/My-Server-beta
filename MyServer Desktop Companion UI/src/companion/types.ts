@@ -149,6 +149,7 @@ export interface Settings {
   dpapiActive?: boolean
   theme?: "dark" | "light"
   autoCheckUpdate?: boolean
+  firstRunSetup?: boolean
 }
 
 export type ChecklistKey = "lan" | "bios" | "standby"
@@ -323,6 +324,9 @@ export interface SyncthingConfigData {
     wan_url?: string
     wan_port?: string
     wan_https?: boolean
+    remote_ip?: string
+    remote_port?: string
+    remote_https?: boolean
   }
 }
 
@@ -331,4 +335,98 @@ export interface NoticeHistoryItem {
   text: string
   tone: Tone
   timeStr: string
+}
+
+export type WizardStepId = 1 | 2 | 3 | 4 | 5 | "5a" | "5b"
+
+export type BackendDeploySource = "github" | "bundle"
+
+export interface WizardVerifyZimaResponse {
+  success: boolean
+  username?: string
+  resolvedUrl?: string
+  isAdmin?: boolean
+  zerotierNetworkId?: string
+  zerotierIp?: string
+  ztStatus?: string
+  message?: string
+  error?: string
+}
+
+export interface WizardCommitServerPayload {
+  serverId?: string
+  name?: string
+  url?: string
+  localUrl?: string
+  remoteId?: string
+  wanUrl?: string
+  username: string
+  password: string
+  sshUser?: string
+  setActive?: boolean
+}
+
+export interface WizardCommitServerResult {
+  success: boolean
+  serverId?: string
+  name?: string
+  zerotierNetworkId?: string
+  zerotierVirtualIp?: string
+  message?: string
+  error?: string
+}
+
+export interface BackendActionPayload {
+  action: "install" | "update"
+  serverId: string
+  source?: BackendDeploySource
+  sshHost?: string
+  sshPort?: number
+  sshUser?: string
+  sshPassword?: string
+}
+
+export interface BackendActionResult {
+  success: boolean
+  status?: string
+  authFailed?: boolean
+  busy?: boolean
+  validationError?: boolean
+  stage?: string
+  version?: string
+  latestVersion?: string
+  updateAvailable?: boolean
+  rebuildRecommended?: boolean
+  message?: string
+  backend?: Record<string, unknown>
+}
+
+export interface SyncthingAutoDetectResult {
+  detected: boolean
+  localPort?: string
+  localApiKey?: string
+  serverApiKey?: string
+  deviceId?: string
+  message?: string
+}
+
+export interface WizardDraft {
+  connectionMode: "lan" | "remote"
+  lanUrl: string
+  remoteId: string
+  connectionVerified: boolean
+  wanUrl: string
+  username: string
+  /** Transient UI memory only — cleared immediately after Step 3 commit. */
+  password: string
+  serverId: string
+  serverName: string
+  zerotierNetworkId: string
+  zerotierIp: string
+  step1And3Done: boolean
+  backendSource: BackendDeploySource
+  backendInstalled: boolean
+  backendVersion: string
+  syncthingDone: boolean
+  vmDone: boolean
 }

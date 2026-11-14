@@ -3,11 +3,60 @@ import { APP_VERSION, APP_CHANNEL } from "./version"
 
 import { setServerIp, setServerUrl, setDefaultMac, DEFAULT_SETTINGS } from "./api"
 
-import type { Drive, Metrics, PowerState, Settings, WebApp, SyncthingFullStatus, SyncthingFolderTask, ServerDetails, SyncthingConfigData } from "./types"
+import type {
+  Drive,
+  Metrics,
+  PowerState,
+  Settings,
+  WebApp,
+  SyncthingFullStatus,
+  SyncthingFolderTask,
+  ServerDetails,
+  SyncthingConfigData,
+  WizardCommitServerPayload,
+  BackendDeploySource,
+} from "./types"
 
 
 
 const round1 = (v: number) => Math.round(v * 10) / 10
+
+type TauriInvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<any>
+
+function getTauriInvoke(): TauriInvokeFn | null {
+  if (typeof window === "undefined") return null
+  const w = window as any
+  if (typeof w.__TAURI_INTERNALS__?.invoke === "function") {
+    return (cmd: string, args?: Record<string, unknown>) => w.__TAURI_INTERNALS__.invoke(cmd, args)
+  }
+  if (typeof w.__TAURI__?.core?.invoke === "function") {
+    return (cmd: string, args?: Record<string, unknown>) => w.__TAURI__.core.invoke(cmd, args)
+  }
+  return null
+}
+
+async function callCoreApi(endpoint: string, payload: Record<string, unknown> = {}): Promise<any> {
+  const invoke = getTauriInvoke()
+  if (invoke) {
+    return await invoke("call_core_api", { endpoint, payload })
+  }
+  const pyApi = await getPyApi()
+  if (pyApi) {
+    const fn = pyApi[endpoint] ?? pyApi[endpoint.replace(/\//g, "_")]
+    if (typeof fn === "function") {
+      return await fn(payload)
+    }
+  }
+  if (typeof fetch !== "undefined") {
+    const res = await fetch(`http://127.0.0.1:48123/api/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    return await res.json()
+  }
+  throw new Error("Core API unavailable")
+}
 
 
 
@@ -21,27 +70,9 @@ async function getPyApi(): Promise<any> {
 
   // Detect Tauri runtime immediately (Zero latency / Zero pywebview timeout)
 
-  const hasTauri = Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__)
+  const invoke = getTauriInvoke()
 
-  if (hasTauri) {
-
-    const invoke = (cmd: string, args?: any) => {
-
-      if (w.__TAURI_INTERNALS__?.invoke) {
-
-        return w.__TAURI_INTERNALS__.invoke(cmd, args)
-
-      }
-
-      if (w.__TAURI__?.core?.invoke) {
-
-        return w.__TAURI__.core.invoke(cmd, args)
-
-      }
-
-      throw new Error('Tauri invoke function not found')
-
-    }
+  if (invoke) {
 
 
 
@@ -824,7 +855,49 @@ export function createRealApi(): CompanionApi {
 
     },
 
+    async hideWindow() {
+      const invoke = getTauriInvoke()
+      if (invoke) {
+        try {
+          await invoke("hide_window")
+          return
+        } catch (err) {
+          console.warn("[RealApi] hideWindow invoke error:", err)
+        }
+      }
+      try {
+        const api = await getPyApi()
+        if (api && typeof api.hide_flyout === "function") {
+          await api.hide_flyout()
+        }
+      } catch (err) {
+        console.warn("[RealApi] hideWindow fallback error:", err)
+      }
+    },
 
+    async startDrag() {
+      const invoke = getTauriInvoke()
+      if (!invoke) return
+      try {
+        await invoke("start_drag")
+      } catch (err) {
+        console.warn("[RealApi] startDrag error:", err)
+      }
+    },
+
+    async setWizardMode(active: boolean, width?: number, height?: number) {
+      const invoke = getTauriInvoke()
+      if (!invoke) return
+      try {
+        await invoke("set_wizard_mode", {
+          active,
+          width: typeof width === "number" ? width : null,
+          height: typeof height === "number" ? height : null,
+        })
+      } catch (err) {
+        console.warn("[RealApi] setWizardMode error:", err)
+      }
+    },
 
     async minimizeWindow() {
 
@@ -850,12 +923,12 @@ export function createRealApi(): CompanionApi {
 
     async probeUrl(url: string) {
       try {
-        const api = await getPyApi()
-        if (api && api.probe_url) {
-          return await api.probe_url({ url })
+        const res = await callCoreApi("probe_url", { url })
+        if (res && typeof res === "object") {
+          return res
         }
       } catch (err) {
-        console.warn('[RealApi] probeUrl error:', err)
+        console.warn("[RealApi] probeUrl error:", err)
       }
       return { reachable: false, latency_ms: -1, url }
     },
@@ -1163,47 +1236,55 @@ export function createRealApi(): CompanionApi {
       return { status: 'error' }
     },
 
-    async triggerBackendAction(action: "install" | "update", serverId?: string) {
-      const toErrMsg = (err: any) => (typeof err === 'string' ? err : (err?.message || String(err || 'Gagal memproses aksi backend')))
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'server/backend_action', payload: { action, serverId } })
-        } catch (err) {
-          console.warn('[RealApi] triggerBackendAction invoke error:', err)
-          return { success: false, status: 'error', message: toErrMsg(err) }
+    async triggerBackendAction(
+      action: "install" | "update",
+      serverId?: string,
+      options?: {
+        source?: BackendDeploySource
+        sshHost?: string
+        sshPort?: number
+        sshUser?: string
+        sshPassword?: string
+      },
+    ) {
+      const toErrMsg = (err: unknown) => {
+        if (typeof err === "string") return err
+        if (err && typeof err === "object" && "message" in err && (err as any).message) {
+          return String((err as any).message)
         }
+        return "Gagal memproses aksi backend"
       }
+      const payload: Record<string, unknown> = { action, serverId }
+      if (options?.source) payload.source = options.source
+      if (options?.sshHost) payload.sshHost = options.sshHost
+      if (typeof options?.sshPort === "number" && Number.isFinite(options.sshPort)) {
+        payload.sshPort = options.sshPort
+      }
+      if (options?.sshUser) payload.sshUser = options.sshUser
+      if (options?.sshPassword) payload.sshPassword = options.sshPassword
+
       try {
-        const api = await getPyApi()
-        if (api && api['server/backend_action']) {
-          return await api['server/backend_action']({ action, serverId })
+        const res = await callCoreApi("server/backend_action", payload)
+        if (res && typeof res === "object") {
+          return res
         }
       } catch (err) {
-        console.warn('[RealApi] triggerBackendAction error:', err)
-        return { success: false, status: 'error', message: toErrMsg(err) }
+        console.warn("[RealApi] triggerBackendAction error:", toErrMsg(err))
+        return { success: false, status: "error", message: toErrMsg(err) }
       }
-      return { success: false, status: 'error', message: 'API tidak tersedia' }
+      return { success: false, status: "error", message: "API tidak tersedia" }
     },
 
     async getBackendStatus(serverId?: string) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'server/backend_status', payload: { serverId } })
-        } catch (err) {
-          console.warn('[RealApi] getBackendStatus invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['server/backend_status']) {
-          return await api['server/backend_status']({ serverId })
+        const res = await callCoreApi("server/backend_status", { serverId })
+        if (res && typeof res === "object") {
+          return res
         }
       } catch (err) {
-        console.warn('[RealApi] getBackendStatus error:', err)
+        console.warn("[RealApi] getBackendStatus error:", err instanceof Error ? err.message : String(err))
       }
-      return { online: false, version: '', latestVersion: '' }
+      return { online: false, version: "", latestVersion: "" }
     },
 
     async openVmWindow(vmId: string, title: string, url: string) {
@@ -1922,18 +2003,35 @@ export function createRealApi(): CompanionApi {
       return this.getSyncthingApiKeys()
     },
 
-    async saveSyncthingServerRoute(payload: any) {
+    async saveSyncthingServerRoute(payload: {
+      route_mode?: string
+      lan_mode?: string
+      lan_ip?: string
+      lan_port?: string
+      lan_https?: boolean
+      remote_ip?: string
+      remote_port?: string
+      remote_https?: boolean
+      wan_url?: string
+      wan_port?: string
+      wan_https?: boolean
+      api_key?: string
+    }) {
       try {
-        const api = await getPyApi()
-        if (api && api.save_syncthing_server_route) {
-          const res = await api.save_syncthing_server_route(payload)
-          return res || { success: true }
-        }
+        const res = await callCoreApi("save_syncthing_server_route", {
+          ...payload,
+          ...(payload?.remote_ip !== undefined ? { remote_ip: payload.remote_ip } : {}),
+          ...(payload?.remote_port !== undefined ? { remote_port: payload.remote_port } : {}),
+          ...(payload?.remote_https !== undefined ? { remote_https: payload.remote_https } : {}),
+        })
+        return res || { success: true }
       } catch (err) {
-        console.error("[RealApi] saveSyncthingServerRoute error:", err)
+        console.error(
+          "[RealApi] saveSyncthingServerRoute error:",
+          err instanceof Error ? err.message : "Failed to save route",
+        )
         throw new Error(err instanceof Error ? err.message : "Gagal menyimpan rute server.")
       }
-      return { success: true }
     },
 
     async saveSyncthingLocalConfig(payload: any) {
@@ -2424,6 +2522,82 @@ export function createRealApi(): CompanionApi {
         throw err
       }
       return { success: false, message: 'Core API unavailable' }
+    },
+
+    async detectLocalSyncthing() {
+      try {
+        const res = await this.getSyncthingApiKeys()
+        const localPort = String(res?.local?.port || "8384").trim() || "8384"
+        const localApiKey = String(res?.local?.api_key || "").trim()
+        const serverApiKey = String(res?.server?.api_key || "").trim()
+        return {
+          detected: Boolean(localApiKey),
+          localPort,
+          localApiKey,
+          serverApiKey,
+        }
+      } catch {
+        return {
+          detected: false,
+          localPort: "8384",
+          localApiKey: "",
+          serverApiKey: "",
+        }
+      }
+    },
+
+    async verifyZimaLogin(payload: {
+      url?: string
+      remoteId?: string
+      wanUrl?: string
+      username: string
+      password: string
+    }) {
+      try {
+        const res = await callCoreApi("wizard/verify_zimaos", payload)
+        if (res && typeof res === "object") {
+          return res
+        }
+      } catch (err) {
+        return {
+          success: false,
+          message: err instanceof Error ? err.message : "Gagal memverifikasi akun ZimaOS",
+        }
+      }
+      return { success: false, message: "Core API unavailable" }
+    },
+
+    async commitWizardServer(payload: WizardCommitServerPayload) {
+      try {
+        const res = await callCoreApi("wizard/commit_server", { ...payload })
+        if (res && typeof res === "object") {
+          return res
+        }
+      } catch (err) {
+        return {
+          success: false,
+          message: err instanceof Error ? err.message : "Gagal menyimpan konfigurasi server",
+        }
+      }
+      return { success: false, message: "Core API unavailable" }
+    },
+
+    async completeWizard() {
+      try {
+        const res = await callCoreApi("wizard/complete", {})
+        if (res && typeof res === "object") {
+          if (res.success) {
+            currentSettings = { ...currentSettings, firstRunSetup: false }
+          }
+          return res
+        }
+      } catch (err) {
+        return {
+          success: false,
+          message: err instanceof Error ? err.message : "Gagal menyelesaikan setup wizard",
+        }
+      }
+      return { success: false, message: "Core API unavailable" }
     },
   }
 

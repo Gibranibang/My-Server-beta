@@ -85,6 +85,11 @@ interface CompanionStore {
   homeLoading: boolean
   monitoringLoading: boolean
   setMonitoringLoading: (loading: boolean) => void
+  wizardOpen: boolean
+  wizardInitializing: boolean
+  openedFromSettings: boolean
+  openWizard: () => Promise<void>
+  closeWizard: (completed?: boolean) => void
 }
 
 const StoreContext = createContext<CompanionStore | null>(null)
@@ -114,6 +119,54 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const [homeLoading, setHomeLoading] = useState(true)
   const [monitoringLoading, setMonitoringLoading] = useState(true)
+  // First-run wizard gating (D-05): telemetry stays suspended until loadSettings() resolves
+  // and, when firstRunSetup is true, until the wizard completes (03-RESEARCH Pitfall 2).
+  const [wizardInitializing, setWizardInitializing] = useState(true)
+  const [firstRunLocked, setFirstRunLocked] = useState(false)
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [openedFromSettings, setOpenedFromSettings] = useState(false)
+  const telemetrySuspended = wizardInitializing || firstRunLocked
+
+  useEffect(() => {
+    let cancelled = false
+    const finish = (first: boolean, loaded?: Settings | null) => {
+      if (cancelled) return
+      if (first && loaded) {
+        setSettings((prev) => ({ ...prev, ...loaded }))
+        try {
+          if (loaded.theme) document.documentElement.setAttribute("data-theme", loaded.theme)
+        } catch {}
+        setFirstRunLocked(true)
+        setWizardOpen(true)
+        setOpenedFromSettings(false)
+      }
+      setWizardInitializing(false)
+    }
+    Promise.resolve()
+      .then(() => api.loadSettings())
+      .then((loaded) => finish(Boolean(loaded?.firstRunSetup), loaded))
+      .catch(() => finish(false))
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  const openWizard = useCallback(async () => {
+    try {
+      await api.setWizardMode(true, 460, 560)
+    } catch {}
+    setOpenedFromSettings(true)
+    setWizardOpen(true)
+  }, [api])
+
+  const closeWizard = useCallback((completed?: boolean) => {
+    setWizardOpen(false)
+    setOpenedFromSettings(false)
+    if (completed) {
+      setSettings((prev) => ({ ...prev, firstRunSetup: false }))
+      setFirstRunLocked(false)
+    }
+  }, [])
 
   const startTransition = useCallback((title: string, message?: string) => {
     setTransitionState({ active: true, title, message })
@@ -242,6 +295,7 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
   }, [api])
 
   useEffect(() => {
+    if (telemetrySuspended) return
     const coldStartBegin = Date.now()
     const offMetrics = api.subscribeMetrics((newM) => {
       setMetrics(newM)
@@ -480,7 +534,7 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       clearTimeout(autoUpdateCheckTimer)
       window.removeEventListener("myserver:refresh", onStoreRefresh)
     }
-  }, [api, refreshWebApps])
+  }, [api, refreshWebApps, telemetrySuspended])
 
   const value = useMemo<CompanionStore>(
     () => ({
@@ -541,6 +595,11 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       homeLoading,
       monitoringLoading,
       setMonitoringLoading,
+      wizardOpen,
+      wizardInitializing,
+      openedFromSettings,
+      openWizard,
+      closeWizard,
     }),
     [
       api,
@@ -567,6 +626,11 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       homeLoading,
       monitoringLoading,
       setMonitoringLoading,
+      wizardOpen,
+      wizardInitializing,
+      openedFromSettings,
+      openWizard,
+      closeWizard,
     ],
   )
 

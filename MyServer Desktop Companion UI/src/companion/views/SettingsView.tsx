@@ -90,7 +90,7 @@ function SettingToggleRow({
 
 export default function SettingsView() {
   const api = getCompanionApi()
-  const { settings, setSetting, resetSettings } = useCompanion()
+  const { settings, setSetting, resetSettings, openWizard } = useCompanion()
   const { notify } = useNotice()
   const [updateState, runUpdate] = useAsyncAction(api.checkForUpdate)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
@@ -581,6 +581,26 @@ export default function SettingsView() {
           }
         >
           <div className="flex flex-col gap-3">
+            {/* Setup Wizard re-entry (D-04, D-05, WIZ-01) */}
+            <div className="flex items-center justify-between gap-2 rounded-tile border border-line bg-surface p-2.5">
+              <div className="flex min-w-0 flex-col">
+                <span className="text-micro font-semibold text-ink">
+                  {t("wiz_settings_launch_title", "Setup Wizard")}
+                </span>
+                <span className="text-nano text-ink-subtle">
+                  {t("wiz_settings_launch_desc", "Re-run guided connection, login, backend, Syncthing, and VM setup")}
+                </span>
+              </div>
+              <button
+                type="button"
+                data-testid="settings-open-wizard"
+                onClick={() => void openWizard()}
+                className="shrink-0 cursor-pointer rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-micro font-semibold text-ink transition hover:text-brand"
+              >
+                {t("wiz_settings_launch_btn", "Setup Wizard")}
+              </button>
+            </div>
+
             {/* Language Selector */}
             <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface p-2.5">
               <span className="text-micro font-semibold text-ink">

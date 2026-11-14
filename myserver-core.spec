@@ -29,6 +29,13 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Exclude Windows Universal CRT & API-set stubs so the host OS System32 DLLs are used
+a.binaries = [
+    x for x in a.binaries
+    if not os.path.basename(x[0]).lower().startswith(('api-ms-win-', 'ucrtbase'))
+]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -41,7 +48,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

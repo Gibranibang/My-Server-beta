@@ -81,6 +81,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          architecture: 'x64'
 
       - name: Install Python build and runtime dependencies
         run: |
@@ -93,6 +94,65 @@ jobs:
           pyinstaller --noconfirm myserver-core.spec
           if (-not (Test-Path "dist\myserver-core.exe")) {
             throw "dist\myserver-core.exe was not generated"
+          }
+
+      - name: Verify Core Service bundled DLLs
+        shell: python
+        run: |
+          import struct
+          with open(r"dist\myserver-core.exe", "rb") as f:
+              raw = f.read()
+          idx = raw.rfind(b"MEI\x0c\x0b\x0a\x0b\x0e")
+          assert idx >= 0, "PyInstaller archive not found"
+          _, pkg_len, toc_off, toc_len, pyver, pylib = struct.unpack("!8sIIII64s", raw[idx:idx+88])
+          pkg_start = idx + 88 - pkg_len
+          toc_data = raw[pkg_start + toc_off : pkg_start + toc_off + toc_len]
+          pos = 0
+          dlls = []
+          bad = []
+          while pos < len(toc_data):
+              elen, *_ = struct.unpack("!IIIIBB", toc_data[pos:pos+18])
+              name = toc_data[pos+18:pos+elen].split(b"\x00")[0].decode("utf-8", errors="replace")
+              low = name.lower()
+              if low.endswith(".dll"):
+                  dlls.append(name)
+              if "ucrtbase" in low or low.startswith("api-ms-win-"):
+                  bad.append(name)
+              pos += elen
+          print("Bundled DLL count:", len(dlls))
+          for d in sorted(dlls):
+              print("  DLL:", d)
+          assert not bad, f"Unexpected UCRT/API-set DLLs bundled: {bad}"
+
+      - name: Smoke test Core Service startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proc = Start-Process -FilePath "dist\myserver-core.exe" -ArgumentList "--standalone", "--port", "48199" -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              if ($proc.HasExited) {
+                throw "myserver-core.exe exited prematurely with code $($proc.ExitCode)"
+              }
+              try {
+                $resp = Invoke-WebRequest -Uri "http://127.0.0.1:48199/api/ping" -TimeoutSec 2 -UseBasicParsing
+                if ($resp.StatusCode -eq 200) {
+                  Write-Host "Ping response: $($resp.Content)"
+                  $ready = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $ready) {
+              throw "myserver-core.exe did not listen on 127.0.0.1:48199 within 15s"
+            }
+          } finally {
+            if (-not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
           }
 
       - name: Download Syncthing and EasyTier Windows binaries

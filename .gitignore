@@ -107,6 +107,9 @@ $RECYCLE.BIN/
 
 # Drivers & native resources
 *.sys
-resources/
+resources/*
+!resources/backend_manifest.json
+!resources/MyServer-Backend-ZimaOS.zip
+!resources/MyServer-Backend-ZimaOS.tar.gz
 
 build_core/

@@ -157,6 +157,34 @@ if os.path.exists(src_res_et):
         if os.path.isfile(s_file):
             shutil.copy2(s_file, os.path.join(dst_res_et, f_name))
 
+# Stage ZimaOS backend manifest and install/update packages in resources/
+src_res_root = os.path.join(BASE_BETA, "resources")
+dst_res_root = os.path.join(STAGING_DIR, "resources")
+backend_resource_files = [
+    "backend_manifest.json",
+    "MyServer-Backend-ZimaOS.zip",
+    "MyServer-Backend-ZimaOS.tar.gz",
+]
+if os.path.exists(src_res_root):
+    os.makedirs(dst_res_root, exist_ok=True)
+    for f_name in backend_resource_files:
+        s_file = os.path.join(src_res_root, f_name)
+        if os.path.isfile(s_file):
+            shutil.copy2(s_file, os.path.join(dst_res_root, f_name))
+            print(f"    [v] Backend resource staged: resources/{f_name}")
+        else:
+            print(f"    [!] Peringatan: resources/{f_name} tidak ditemukan!")
+    for f_name in sorted(os.listdir(src_res_root)):
+        if (
+            f_name.startswith("MyServer-Backend-")
+            and (f_name.endswith(".zip") or f_name.endswith(".tar.gz"))
+            and f_name not in backend_resource_files
+        ):
+            s_file = os.path.join(src_res_root, f_name)
+            if os.path.isfile(s_file):
+                shutil.copy2(s_file, os.path.join(dst_res_root, f_name))
+                print(f"    [v] Extra backend package staged: resources/{f_name}")
+
 # Tanda tangani seluruh biner di staging_payload dengan Authenticode
 sign_ps1 = os.path.join(BASE_BETA, "sign_app.ps1")
 if os.path.exists(sign_ps1):

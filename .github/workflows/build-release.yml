@@ -218,7 +218,10 @@ jobs:
           $expected = @(
             "dist\MyServer-v$ver-Beta.zip",
             "dist\MyServer-v$ver-Beta-Setup.exe",
-            "dist\MyServer-Setup.exe"
+            "dist\MyServer-Setup.exe",
+            "dist\staging_payload\resources\backend_manifest.json",
+            "dist\staging_payload\resources\MyServer-Backend-ZimaOS.zip",
+            "dist\staging_payload\resources\MyServer-Backend-ZimaOS.tar.gz"
           )
           foreach ($f in $expected) {
             if (-not (Test-Path $f)) {
@@ -234,6 +237,9 @@ jobs:
             dist/MyServer-v*-Beta.zip
             dist/MyServer-v*-Beta-Setup.exe
             dist/MyServer-Setup.exe
+            resources/backend_manifest.json
+            resources/MyServer-Backend-ZimaOS.zip
+            resources/MyServer-Backend-ZimaOS.tar.gz
 
       - name: Upload assets to GitHub Release
         if: steps.meta.outputs.tag != ''
@@ -247,6 +253,16 @@ jobs:
           $zipPath = "dist\MyServer-v$ver-Beta.zip"
           $setupVerPath = "dist\MyServer-v$ver-Beta-Setup.exe"
           $setupGenericPath = "dist\MyServer-Setup.exe"
+          $backendAssets = @(
+            "resources\backend_manifest.json",
+            "resources\MyServer-Backend-ZimaOS.zip",
+            "resources\MyServer-Backend-ZimaOS.tar.gz"
+          )
+          foreach ($asset in $backendAssets) {
+            if (-not (Test-Path $asset)) {
+              throw "Expected ZimaOS backend asset missing: $asset"
+            }
+          }
 
           $ErrorActionPreference = "Continue"
           gh release view $tag *> $null
@@ -259,6 +275,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Failed to create release $tag" }
           }
 
-          Write-Host "Uploading Windows desktop packages to release $tag..."
-          gh release upload $tag $zipPath $setupVerPath $setupGenericPath --clobber
+          Write-Host "Uploading Windows desktop packages and ZimaOS backend assets to release $tag..."
+          gh release upload $tag $zipPath $setupVerPath $setupGenericPath @backendAssets --clobber
           if ($LASTEXITCODE -ne 0) { throw "Failed to upload assets to release $tag" }

@@ -63,6 +63,25 @@ export default function ServerView({ go }: ViewProps) {
       .getServerDetails()
       .then((data) => {
         setDetails(data)
+        const activeSid = data?.serverId || (data as any)?.id || ""
+        if (api.getBackendStatus) {
+          api
+            .getBackendStatus(activeSid || undefined)
+            .then((bStatus) => {
+              if (!bStatus) return
+              setDetails((prev) => {
+                if (!prev) return prev
+                const mergedBackend = {
+                  online: Boolean(bStatus.online),
+                  version: bStatus.version || prev.backend?.version || "",
+                  latestVersion: bStatus.latestVersion || prev.backend?.latestVersion || "",
+                  url: (bStatus as any).url || prev.backend?.url || "",
+                }
+                return { ...prev, backend: mergedBackend }
+              })
+            })
+            .catch(() => {})
+        }
       })
       .catch((e) => {
         notify(errorText(e), "danger")
@@ -161,10 +180,17 @@ export default function ServerView({ go }: ViewProps) {
   const backendOnline = Boolean(details?.backend?.online)
   const backendVer = (details?.backend?.version || "").replace(/^v/i, "").trim()
   const latestBackendVer = (details?.backend?.latestVersion || "").replace(/^v/i, "").trim()
-  const isBackendUpToDate = backendOnline && Boolean(backendVer) && Boolean(latestBackendVer) && (
-    backendVer === latestBackendVer || compareSemver(backendVer, latestBackendVer) >= 0
-  )
-  const isBackendOld = backendOnline && Boolean(latestBackendVer) && !isBackendUpToDate
+  const hasComparableTarget = Boolean(latestBackendVer)
+  const isBackendUpToDate =
+    backendOnline &&
+    Boolean(backendVer) &&
+    hasComparableTarget &&
+    (backendVer === latestBackendVer || compareSemver(backendVer, latestBackendVer) >= 0)
+  const isBackendOld =
+    backendOnline &&
+    hasComparableTarget &&
+    (!backendVer || compareSemver(backendVer, latestBackendVer) < 0)
+  const isBackendOnlineUnknownTarget = backendOnline && !hasComparableTarget
 
   const copyText = async (text: string, label: string) => {
     if (!text) return
@@ -641,6 +667,11 @@ export default function ServerView({ go }: ViewProps) {
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold text-[10px]">
                   <span>{`v${backendVer || "?"} -> v${latestBackendVer}`}</span>
                 </span>
+              ) : isBackendOnlineUnknownTarget ? (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold text-[10px]">
+                  <Check className="size-3" />
+                  <span>{backendVer ? `v${backendVer} (${t("server_backend_online_tag", "Online")})` : t("server_backend_online", "Backend ZimaOS: Online")}</span>
+                </span>
               ) : (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-surface-muted text-ink-muted font-medium text-[10px]">
                   <span>{t("server_backend_not_detected", "Offline / Belum Ada")}</span>
@@ -648,11 +679,11 @@ export default function ServerView({ go }: ViewProps) {
               )}
             </div>
 
-            {(!isBackendUpToDate || isBackendOld || !backendOnline) && (
+            {!isBackendUpToDate && (
               <button
                 type="button"
                 disabled={backendLoading}
-                onClick={() => handleBackendAction(isBackendOld ? "update" : "install")}
+                onClick={() => handleBackendAction(backendOnline ? "update" : "install")}
                 className={cx(
                   "w-full h-7 rounded-tile flex items-center justify-center gap-1.5 font-semibold text-caption shadow-xs transition cursor-pointer select-none",
                   isBackendOld
@@ -671,6 +702,11 @@ export default function ServerView({ go }: ViewProps) {
                   <>
                     <RefreshCw className="size-3.5 text-amber-600 dark:text-amber-400" />
                     <span>{t("server_backend_update", "Perbarui Backend")}{latestBackendVer ? ` v${latestBackendVer}` : ""}</span>
+                  </>
+                ) : isBackendOnlineUnknownTarget ? (
+                  <>
+                    <RefreshCw className="size-3.5 text-brand" />
+                    <span>{t("server_backend_update_reinstall", "Perbarui / Pasang Ulang Backend")}</span>
                   </>
                 ) : (
                   <>

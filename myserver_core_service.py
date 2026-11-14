@@ -3834,16 +3834,160 @@ def _prepare_vm_payload_for_backend(vm):
     return p
 
 
+def _parse_backend_semver(v_str):
+    import re
+    cleaned = (v_str or "").strip()
+    if not cleaned:
+        return ()
+    m = re.search(r"(\d+(?:\.\d+)+)", cleaned)
+    if m:
+        return tuple(int(x) for x in m.group(1).split("."))
+    parts = re.findall(r"\d+", cleaned)
+    return tuple(int(x) for x in parts) if parts else ()
+
+
+def _compare_backend_versions(ver_a, ver_b):
+    pa = _parse_backend_semver(ver_a)
+    pb = _parse_backend_semver(ver_b)
+    if not pa and not pb:
+        return 0
+    max_len = max(len(pa), len(pb))
+    pa_pad = pa + (0,) * (max_len - len(pa))
+    pb_pad = pb + (0,) * (max_len - len(pb))
+    if pa_pad > pb_pad:
+        return 1
+    if pa_pad < pb_pad:
+        return -1
+    return 0
+
+
+def _extract_host_from_url(raw_url):
+    u = (raw_url or "").strip()
+    if not u:
+        return ""
+    if "://" not in u:
+        u = f"http://{u}"
+    try:
+        parsed = urllib.parse.urlparse(u)
+        return (parsed.hostname or "").strip()
+    except Exception:
+        return ""
+
+
+def _format_backend_url(host, port=8080):
+    h = (host or "").strip()
+    if not h:
+        return ""
+    if ":" in h and not h.startswith("["):
+        return f"http://[{h}]:{port}"
+    return f"http://{h}:{port}"
+
+
+def _is_wan_host_safe(host):
+    h = (host or "").strip().lower()
+    if not h:
+        return False
+    try:
+        from smb_mount_manager import _is_domain_or_wan_host
+        return bool(_is_domain_or_wan_host(h))
+    except Exception:
+        if h in ("localhost", "zimaos.local") or h.endswith(".local") or h.endswith(".lan"):
+            return False
+        try:
+            ipaddress.ip_address(h)
+            return False
+        except ValueError:
+            return True
+
+
+def _select_target_server(cfg, target_server_id=None):
+    if not isinstance(cfg, dict):
+        return None
+    servers = cfg.get("servers", []) or []
+    if target_server_id:
+        for s in servers:
+            if s.get("id") == target_server_id or s.get("name") == target_server_id:
+                return s
+    if config_manager and hasattr(config_manager, "get_active_server"):
+        return config_manager.get_active_server(cfg)
+    return servers[0] if servers else None
+
+
+def _get_backend_url_candidates(cfg, target_server_id=None, srv=None):
+    """Membangun daftar URL kandidat API backend ZimaOS (port 8080) terurut prioritas failover."""
+    try:
+        if srv is None:
+            srv = _select_target_server(cfg, target_server_id=target_server_id)
+        if not srv:
+            return []
+
+        primary_host = ""
+        if config_manager and hasattr(config_manager, "resolve_target_connection"):
+            try:
+                primary_url, _ = config_manager.resolve_target_connection(cfg, target_server=srv)
+                primary_host = _extract_host_from_url(primary_url)
+            except Exception as e:
+                logger_manager.log_debug(f"[_get_backend_url_candidates] resolve_target_connection error: {e}")
+
+        remote_hosts = []
+        if config_manager and hasattr(config_manager, "get_dynamic_remote_info"):
+            try:
+                rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
+                rem_ip = (rem_info.get("ip") or "").strip() if isinstance(rem_info, dict) else ""
+                if rem_ip:
+                    remote_hosts.append(rem_ip)
+            except Exception:
+                pass
+        for key in ("easytier_virtual_ip", "zerotier_virtual_ip", "remote_ip"):
+            val = (srv.get(key) or "").strip()
+            if val and val not in remote_hosts:
+                remote_hosts.append(val)
+
+        local_conn_hosts = []
+        wan_conn_hosts = []
+        for c in (srv.get("connections", []) or []):
+            ch = _extract_host_from_url(c.get("url", ""))
+            if not ch:
+                continue
+            if _is_wan_host_safe(ch):
+                if ch not in wan_conn_hosts:
+                    wan_conn_hosts.append(ch)
+            else:
+                if ch not in local_conn_hosts:
+                    local_conn_hosts.append(ch)
+
+        ordered_hosts = []
+        if primary_host and _is_wan_host_safe(primary_host):
+            # Port 8080 usually stays unexposed on WAN routers, so prefer P2P/LAN first.
+            ordered_hosts.extend(remote_hosts)
+            ordered_hosts.extend(local_conn_hosts)
+            ordered_hosts.append(primary_host)
+            ordered_hosts.extend(wan_conn_hosts)
+        else:
+            if primary_host:
+                ordered_hosts.append(primary_host)
+            ordered_hosts.extend(local_conn_hosts)
+            ordered_hosts.extend(remote_hosts)
+            ordered_hosts.extend(wan_conn_hosts)
+
+        urls = []
+        seen = set()
+        for h in ordered_hosts:
+            bu = _format_backend_url(h, 8080)
+            if bu and bu not in seen:
+                seen.add(bu)
+                urls.append(bu)
+        return urls
+    except Exception as e:
+        logger_manager.log_debug(f"[_get_backend_url_candidates] Error: {e}")
+        return []
+
+
 def _get_active_server_backend_url(cfg, target_server_id=None):
     """Menentukan URL REST API MyServer Backend di ZimaOS (port 8080) secara dinamis dengan failover WAN dan TTL Cache."""
     now = time.time()
     try:
-        srv = None
-        servers = cfg.get("servers", [])
-        if target_server_id:
-            srv = next((s for s in servers if s.get("id") == target_server_id), None)
-        if not srv:
-            srv = config_manager.get_active_server(cfg)
+        srv = _select_target_server(cfg, target_server_id=target_server_id)
         if not srv:
             return None
 
@@ -3852,28 +3996,11 @@ def _get_active_server_backend_url(cfg, target_server_id=None):
         if cached and now < cached[1]:
             return cached[0]
 
-        url, _ = config_manager.resolve_target_connection(cfg, target_server=srv)
-        if not url:
-            return None
-        host = urllib.parse.urlparse(url).hostname
-        if not host:
+        candidates = _get_backend_url_candidates(cfg, target_server_id=target_server_id, srv=srv)
+        if not candidates:
             return None
 
-        resolved_url = None
-        # v4.5.2 Beta: Jika host merupakan domain WAN publik, alihkan ke IP Remote P2P (port 8080 tertutup di router)
-        from smb_mount_manager import _is_domain_or_wan_host
-        if _is_domain_or_wan_host(host):
-            rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
-            rem_ip = rem_info.get("ip") if rem_info else ""
-            if not rem_ip:
-                rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
-            if rem_ip:
-                resolved_url = f"http://{rem_ip}:8080"
-                logger_manager.log_info(f"[_get_active_server_backend_url] Rute Domain aktif -> Backend API dialihkan ke Remote P2P ({rem_ip}:8080)")
-
-        if not resolved_url:
-            resolved_url = f"http://{host}:8080"
-
+        resolved_url = candidates[0]
         _backend_url_cache[srv_id] = (resolved_url, now + 25.0)
         return resolved_url
     except Exception as e:
@@ -3884,7 +4011,7 @@ def _get_active_server_backend_url(cfg, target_server_id=None):
 def _backend_http_request(url, method="GET", json_body=None, headers=None, timeout=5.0, retries=1):
     """
     Eksekutor HTTP tangguh ke backend ZimaOS (port 8080).
-    Menggunakan header 'Connection: close' dan auto-retry 1x saat terjadi [WinError 10054] / socket reset.
+    Menggunakan header 'Connection: close' dan auto-retry saat terjadi [WinError 10054] / socket reset.
     Return (ok: bool, data_or_error: any, http_status: int).
     """
     req_headers = {
@@ -3917,146 +4044,297 @@ def _backend_http_request(url, method="GET", json_body=None, headers=None, timeo
         except Exception as ex:
             last_err = ex
             if attempt < retries:
-                time.sleep(0.3)
+                time.sleep(0.15)
                 continue
     return False, f"Gagal menghubungi backend ZimaOS: {last_err}", 502
 
 
-_cached_bundled_backend_version = {"timestamp": 0, "version": ""}
+_cached_bundled_backend_version = {"timestamp": 0, "version": "", "source": ""}
+_remote_backend_manifest_cache = {"timestamp": 0.0, "last_attempt": 0.0, "version": ""}
 
-def _get_bundled_backend_version():
+
+def _get_resource_dir_candidates():
+    candidates = []
+    seen = set()
+
+    def _add_dir(path_str):
+        if not path_str:
+            return
+        norm = os.path.abspath(path_str)
+        if norm not in seen and os.path.isdir(norm):
+            seen.add(norm)
+            candidates.append(norm)
+
+    base_d = config_manager.get_base_dir() if (config_manager and hasattr(config_manager, "get_base_dir")) else os.path.dirname(os.path.abspath(__file__))
+    if base_d:
+        _add_dir(os.path.join(base_d, "resources"))
+        _add_dir(os.path.join(os.path.dirname(os.path.abspath(base_d)), "resources"))
+
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        _add_dir(os.path.join(exe_dir, "resources"))
+        _add_dir(os.path.join(os.path.dirname(exe_dir), "resources"))
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            _add_dir(os.path.join(meipass, "resources"))
+
+    return candidates
+
+
+def _read_backend_manifest_info(res_dir):
+    manifest_file = os.path.join(res_dir, "backend_manifest.json")
+    if not os.path.isfile(manifest_file):
+        return None
+    try:
+        with open(manifest_file, "r", encoding="utf-8") as f:
+            mdata = json.load(f)
+        if isinstance(mdata, dict):
+            return mdata
+    except Exception as e:
+        logger_manager.log_debug(f"[_read_backend_manifest_info] Gagal membaca manifest {manifest_file}: {e}")
+    return None
+
+
+def _sort_backend_archives(res_dir, ext_tuple, preferred_names=()):
+    try:
+        names = [
+            fn for fn in os.listdir(res_dir)
+            if fn.startswith("MyServer-Backend") and fn.endswith(ext_tuple) and os.path.isfile(os.path.join(res_dir, fn))
+        ]
+    except Exception:
+        return []
+    preferred = []
+    for p in preferred_names:
+        if p and p in names and p not in preferred:
+            preferred.append(p)
+    others = [fn for fn in names if fn not in preferred]
+    others.sort(key=lambda fn: (_parse_backend_semver(fn), fn), reverse=True)
+    return [os.path.join(res_dir, fn) for fn in (preferred + others)]
+
+
+def _extract_version_from_config_text(content):
+    import re
+    m = re.search(r'SERVER_VERSION\s*=\s*[\"\']([^\"\']+)[\"\']', content or "")
+    return m.group(1).strip() if m else ""
+
+
+def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5):
+    global _remote_backend_manifest_cache
+    now = time.time()
+    if _remote_backend_manifest_cache["version"] and (now - _remote_backend_manifest_cache["timestamp"] < 300):
+        return _remote_backend_manifest_cache["version"]
+    # Skip repeated network fetches when offline so 4s UI polling stays responsive.
+    if now - _remote_backend_manifest_cache["last_attempt"] < 60:
+        return ""
+
+    _remote_backend_manifest_cache["last_attempt"] = now
+    try:
+        if cfg is None and config_manager and hasattr(config_manager, "load_or_create_config"):
+            cfg = config_manager.load_or_create_config()
+    except Exception:
+        cfg = cfg or {}
+    repo_slug = ((cfg or {}).get("github_repo") or "Gibranibang/My-Server-beta").strip()
+    manifest_url = f"https://github.com/{repo_slug}/releases/latest/download/backend_manifest.json"
+    try:
+        req = urllib.request.Request(
+            manifest_url,
+            headers={
+                "User-Agent": f"MyServer-Core/{APP_VERSION_NUMBER}",
+                "Accept": "application/json",
+                "Connection": "close",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            mdata = json.loads(raw) if raw else {}
+            if isinstance(mdata, dict):
+                v = (mdata.get("backend_version") or mdata.get("version") or "").strip().lstrip("v")
+                if v:
+                    _remote_backend_manifest_cache["timestamp"] = now
+                    _remote_backend_manifest_cache["version"] = v
+                    return v
+    except Exception as e:
+        logger_manager.log_debug(f"[_fetch_remote_backend_manifest_version] Remote manifest unavailable: {e}")
+    return ""
+
+
+def _get_bundled_backend_version(cfg=None, allow_remote=True):
     """
     Menemukan dan membaca versi backend ZimaOS yang dibundel di folder resources secara dinamis.
-    1. Membaca backend_manifest.json di resources/ (jika ada)
-    2. Menginspeksi file ZIP/TAR.GZ di resources/ dan mengekstrak SERVER_VERSION langsung dari config.py
-    Nol hardcoding versi maupun path developer lokal.
+    1. Membaca backend_manifest.json di kandidat folder resources/
+    2. Menginspeksi arsip ZIP/TAR.GZ (canonical terlebih dahulu, lalu versi tertinggi)
+    3. Opsional fallback manifest GitHub Release terbaru jika resources lokal tidak tersedia
     """
     global _cached_bundled_backend_version
     now = time.time()
-    if _cached_bundled_backend_version["version"] and (now - _cached_bundled_backend_version["timestamp"] < 30):
-        return _cached_bundled_backend_version["version"]
+    cached_ver = _cached_bundled_backend_version.get("version", "")
+    cached_src = _cached_bundled_backend_version.get("source", "")
+    cache_ttl = 300 if cached_src == "remote" else 30
+    if cached_ver and (now - _cached_bundled_backend_version["timestamp"] < cache_ttl):
+        if allow_remote or cached_src != "remote":
+            return cached_ver
 
-    base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
-    res_dir = os.path.join(base_d, "resources")
-
-    # 1. Coba baca backend_manifest.json di resources/
-    manifest_file = os.path.join(res_dir, "backend_manifest.json")
-    if os.path.isfile(manifest_file):
-        try:
-            with open(manifest_file, "r", encoding="utf-8") as f:
-                mdata = json.load(f)
-                v = (mdata.get("backend_version") or mdata.get("version") or "").strip()
-                if v:
-                    _cached_bundled_backend_version = {"timestamp": now, "version": v}
-                    return v
-        except Exception as e:
-            logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal membaca manifest: {e}")
-
-    # 2. Coba inspeksi ZIP di resources/
     import zipfile
-    import re
-    if os.path.isdir(res_dir):
-        for fn in os.listdir(res_dir):
-            if fn.startswith("MyServer-Backend") and fn.endswith(".zip"):
-                zpath = os.path.join(res_dir, fn)
-                try:
-                    with zipfile.ZipFile(zpath, "r") as z:
-                        for name in z.namelist():
-                            if name.endswith("config.py"):
-                                content = z.read(name).decode("utf-8", errors="ignore")
-                                m = re.search(r'SERVER_VERSION\s*=\s*[\"\']([^\"\']+)[\"\']', content)
-                                if m:
-                                    v = m.group(1).strip()
-                                    _cached_bundled_backend_version = {"timestamp": now, "version": v}
-                                    return v
-                except Exception as e:
-                    logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi ZIP {zpath}: {e}")
-
-    # 3. Coba inspeksi TAR.GZ di resources/
     import tarfile
-    if os.path.isdir(res_dir):
-        for fn in os.listdir(res_dir):
-            if fn.startswith("MyServer-Backend") and (fn.endswith(".tar.gz") or fn.endswith(".tgz")):
-                tpath = os.path.join(res_dir, fn)
-                try:
-                    with tarfile.open(tpath, "r:gz") as t:
-                        for member in t.getmembers():
-                            if member.name.endswith("config.py"):
-                                f = t.extractfile(member)
-                                if f:
-                                    content = f.read().decode("utf-8", errors="ignore")
-                                    m = re.search(r'SERVER_VERSION\s*=\s*[\"\']([^\"\']+)[\"\']', content)
-                                    if m:
-                                        v = m.group(1).strip()
-                                        _cached_bundled_backend_version = {"timestamp": now, "version": v}
-                                        return v
-                except Exception as e:
-                    logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi TAR {tpath}: {e}")
 
-    return _cached_bundled_backend_version["version"] or ""
+    for res_dir in _get_resource_dir_candidates():
+        mdata = _read_backend_manifest_info(res_dir)
+        pref_zips = ["MyServer-Backend-ZimaOS.zip"]
+        pref_tars = ["MyServer-Backend-ZimaOS.tar.gz"]
+        if mdata:
+            v = (mdata.get("backend_version") or mdata.get("version") or "").strip().lstrip("v")
+            if v:
+                _cached_bundled_backend_version = {"timestamp": now, "version": v, "source": "local"}
+                return v
+            p_zip = os.path.basename((mdata.get("package_zip") or "").strip())
+            p_tar = os.path.basename((mdata.get("package_tar") or "").strip())
+            if p_zip:
+                pref_zips.insert(0, p_zip)
+            if p_tar:
+                pref_tars.insert(0, p_tar)
+
+        for zpath in _sort_backend_archives(res_dir, (".zip",), preferred_names=pref_zips):
+            try:
+                with zipfile.ZipFile(zpath, "r") as z:
+                    for name in z.namelist():
+                        if name == "config.py" or name.endswith("/config.py") or name.endswith("\\config.py"):
+                            content = z.read(name).decode("utf-8", errors="ignore")
+                            v = _extract_version_from_config_text(content).lstrip("v")
+                            if v:
+                                _cached_bundled_backend_version = {"timestamp": now, "version": v, "source": "local"}
+                                return v
+            except Exception as e:
+                logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi ZIP {zpath}: {e}")
+
+        for tpath in _sort_backend_archives(res_dir, (".tar.gz", ".tgz"), preferred_names=pref_tars):
+            try:
+                with tarfile.open(tpath, "r:gz") as t:
+                    for member in t.getmembers():
+                        if member.name == "config.py" or member.name.endswith("/config.py"):
+                            f = t.extractfile(member)
+                            if f:
+                                content = f.read().decode("utf-8", errors="ignore")
+                                v = _extract_version_from_config_text(content).lstrip("v")
+                                if v:
+                                    _cached_bundled_backend_version = {"timestamp": now, "version": v, "source": "local"}
+                                    return v
+            except Exception as e:
+                logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi TAR {tpath}: {e}")
+
+    if allow_remote:
+        remote_v = _fetch_remote_backend_manifest_version(cfg=cfg)
+        if remote_v:
+            _cached_bundled_backend_version = {"timestamp": now, "version": remote_v, "source": "remote"}
+            return remote_v
+
+    if cached_ver and (allow_remote or cached_src != "remote"):
+        return cached_ver
+    return ""
 
 
 def _get_bundled_backend_packages():
     """
-    Menemukan path berkas paket ZIP dan TAR.GZ di folder resources secara dinamis dan portabel.
-    Tidak ada path absolut hardcoded.
+    Menemukan path berkas paket ZIP dan TAR.GZ di kandidat folder resources secara dinamis dan portabel.
     """
-    base_d = config_manager.get_base_dir() if config_manager else os.path.dirname(os.path.abspath(__file__))
-    res_dir = os.path.join(base_d, "resources")
-
     zip_pkg = None
     tar_pkg = None
 
-    if os.path.isdir(res_dir):
-        cand_zip = os.path.join(res_dir, "MyServer-Backend-ZimaOS.zip")
-        if os.path.isfile(cand_zip):
-            zip_pkg = cand_zip
-        else:
-            for fn in os.listdir(res_dir):
-                if fn.startswith("MyServer-Backend") and fn.endswith(".zip"):
-                    zip_pkg = os.path.join(res_dir, fn)
-                    break
+    for res_dir in _get_resource_dir_candidates():
+        mdata = _read_backend_manifest_info(res_dir)
+        pref_zips = ["MyServer-Backend-ZimaOS.zip"]
+        pref_tars = ["MyServer-Backend-ZimaOS.tar.gz"]
+        if mdata:
+            p_zip = os.path.basename((mdata.get("package_zip") or "").strip())
+            p_tar = os.path.basename((mdata.get("package_tar") or "").strip())
+            if p_zip:
+                pref_zips.insert(0, p_zip)
+            if p_tar:
+                pref_tars.insert(0, p_tar)
 
-        cand_tar = os.path.join(res_dir, "MyServer-Backend-ZimaOS.tar.gz")
-        if os.path.isfile(cand_tar):
-            tar_pkg = cand_tar
-        else:
-            for fn in os.listdir(res_dir):
-                if fn.startswith("MyServer-Backend") and (fn.endswith(".tar.gz") or fn.endswith(".tgz")):
-                    tar_pkg = os.path.join(res_dir, fn)
-                    break
+        if not zip_pkg:
+            zips = _sort_backend_archives(res_dir, (".zip",), preferred_names=pref_zips)
+            if zips:
+                zip_pkg = zips[0]
+        if not tar_pkg:
+            tars = _sort_backend_archives(res_dir, (".tar.gz", ".tgz"), preferred_names=pref_tars)
+            if tars:
+                tar_pkg = tars[0]
+        if zip_pkg and tar_pkg:
+            break
 
     return zip_pkg, tar_pkg
 
 
 _cached_backend_info = {
     "timestamp": 0,
+    "server_id": "",
     "data": {"online": False, "version": "", "latestVersion": "", "url": ""}
 }
 
-def _get_backend_health_info(cfg=None, force=False):
-    """Mengecek status kesehatan dan versi backend ZimaOS (port 8080)."""
-    now = time.time()
-    if not force and (now - _cached_backend_info["timestamp"] < 5):
-        return dict(_cached_backend_info["data"])
 
+def _get_backend_health_info(cfg=None, force=False, target_server_id=None):
+    """Mengecek status kesehatan dan versi backend ZimaOS (port 8080) dengan multi-candidate failover."""
+    now = time.time()
     if cfg is None:
         cfg = config_manager.load_or_create_config() if config_manager else {}
-    backend_url = _get_active_server_backend_url(cfg)
-    target_ver = _get_bundled_backend_version()
+
+    srv = _select_target_server(cfg, target_server_id=target_server_id)
+    srv_id = (srv.get("id") or "default") if isinstance(srv, dict) else ""
+
+    if (
+        not force
+        and _cached_backend_info.get("server_id") == srv_id
+        and _cached_backend_info.get("data", {}).get("online")
+        and (now - _cached_backend_info["timestamp"] < 5)
+    ):
+        return dict(_cached_backend_info["data"])
+
+    target_ver = _get_bundled_backend_version(cfg=cfg)
+    candidates = _get_backend_url_candidates(cfg, target_server_id=target_server_id, srv=srv)
+    probe_list = []
+    cached_entry = _backend_url_cache.get(srv_id) if srv_id else None
+    if cached_entry and now < cached_entry[1] and cached_entry[0]:
+        probe_list.append(cached_entry[0])
+    for c_url in candidates:
+        if c_url not in probe_list:
+            probe_list.append(c_url)
+
     info = {
         "online": False,
         "version": "",
         "latestVersion": target_ver,
-        "url": backend_url or ""
+        "url": probe_list[0] if probe_list else ""
     }
-    if backend_url:
-        ok, data, code = _backend_http_request(f"{backend_url}/health", method="GET", timeout=1.5, retries=0)
+
+    for idx, cand_url in enumerate(probe_list):
+        req_timeout = 2.0 if idx == 0 else 1.2
+        req_retries = 1 if idx == 0 else 0
+        ok, data, _ = _backend_http_request(
+            f"{cand_url}/health",
+            method="GET",
+            timeout=req_timeout,
+            retries=req_retries,
+        )
         if ok and isinstance(data, dict) and data.get("status") == "ok":
             info["online"] = True
-            info["version"] = data.get("version", "")
-    _cached_backend_info["timestamp"] = now
-    _cached_backend_info["data"] = info
+            info["version"] = (data.get("version") or "").strip()
+            info["url"] = cand_url
+            if srv_id:
+                _backend_url_cache[srv_id] = (cand_url, now + 25.0)
+            break
+
+    if info["online"]:
+        _cached_backend_info["timestamp"] = now
+        _cached_backend_info["server_id"] = srv_id
+        _cached_backend_info["data"] = dict(info)
+    else:
+        if srv_id and srv_id in _backend_url_cache:
+            _backend_url_cache.pop(srv_id, None)
+        _cached_backend_info["timestamp"] = 0
+        _cached_backend_info["server_id"] = srv_id
+        _cached_backend_info["data"] = dict(info)
+
     return dict(info)
 
 
@@ -4070,26 +4348,26 @@ def handle_remote_backend_action(body):
         req_server_id = (body.get("serverId") or body.get("server_id") or "").strip()
 
         cfg = config_manager.load_or_create_config() if config_manager else {}
-        servers = cfg.get("servers", [])
-        srv = None
-        if req_server_id:
-            for s in servers:
-                if s.get("id") == req_server_id or s.get("name") == req_server_id:
-                    srv = s
-                    break
-        if not srv:
-            srv = config_manager.get_active_server(cfg)
+        srv = _select_target_server(cfg, target_server_id=req_server_id)
         if not srv:
             return {"success": False, "status": "error", "message": "Server target tidak ditemukan."}
 
+        srv_id = srv.get("id") or "default"
         # Jalur Cepat 1: HTTP OTA langsung jika backend server saat ini sudah online
+        candidates = _get_backend_url_candidates(cfg, target_server_id=srv.get("id"), srv=srv)
         target_backend_url = _get_active_server_backend_url(cfg, target_server_id=srv.get("id"))
-        target_ver = _get_bundled_backend_version()
+        target_ver = _get_bundled_backend_version(cfg=cfg)
         local_zip, local_bundle = _get_bundled_backend_packages()
 
-        if action == "update" and target_backend_url and local_zip and os.path.exists(local_zip):
+        if action == "update" and candidates and local_zip and os.path.exists(local_zip):
+            ota_urls = []
+            if target_backend_url:
+                ota_urls.append(target_backend_url)
+            for cu in candidates:
+                if cu not in ota_urls:
+                    ota_urls.append(cu)
             try:
-                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {target_backend_url}/api/v1/system/update (paket: {local_zip})...")
+                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {ota_urls[0]}/api/v1/system/update (paket: {local_zip})...")
                 boundary = f"----WebKitFormBoundary{int(time.time()*1000)}"
                 with open(local_zip, "rb") as zf:
                     zip_bytes = zf.read()
@@ -4100,44 +4378,58 @@ def handle_remote_backend_action(body):
                 parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
                 body_bytes = b"".join(parts)
 
-                req = urllib.request.Request(
-                    f"{target_backend_url}/api/v1/system/update",
-                    data=body_bytes,
-                    headers={
-                        "Content-Type": f"multipart/form-data; boundary={boundary}",
-                        "Connection": "close"
-                    },
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    resp_data = json.loads(resp.read().decode("utf-8"))
-                    if resp_data.get("status") == "success":
-                        logger_manager.log_info("[handle_remote_backend_action] HTTP OTA berhasil! Menunggu restart server...")
-                        time.sleep(3.5)
-                        h_ok, h_data, _ = _backend_http_request(f"{target_backend_url}/health", method="GET", timeout=3.0, retries=5)
-                        ver = h_data.get("version", "") if (h_ok and isinstance(h_data, dict)) else ""
-                        active_target_ver = target_ver or ver
-                        _cached_backend_info["timestamp"] = time.time()
-                        _cached_backend_info["data"] = {
-                            "online": True,
-                            "version": ver or active_target_ver,
-                            "latestVersion": active_target_ver,
-                            "url": target_backend_url
-                        }
-                        if target_ver and ver and ver != target_ver:
-                            logger_manager.log_warning(f"[handle_remote_backend_action] HTTP OTA selesai namun versi server {ver} != {target_ver}")
-                            return {
-                                "success": False,
-                                "status": "error",
-                                "message": f"Update OTA selesai namun versi server tetap v{ver} (target v{target_ver}).",
-                                "backend": dict(_cached_backend_info["data"])
-                            }
+                ota_succeeded_url = None
+                last_ota_err = None
+                for cand_ota_url in ota_urls:
+                    try:
+                        req = urllib.request.Request(
+                            f"{cand_ota_url}/api/v1/system/update",
+                            data=body_bytes,
+                            headers={
+                                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                                "Connection": "close"
+                            },
+                            method="POST"
+                        )
+                        with urllib.request.urlopen(req, timeout=20) as resp:
+                            resp_data = json.loads(resp.read().decode("utf-8"))
+                            if resp_data.get("status") == "success":
+                                ota_succeeded_url = cand_ota_url
+                                break
+                    except Exception as cand_err:
+                        last_ota_err = cand_err
+                if ota_succeeded_url:
+                    logger_manager.log_info("[handle_remote_backend_action] HTTP OTA berhasil! Menunggu restart server...")
+                    time.sleep(3.5)
+                    h_ok, h_data, _ = _backend_http_request(f"{ota_succeeded_url}/health", method="GET", timeout=3.0, retries=5)
+                    ver = (h_data.get("version") or "").strip() if (h_ok and isinstance(h_data, dict)) else ""
+                    active_target_ver = target_ver or ver
+                    now_ts = time.time()
+                    _backend_url_cache[srv_id] = (ota_succeeded_url, now_ts + 25.0)
+                    _cached_backend_info["timestamp"] = now_ts
+                    _cached_backend_info["server_id"] = srv_id
+                    _cached_backend_info["data"] = {
+                        "online": True,
+                        "version": ver or active_target_ver,
+                        "latestVersion": active_target_ver,
+                        "url": ota_succeeded_url
+                    }
+                    if target_ver and ver and _compare_backend_versions(ver, target_ver) < 0:
+                        logger_manager.log_warning(f"[handle_remote_backend_action] HTTP OTA selesai namun versi server {ver} < {target_ver}")
                         return {
-                            "success": True,
-                            "status": "ok",
-                            "message": f"Backend ZimaOS v{ver or active_target_ver} berhasil diperbarui!",
+                            "success": False,
+                            "status": "error",
+                            "message": f"Update OTA selesai namun versi server tetap v{ver} (target v{target_ver}).",
                             "backend": dict(_cached_backend_info["data"])
                         }
+                    return {
+                        "success": True,
+                        "status": "ok",
+                        "message": f"Backend ZimaOS v{ver or active_target_ver} berhasil diperbarui!",
+                        "backend": dict(_cached_backend_info["data"])
+                    }
+                elif last_ota_err:
+                    raise last_ota_err
             except Exception as ota_err:
                 logger_manager.log_info(f"[handle_remote_backend_action] HTTP OTA dilewati / gagal ({ota_err}), melanjutkan ke alur SSH...")
 
@@ -4262,17 +4554,20 @@ def handle_remote_backend_action(body):
                     break
 
             if poll_ok:
-                ver = health_data.get("version", "")
+                ver = (health_data.get("version") or "").strip()
                 active_target_ver = target_ver or ver
-                _cached_backend_info["timestamp"] = time.time()
+                now_ts = time.time()
+                _backend_url_cache[srv_id] = (backend_url, now_ts + 25.0)
+                _cached_backend_info["timestamp"] = now_ts
+                _cached_backend_info["server_id"] = srv_id
                 _cached_backend_info["data"] = {
                     "online": True,
                     "version": ver,
                     "latestVersion": active_target_ver,
                     "url": backend_url
                 }
-                if target_ver and ver and ver != target_ver:
-                    logger_manager.log_error(f"[handle_remote_backend_action] Versi aktif ({ver}) tidak sesuai target ({target_ver}).")
+                if target_ver and ver and _compare_backend_versions(ver, target_ver) < 0:
+                    logger_manager.log_error(f"[handle_remote_backend_action] Versi aktif ({ver}) lebih rendah dari target ({target_ver}).")
                     return {
                         "success": False,
                         "status": "error",
@@ -4971,7 +5266,7 @@ def invalidate_active_route_cache():
 
 
 
-    """Membuang cache rute aktif & metrics client agar server/rute baru langsung diresolusi ulang."""
+    """Membuang cache rute aktif, cache backend URL, & metrics client agar server/rute baru langsung diresolusi ulang."""
 
 
 
@@ -5044,6 +5339,11 @@ def invalidate_active_route_cache():
 
 
     _active_metrics_client_key = None
+
+    _backend_url_cache.clear()
+    _cached_backend_info["timestamp"] = 0
+    _cached_backend_info["server_id"] = ""
+    _cached_backend_info["data"] = {"online": False, "version": "", "latestVersion": "", "url": ""}
 
 
 
@@ -21712,7 +22012,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             self._send_json(get_server_details_data())
 
         elif path in ("/api/server/backend_status", "/api/server_backend_status"):
-            self._send_json(_get_backend_health_info(force=True))
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            req_srv_id = (query.get("serverId", [""])[0] or query.get("server_id", [""])[0]).strip() or None
+            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id))
 
 
 
@@ -29005,7 +29307,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 return
 
         if path in ("/api/server/backend_status", "/api/server_backend_status"):
-            self._send_json(_get_backend_health_info(force=True))
+            req_srv_id = (body.get("serverId") or body.get("server_id") or "").strip() or None if isinstance(body, dict) else None
+            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id))
             return
 
         if path in ("/api/server/backend_action", "/api/server_backend_action"):
@@ -30020,7 +30323,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             return
 
         if path in ("/api/server/backend_status", "/api/server_backend_status"):
-            self._send_json(_get_backend_health_info(force=True))
+            req_srv_id = (body.get("serverId") or body.get("server_id") or "").strip() or None if isinstance(body, dict) else None
+            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id))
             return
 
 

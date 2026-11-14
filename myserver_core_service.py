@@ -4573,6 +4573,30 @@ def _extract_version_from_config_text(content):
     return m.group(1).strip() if m else ""
 
 
+_GITHUB_REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _resolve_github_repo_slug(cfg=None, body=None):
+    """Resolve and strictly validate GitHub owner/repo slug (prevents URL path traversal)."""
+    default_slug = (
+        getattr(config_manager, "DEFAULT_GITHUB_REPO", "Gibranibang/My-Server-beta")
+        if config_manager
+        else "Gibranibang/My-Server-beta"
+    )
+    raw = ""
+    if isinstance(body, dict):
+        raw = str(body.get("githubRepo") or body.get("github_repo") or "").strip()
+    if not raw and isinstance(cfg, dict):
+        raw = str(cfg.get("github_repo") or "").strip()
+    slug = (raw or default_slug).strip().strip("/")
+    if ".." in slug or not _GITHUB_REPO_SLUG_RE.fullmatch(slug):
+        return None, slug
+    owner, repo = slug.split("/", 1)
+    if owner in (".", "..") or repo in (".", ".."):
+        return None, slug
+    return slug, slug
+
+
 def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5):
     global _remote_backend_manifest_cache
     now = time.time()
@@ -4588,7 +4612,10 @@ def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5):
             cfg = config_manager.load_or_create_config()
     except Exception:
         cfg = cfg or {}
-    repo_slug = ((cfg or {}).get("github_repo") or "Gibranibang/My-Server-beta").strip()
+    repo_slug, raw_slug = _resolve_github_repo_slug(cfg)
+    if not repo_slug:
+        logger_manager.log_debug(f"[_fetch_remote_backend_manifest_version] Invalid github_repo slug: {raw_slug}")
+        return ""
     manifest_url = f"https://github.com/{repo_slug}/releases/latest/download/backend_manifest.json"
     try:
         req = urllib.request.Request(
@@ -4826,28 +4853,122 @@ def _set_backend_health_cache(srv_id, online, version, latest_version, url):
     return dict(_cached_backend_info["data"])
 
 
+_BACKEND_DEPLOY_GUARD = threading.Lock()
+_ACTIVE_BACKEND_DEPLOYS = set()
+
+
+def _mask_secret(text, secret):
+    txt = str(text) if text is not None else ""
+    if secret and secret in txt:
+        return txt.replace(secret, "***")
+    return txt
+
+
 def handle_remote_backend_action(body):
     """
     Eksekusi 1-Klik Fresh Install atau Update OTA Backend ZimaOS via SSH & GitHub Release.
-    Mendukung automatic SFTP fallback ke paket lokal jika GitHub tidak dapat diakses.
+    Mendukung mode source ('auto', 'github', 'bundle'), override SSH opsional,
+    lock konkurensi per server, dan deteksi authFailed terstruktur.
     """
+    import shlex
+
+    body = body if isinstance(body, dict) else {}
+    pwd = ""
+    srv_id = None
+    lock_acquired = False
+
     try:
         action = (body.get("action") or "update").strip().lower()
-        req_server_id = (body.get("serverId") or body.get("server_id") or "").strip()
+        source = (body.get("source") or "auto").strip().lower()
+        if source not in ("auto", "github", "bundle"):
+            return {
+                "success": False,
+                "status": "error",
+                "validationError": True,
+                "stage": "validation",
+                "message": f"Sumber instalasi backend tidak valid: {source}",
+            }
 
+        raw_ssh_port = body.get("sshPort") if body.get("sshPort") is not None else body.get("ssh_port")
+        if raw_ssh_port is None or str(raw_ssh_port).strip() == "":
+            ssh_port = 22
+        elif isinstance(raw_ssh_port, bool):
+            return {
+                "success": False,
+                "status": "error",
+                "validationError": True,
+                "stage": "validation",
+                "message": "Port SSH tidak valid (harus 1-65535).",
+            }
+        else:
+            try:
+                ssh_port = int(str(raw_ssh_port).strip())
+            except (TypeError, ValueError):
+                ssh_port = 0
+            if ssh_port < 1 or ssh_port > 65535:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "validationError": True,
+                    "stage": "validation",
+                    "message": "Port SSH tidak valid (harus 1-65535).",
+                }
+
+        req_server_id = (body.get("serverId") or body.get("server_id") or "").strip()
         cfg = config_manager.load_or_create_config() if config_manager else {}
+
+        repo_slug, raw_repo_slug = _resolve_github_repo_slug(cfg, body)
+        if source == "github" and not repo_slug:
+            return {
+                "success": False,
+                "status": "error",
+                "validationError": True,
+                "stage": "validation",
+                "message": f"Format github_repo tidak valid (harus owner/repo): {raw_repo_slug}",
+            }
+
         srv = _select_target_server(cfg, target_server_id=req_server_id)
         if not srv:
             return {"success": False, "status": "error", "message": "Server target tidak ditemukan."}
 
         srv_id = srv.get("id") or "default"
-        # Jalur Cepat 1: HTTP OTA langsung jika backend server saat ini sudah online
-        candidates = _get_backend_url_candidates(cfg, target_server_id=srv.get("id"), srv=srv)
-        target_backend_url = _get_active_server_backend_url(cfg, target_server_id=srv.get("id"))
+
+        with _BACKEND_DEPLOY_GUARD:
+            if srv_id in _ACTIVE_BACKEND_DEPLOYS:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "busy": True,
+                    "stage": "locked",
+                    "message": "Proses instalasi/pembaruan backend untuk server ini sedang berlangsung.",
+                }
+            _ACTIVE_BACKEND_DEPLOYS.add(srv_id)
+            lock_acquired = True
+
         target_ver = _get_bundled_backend_version(cfg=cfg)
         local_zip, local_bundle = _get_bundled_backend_packages()
 
-        if action == "update" and candidates and local_zip and os.path.exists(local_zip):
+        if source == "bundle":
+            has_bundle = bool(local_bundle and os.path.exists(local_bundle))
+            has_ota_zip = bool(action == "update" and local_zip and os.path.exists(local_zip))
+            if not has_bundle and not has_ota_zip:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "validationError": True,
+                    "stage": "validation",
+                    "message": "Paket bundle backend lokal tidak ditemukan di perangkat.",
+                }
+
+        # Jalur Cepat 1: HTTP OTA langsung jika backend server saat ini sudah online (kecuali source="github")
+        if source != "github" and action == "update" and local_zip and os.path.exists(local_zip):
+            candidates = _get_backend_url_candidates(cfg, target_server_id=srv.get("id"), srv=srv)
+            target_backend_url = _get_active_server_backend_url(cfg, target_server_id=srv.get("id"))
+        else:
+            candidates = []
+            target_backend_url = ""
+
+        if source != "github" and action == "update" and candidates and local_zip and os.path.exists(local_zip):
             ota_urls = []
             if target_backend_url:
                 ota_urls.append(target_backend_url)
@@ -4967,69 +5088,101 @@ def handle_remote_backend_action(body):
             except Exception as ota_err:
                 logger_manager.log_info(f"[handle_remote_backend_action] HTTP OTA dilewati / gagal ({ota_err}), melanjutkan ke alur SSH...")
 
-        # 1. Kumpulkan kandidat host SSH (utamakan Remote P2P IP jika ada)
-        candidates = []
-        rem_info = config_manager.get_dynamic_remote_info(srv, cfg) if config_manager else None
-        rem_ip = rem_info.get("ip") if rem_info else ""
-        if not rem_ip:
-            rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
-        if rem_ip:
-            candidates.append(rem_ip)
+        # 1. Kumpulkan kandidat host SSH (utamakan sshHost override jika diberikan, lalu Remote P2P IP)
+        ssh_host_override = str(body.get("sshHost") or body.get("ssh_host") or "").strip()
+        ssh_user_override = str(body.get("sshUser") or body.get("ssh_user") or "").strip()
+        ssh_pwd_override = body.get("sshPassword") if body.get("sshPassword") is not None else body.get("ssh_password")
 
-        for c in srv.get("connections", []):
-            curl = c.get("url", "")
-            ch = urllib.parse.urlparse(curl if "://" in curl else f"http://{curl}").hostname
-            if ch and ch not in candidates:
-                from smb_mount_manager import _is_domain_or_wan_host
-                if not _is_domain_or_wan_host(ch):
-                    candidates.insert(0, ch)
-                else:
-                    candidates.append(ch)
+        candidates = []
+        if ssh_host_override:
+            candidates.append(ssh_host_override)
+        else:
+            rem_info = config_manager.get_dynamic_remote_info(srv, cfg) if config_manager else None
+            rem_ip = rem_info.get("ip") if rem_info else ""
+            if not rem_ip:
+                rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
+            if rem_ip:
+                candidates.append(rem_ip)
+
+            for c in srv.get("connections", []):
+                curl = c.get("url", "")
+                ch = urllib.parse.urlparse(curl if "://" in curl else f"http://{curl}").hostname
+                if ch and ch not in candidates:
+                    from smb_mount_manager import _is_domain_or_wan_host
+                    if not _is_domain_or_wan_host(ch):
+                        candidates.insert(0, ch)
+                    else:
+                        candidates.append(ch)
 
         if not candidates:
             return {"success": False, "status": "error", "message": "Tidak ada alamat host IP yang dapat dihubungi."}
 
-        # 2. Ambil kredensial admin (prioritaskan 'Admin' untuk izin sudo)
+        # 2. Ambil kredensial admin (prioritaskan override wizard lalu 'Admin' untuk izin sudo)
         user, pwd = _resolve_ssh_admin_credentials(srv)
+        if ssh_user_override:
+            user = ssh_user_override
+        if ssh_pwd_override is not None and str(ssh_pwd_override) != "":
+            pwd = str(ssh_pwd_override)
 
         # 3. Hubungkan via Paramiko SSH
         ssh_client = None
         connected_host = None
         connect_error = None
+        auth_failed_error = None
         try:
             import paramiko
         except ImportError as ie:
             logger_manager.log_error(f"[handle_remote_backend_action] Modul paramiko belum terpasang: {ie}")
             return {"success": False, "status": "error", "message": f"Modul SSH (paramiko) belum terpasang: {ie}"}
 
+        auth_exc_cls = getattr(paramiko, "AuthenticationException", None)
         for host_ip in candidates:
             try:
-                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba SSH ke {user}@{host_ip}:22...")
+                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba SSH ke {user}@{host_ip}:{ssh_port}...")
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                client.connect(host_ip, port=22, username=user, password=pwd, timeout=5, banner_timeout=5)
+                client.connect(host_ip, port=ssh_port, username=user, password=pwd, timeout=5, banner_timeout=5)
                 ssh_client = client
                 connected_host = host_ip
                 logger_manager.log_info(f"[handle_remote_backend_action] SSH berhasil tersambung ke {host_ip}!")
                 break
             except Exception as ex:
                 connect_error = ex
-                logger_manager.log_debug(f"[handle_remote_backend_action] Gagal SSH ke {host_ip}: {ex}")
+                is_auth_err = (
+                    (auth_exc_cls is not None and isinstance(ex, auth_exc_cls))
+                    or "authentication" in str(ex).lower()
+                    or "auth fail" in str(ex).lower()
+                )
+                logger_manager.log_debug(
+                    f"[handle_remote_backend_action] Gagal SSH ke {host_ip}: {_mask_secret(ex, pwd)}"
+                )
+                if is_auth_err:
+                    auth_failed_error = ex
+                    break
 
         if not ssh_client or not connected_host:
+            if auth_failed_error is not None:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "authFailed": True,
+                    "stage": "ssh_auth",
+                    "message": "Autentikasi SSH gagal. Periksa kembali username dan password SSH Anda.",
+                }
             return {
                 "success": False,
                 "status": "error",
-                "message": f"Gagal menghubungkan sesi SSH ke server: {connect_error}"
+                "message": f"Gagal menghubungkan sesi SSH ke server: {_mask_secret(connect_error, pwd)}",
             }
 
         try:
-            # 4. Unggah paket lokal via SFTP (prioritas) atau unduh dari GitHub Release
-            deploy_dir = f"/tmp/myserver_deploy_{user}"
-            ssh_client.exec_command(f"rm -rf {deploy_dir} && mkdir -p {deploy_dir}")
+            # 4. Unggah paket lokal via SFTP atau unduh dari GitHub Release sesuai mode source
+            safe_user = re.sub(r"[^A-Za-z0-9_.-]", "_", user or "admin").strip("._") or "admin"
+            deploy_dir = f"/tmp/myserver_deploy_{safe_user}"
+            ssh_client.exec_command(f"rm -rf {shlex.quote(deploy_dir)} && mkdir -p {shlex.quote(deploy_dir)}")
 
             uploaded_local = False
-            if local_bundle and os.path.exists(local_bundle):
+            if source != "github" and local_bundle and os.path.exists(local_bundle):
                 try:
                     logger_manager.log_info(f"[handle_remote_backend_action] Mengunggah paket lokal {local_bundle} via SFTP...")
                     sftp = ssh_client.open_sftp()
@@ -5038,15 +5191,38 @@ def handle_remote_backend_action(body):
                     uploaded_local = True
                     logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
                 except Exception as sftp_err:
+                    if source == "bundle":
+                        logger_manager.log_warning(f"[handle_remote_backend_action] Gagal upload SFTP dalam mode bundle: {sftp_err}")
+                        return {
+                            "success": False,
+                            "status": "error",
+                            "message": f"Gagal mengunggah paket lokal via SFTP: {_mask_secret(sftp_err, pwd)}",
+                        }
                     logger_manager.log_warning(f"[handle_remote_backend_action] Gagal upload SFTP ({sftp_err}), mencoba unduh dari GitHub...")
 
             if not uploaded_local:
-                github_url = "https://github.com/Gibranibang/My-Server-beta/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
-                curl_cmd = f"cd {deploy_dir} && curl -sSL -f '{github_url}' -o backend.tar.gz"
+                if source == "bundle":
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "validationError": True,
+                        "stage": "validation",
+                        "message": "Paket bundle backend lokal tidak tersedia untuk unggah SFTP.",
+                    }
+                if not repo_slug:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "validationError": True,
+                        "stage": "validation",
+                        "message": f"Format github_repo tidak valid (harus owner/repo): {raw_repo_slug}",
+                    }
+                github_url = f"https://github.com/{repo_slug}/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
+                curl_cmd = f"cd {shlex.quote(deploy_dir)} && curl -sSL -f {shlex.quote(github_url)} -o backend.tar.gz"
                 _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
                 exit_status = stdout.channel.recv_exit_status()
 
-                _, sz_stdout, _ = ssh_client.exec_command(f"wc -c < {deploy_dir}/backend.tar.gz 2>/dev/null || echo 0")
+                _, sz_stdout, _ = ssh_client.exec_command(f"wc -c < {shlex.quote(deploy_dir)}/backend.tar.gz 2>/dev/null || echo 0")
                 downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
 
                 if exit_status != 0 or downloaded_bytes < 1000:
@@ -5057,14 +5233,26 @@ def handle_remote_backend_action(body):
                     }
 
             # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo (timeout 180s untuk docker build)
-            import shlex
             logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
-            exec_script = f"cd {deploy_dir} && tar -xzf backend.tar.gz && printf '%s\\n' {shlex.quote(pwd)} | sudo -S bash install_zimaos.sh"
+            exec_script = f"cd {shlex.quote(deploy_dir)} && tar -xzf backend.tar.gz && printf '%s\\n' {shlex.quote(pwd)} | sudo -S bash install_zimaos.sh"
             _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=180)
             exec_exit = exec_stdout.channel.recv_exit_status()
-            exec_out_text = exec_stdout.read().decode("utf-8", errors="replace")
-            exec_err_text = exec_stderr.read().decode("utf-8", errors="replace")
+            exec_out_text = _mask_secret(exec_stdout.read().decode("utf-8", errors="replace"), pwd)
+            exec_err_text = _mask_secret(exec_stderr.read().decode("utf-8", errors="replace"), pwd)
             logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi (exit={exec_exit}): {exec_out_text[-500:]}")
+
+            err_lower = exec_err_text.lower()
+            if exec_exit != 0 and any(
+                tok in err_lower
+                for tok in ("incorrect password", "sorry, try again", "authentication failure", "permission denied", "a password is required")
+            ):
+                return {
+                    "success": False,
+                    "status": "error",
+                    "authFailed": True,
+                    "stage": "ssh_auth",
+                    "message": "Autentikasi sudo/SSH ditolak oleh server. Periksa username dan password SSH.",
+                }
 
             # 6. Polling endpoint /health di port 8080 selama maksimal 30 detik
             backend_url = f"http://{connected_host}:8080"
@@ -5118,12 +5306,17 @@ def handle_remote_backend_action(body):
             except Exception:
                 pass
     except Exception as ex:
-        logger_manager.log_error(f"[handle_remote_backend_action] Exception unhandled: {ex}")
+        safe_ex = _mask_secret(ex, pwd)
+        logger_manager.log_error(f"[handle_remote_backend_action] Exception unhandled: {safe_ex}")
         return {
             "success": False,
             "status": "error",
-            "message": f"Terjadi kesalahan saat memproses backend: {ex}"
+            "message": f"Terjadi kesalahan saat memproses backend: {safe_ex}"
         }
+    finally:
+        if lock_acquired and srv_id is not None:
+            with _BACKEND_DEPLOY_GUARD:
+                _ACTIVE_BACKEND_DEPLOYS.discard(srv_id)
 
 
 def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=None, vm_id=None, force_window=False):
@@ -29837,7 +30030,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path in ("/api/server/backend_action", "/api/server_backend_action"):
             res = handle_remote_backend_action(body)
-            status_code = 200 if res.get("success") else 500
+            if res.get("success"):
+                status_code = 200
+            elif res.get("busy"):
+                status_code = 409
+            elif res.get("authFailed"):
+                status_code = 401
+            elif res.get("validationError"):
+                status_code = 400
+            else:
+                status_code = 500
             self._send_json(res, status=status_code)
             return
 

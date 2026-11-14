@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Birthstone&family=Doto:wght@900&family=Montserrat:ital,wght@1,600&display=swap');
 @import 'tailwindcss';
 @import './companion/styles/crt-cards.css';
+@import './companion/wizard/wizard.css';
 
 /*
  * Figma-imported faces, declared exactly as returned by `figma fonts resolve`. Families contain a colon, so

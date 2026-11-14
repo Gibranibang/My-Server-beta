@@ -20,6 +20,7 @@ jobs:
     env:
       SYNCTHING_VERSION: v2.1.7
       EASYTIER_VERSION: v2.6.4
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: Checkout repository
@@ -80,7 +81,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
 
       - name: Install Python build and runtime dependencies
         run: |
@@ -188,8 +188,12 @@ jobs:
           $setupVerPath = "dist\MyServer-v$ver-Beta-Setup.exe"
           $setupGenericPath = "dist\MyServer-Setup.exe"
 
+          $ErrorActionPreference = "Continue"
           gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          $ErrorActionPreference = "Stop"
+
+          if (-not $releaseExists) {
             Write-Host "Creating release $tag..."
             gh release create $tag --target "${{ github.sha }}" --title "MyServer v$ver Beta" --generate-notes
             if ($LASTEXITCODE -ne 0) { throw "Failed to create release $tag" }

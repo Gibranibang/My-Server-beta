@@ -1,3 +1,5 @@
+mod wizard_state;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -28,46 +30,132 @@ fn chrono_now() -> String {
     format!("{:?}", std::time::SystemTime::now())
 }
 
-#[tauri::command]
-fn log_frontend(msg: String) {
-    trace_log(&format!("FRONTEND: {}", msg));
+fn non_empty_str(val: Option<&serde_json::Value>) -> bool {
+    val.and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
 }
 
-#[tauri::command]
-fn minimize_window(window: WebviewWindow) {
-    trace_log("cmd: minimize_window");
-    let _ = window.minimize();
+fn resolve_config_path() -> Option<std::path::PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let exe_cfg = exe_dir.join("config.json");
+            if exe_cfg.exists() {
+                return Some(exe_cfg);
+            }
+            if let Some(dir_name) = exe_dir.file_name().and_then(|n| n.to_str()) {
+                let lower = dir_name.to_ascii_lowercase();
+                if lower == "bin" || lower == "sandbox" {
+                    if let Some(parent_cfg) = exe_dir.parent().map(|p| p.join("config.json")) {
+                        if parent_cfg.exists() {
+                            return Some(parent_cfg);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_cfg = cwd.join("config.json");
+        if cwd_cfg.exists() {
+            return Some(cwd_cfg);
+        }
+    }
+    None
 }
 
-#[tauri::command]
-fn hide_window(window: WebviewWindow) {
-    trace_log("cmd: hide_window");
-    let _ = window.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
-    let _ = window.hide();
+fn load_config_json() -> Option<serde_json::Value> {
+    let config_path = resolve_config_path()?;
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    serde_json::from_str::<serde_json::Value>(&content).ok()
 }
 
-#[tauri::command]
-fn show_window(window: WebviewWindow) {
-    trace_log("cmd: show_window");
-    let _ = window.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+fn extract_wizard_startup_flags(cfg: &serde_json::Value) -> (Option<bool>, bool) {
+    let explicit_flag = cfg.get("first_run_setup").and_then(|v| v.as_bool());
+    let easytier_remote_id = non_empty_str(cfg.get("easytier").and_then(|e| e.get("remote_id")));
+
+    let mut has_valid_server_and_creds = false;
+    if let Some(servers) = cfg.get("servers").and_then(|s| s.as_array()) {
+        for srv in servers {
+            let srv_id = srv
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if srv_id.is_empty() {
+                continue;
+            }
+
+            let creds_ok = srv
+                .get("credentials")
+                .and_then(|c| c.as_object())
+                .map(|creds| {
+                    let flat_ok =
+                        non_empty_str(creds.get("username")) && non_empty_str(creds.get("password"));
+                    let profile_ok = creds.values().any(|entry| {
+                        non_empty_str(entry.get("username")) && non_empty_str(entry.get("password"))
+                    });
+                    flat_ok || profile_ok
+                })
+                .unwrap_or(false);
+
+            let has_conn_url = srv
+                .get("connections")
+                .and_then(|c| c.as_array())
+                .map(|conns| conns.iter().any(|c| non_empty_str(c.get("url"))))
+                .unwrap_or(false);
+
+            let has_target = srv_id != "srv_default"
+                || has_conn_url
+                || easytier_remote_id
+                || [
+                    "url",
+                    "zerotier_network_id",
+                    "remote_id",
+                    "zerotierNetworkId",
+                    "remoteId",
+                ]
+                .iter()
+                .any(|key| non_empty_str(srv.get(*key)));
+
+            if creds_ok && has_target {
+                has_valid_server_and_creds = true;
+                break;
+            }
+        }
+    }
+
+    (explicit_flag, has_valid_server_and_creds)
+}
+
+fn set_window_taskbar_icon(window: &WebviewWindow) {
+    // Set explicit window icon (updates Windows Taskbar icon immediately via WM_SETICON)
+    static TASKBAR_RGBA_128: &[u8] = include_bytes!("../icons/128x128.rgba");
+    let taskbar_icon = tauri::image::Image::new(TASKBAR_RGBA_128, 128, 128);
+    let _ = window.set_icon(taskbar_icon);
+}
+
+fn focus_existing_wizard_window(window: &WebviewWindow) {
+    let _ = window.set_always_on_top(false);
+    let _ = window.center();
+    set_window_taskbar_icon(window);
+    let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
 }
 
-#[tauri::command]
-fn exit_app(app_handle: AppHandle) {
-    trace_log("cmd: exit_app");
-    ALLOW_EXIT.store(true, Ordering::SeqCst);
-    app_handle.exit(0);
+fn show_centered_wizard(window: &WebviewWindow, width: Option<f64>, height: Option<f64>) {
+    let (w, h) = wizard_state::clamp_wizard_dimensions(width, height);
+    let _ = window.set_always_on_top(false);
+    let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(w, h)));
+    let _ = window.center();
+    set_window_taskbar_icon(window);
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
-#[tauri::command]
-fn start_drag(window: WebviewWindow) {
-    let _ = window.start_dragging();
-}
-
-#[tauri::command]
-fn position_above_taskbar(window: WebviewWindow) {
+fn apply_position_above_taskbar(window: &WebviewWindow) {
     trace_log("position_above_taskbar entered");
     let win_w = 370.0;
     let win_h = 412.0;
@@ -92,16 +180,89 @@ fn position_above_taskbar(window: WebviewWindow) {
     }
 
     let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(win_w, win_h)));
-    
-    // Set explicit window icon (updates Windows Taskbar icon immediately via WM_SETICON)
-    static TASKBAR_RGBA_128: &[u8] = include_bytes!("../icons/128x128.rgba");
-    let taskbar_icon = tauri::image::Image::new(TASKBAR_RGBA_128, 128, 128);
-    let _ = window.set_icon(taskbar_icon);
+    set_window_taskbar_icon(window);
 
     trace_log("calling window.show, unminimize, set_focus");
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
+}
+
+#[tauri::command]
+fn log_frontend(msg: String) {
+    trace_log(&format!("FRONTEND: {}", msg));
+}
+
+#[tauri::command]
+fn minimize_window(window: WebviewWindow) {
+    trace_log("cmd: minimize_window");
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+fn hide_window(window: WebviewWindow, state: tauri::State<'_, wizard_state::WizardWindowState>) {
+    trace_log("cmd: hide_window");
+    if !wizard_state::should_suppress_home_reset(state.is_active()) {
+        let _ = window.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+    }
+    let _ = window.hide();
+}
+
+#[tauri::command]
+fn show_window(window: WebviewWindow, state: tauri::State<'_, wizard_state::WizardWindowState>) {
+    trace_log("cmd: show_window");
+    if state.is_active() {
+        focus_existing_wizard_window(&window);
+    } else {
+        let _ = window.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+#[tauri::command]
+fn exit_app(app_handle: AppHandle) {
+    trace_log("cmd: exit_app");
+    ALLOW_EXIT.store(true, Ordering::SeqCst);
+    app_handle.exit(0);
+}
+
+#[tauri::command]
+fn start_drag(window: WebviewWindow) {
+    let _ = window.start_dragging();
+}
+
+#[tauri::command]
+fn position_above_taskbar(
+    window: WebviewWindow,
+    state: tauri::State<'_, wizard_state::WizardWindowState>,
+) {
+    if state.is_active() {
+        trace_log("position_above_taskbar suppressed (wizard active)");
+        return;
+    }
+    apply_position_above_taskbar(&window);
+}
+
+#[tauri::command]
+fn set_wizard_mode(
+    window: WebviewWindow,
+    state: tauri::State<'_, wizard_state::WizardWindowState>,
+    active: bool,
+    width: Option<f64>,
+    height: Option<f64>,
+) -> Result<(), String> {
+    trace_log(&format!("cmd: set_wizard_mode active={}", active));
+    if active {
+        state.set_active(true);
+        show_centered_wizard(&window, width, height);
+    } else {
+        state.set_active(false);
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(370.0, 412.0)));
+        apply_position_above_taskbar(&window);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -184,6 +345,16 @@ async fn call_core_api(endpoint: String, payload: serde_json::Value) -> Result<s
     }
 }
 
+fn restore_or_present_window(app: &AppHandle, win: &WebviewWindow) {
+    let wizard_active = app.state::<wizard_state::WizardWindowState>().is_active();
+    if wizard_active {
+        focus_existing_wizard_window(win);
+    } else {
+        let _ = win.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+        apply_position_above_taskbar(win);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -197,14 +368,11 @@ pub fn run() {
     }
     trace_log("app_lib::run entered");
     let app = tauri::Builder::default()
+        .manage(wizard_state::WizardWindowState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             trace_log("single_instance callback triggered!");
             if let Some(win) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
-                let _ = win.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
-                position_above_taskbar(win.clone());
-                let _ = win.unminimize();
-                let _ = win.show();
-                let _ = win.set_focus();
+                restore_or_present_window(app, &win);
             } else {
                 trace_log("single_instance callback: window 'main' NOT found!");
             }
@@ -270,11 +438,7 @@ pub fn run() {
                     "show" => {
                         trace_log("tray menu: show");
                         if let Some(win) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
-                            let _ = win.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
-                            position_above_taskbar(win.clone());
-                            let _ = win.show();
-                            let _ = win.unminimize();
-                            let _ = win.set_focus();
+                            restore_or_present_window(app, &win);
                         }
                     }
                     _ => {}
@@ -288,16 +452,15 @@ pub fn run() {
                     {
                         trace_log("tray icon left click");
                         let app = tray.app_handle();
+                        let wizard_active = app.state::<wizard_state::WizardWindowState>().is_active();
                         if let Some(win) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
                             if win.is_visible().unwrap_or(false) && !win.is_minimized().unwrap_or(false) {
-                                let _ = win.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+                                if !wizard_state::should_suppress_home_reset(wizard_active) {
+                                    let _ = win.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+                                }
                                 let _ = win.hide();
                             } else {
-                                let _ = win.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
-                                position_above_taskbar(win.clone());
-                                let _ = win.unminimize();
-                                let _ = win.show();
-                                let _ = win.set_focus();
+                                restore_or_present_window(app, &win);
                             }
                         }
                     }
@@ -307,37 +470,42 @@ pub fn run() {
             let main_win = app.get_webview_window("main");
             trace_log(&format!("setup: get_webview_window('main') is_some: {}", main_win.is_some()));
 
-            let should_auto_open = {
-                let mut config_path = exe_dir.join("config.json");
-                if !config_path.exists() {
-                    if let Ok(cwd) = std::env::current_dir() {
-                        let cwd_config = cwd.join("config.json");
-                        if cwd_config.exists() {
-                            config_path = cwd_config;
-                        }
-                    }
-                }
-                if let Ok(content) = std::fs::read_to_string(&config_path) {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        val.get("auto_open_mini_tray")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(true)
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            };
+            let cfg_opt = load_config_json();
+            let (explicit_flag, has_valid_server_and_creds) = cfg_opt
+                .as_ref()
+                .map(extract_wizard_startup_flags)
+                .unwrap_or((None, false));
+            let open_wizard = wizard_state::should_open_wizard_on_startup(
+                explicit_flag,
+                has_valid_server_and_creds,
+            );
+            trace_log(&format!(
+                "setup: open_wizard={}, explicit_flag={:?}, has_valid_server_and_creds={}",
+                open_wizard, explicit_flag, has_valid_server_and_creds
+            ));
+
+            let should_auto_open = cfg_opt
+                .as_ref()
+                .and_then(|val| val.get("auto_open_mini_tray"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
             trace_log(&format!("setup: should_auto_open: {}", should_auto_open));
 
-            if should_auto_open {
+            if open_wizard {
+                app.state::<wizard_state::WizardWindowState>().set_active(true);
                 if let Some(win) = main_win.or_else(|| app.webview_windows().into_values().next()) {
-                    position_above_taskbar(win.clone());
+                    show_centered_wizard(&win, Some(460.0), Some(560.0));
+                }
+            } else if should_auto_open {
+                if let Some(win) = main_win.or_else(|| app.webview_windows().into_values().next()) {
+                    apply_position_above_taskbar(&win);
                     let win_clone = win.clone();
+                    let app_handle = app.handle().clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(200));
-                        position_above_taskbar(win_clone);
+                        if !app_handle.state::<wizard_state::WizardWindowState>().is_active() {
+                            apply_position_above_taskbar(&win_clone);
+                        }
                     });
                 }
             }
@@ -348,9 +516,17 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 trace_log("window CloseRequested -> hiding");
-                api.prevent_close();
-                if let Some(wv) = window.app_handle().get_webview_window(window.label()) {
-                    let _ = wv.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+                if !ALLOW_EXIT.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                }
+                let wizard_active = window
+                    .app_handle()
+                    .state::<wizard_state::WizardWindowState>()
+                    .is_active();
+                if !wizard_state::should_suppress_home_reset(wizard_active) {
+                    if let Some(wv) = window.app_handle().get_webview_window(window.label()) {
+                        let _ = wv.eval("window.dispatchEvent(new CustomEvent('myserver:reset-home'));");
+                    }
                 }
                 let _ = window.hide();
             }
@@ -364,6 +540,7 @@ pub fn run() {
             exit_app,
             start_drag,
             position_above_taskbar,
+            set_wizard_mode,
             open_app_window,
             open_in_browser,
             call_core_api

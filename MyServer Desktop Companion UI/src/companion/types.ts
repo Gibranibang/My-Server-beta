@@ -6,8 +6,8 @@ export interface VmAutoRestartSchedule {
   intervalValue?: number
   intervalUnit?: "seconds" | "minutes" | "hours"
   clockTime?: string // "HH:MM" e.g. "04:00"
-  resetCycleMode?: "pause_resume" | "cold_restart"
-  resetMode?: "pause_resume" | "cold_restart"
+  resetCycleMode?: "pause_resume" | "cold_restart" | "sleep_2s" | "full_reboot"
+  resetMode?: "pause_resume" | "cold_restart" | "sleep_2s" | "full_reboot"
   lastExecuted?: string
   lastRunTimestamp?: number
 }
@@ -16,7 +16,7 @@ export interface VmAutoOnSchedule {
   enabled: boolean
   mode: "clock" | "after_off"
   clockTime?: string // "HH:MM" e.g. "07:00"
-  days?: number[] // 0=Sun..6=Sat
+  days?: Array<number | string> // 0=Sun..6=Sat or "Mon".."Sun"
   delayValue?: number // e.g. 30
   delayUnit?: "seconds" | "minutes" | "hours"
   lastTriggered?: string
@@ -43,7 +43,7 @@ export interface VmPublishedPort {
 export interface VirtualMachine {
   id: string
   name: string
-  provider: "instabox" | "custom"
+  provider: "instabox" | "custom" | "manual"
   status: "running" | "sleeping" | "cooldown" | "stopped"
   scope?: "server" | "local"
   serverId?: string
@@ -65,6 +65,8 @@ export interface VirtualMachine {
   autoOn?: VmAutoOnSchedule
   sleepingSince?: number
   keepAliveEnabled?: boolean
+  scheduleTimezone?: string
+  tzOffsetMinutes?: number
   meshIp?: string
   specs?: {
     cpu?: string

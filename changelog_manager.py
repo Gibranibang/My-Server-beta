@@ -12,6 +12,23 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.8",
+        "channel": "Beta",
+        "date": "2026-11-14",
+        "title": "Deteksi & Bundling OTA Backend ZimaOS, VM Power Control Atomik & Multi-Perangkat, serta Backend ZimaOS v1.2.6",
+        "notes": [
+            "Perbaikan Deteksi Status & OTA Backend ZimaOS (5acab62): Memisahkan probing status backend via getBackendStatus dan dukungan indikator online pada ServerView.tsx, membundel paket rilis MyServer-Backend-ZimaOS.{zip,tar.gz} beserta backend_manifest.json lintas dev dan _MEIPASS, serta mengunggah aset backend pada workflow GitHub Release CI.",
+            "Perbaikan VM Power Control & Sinkronisasi Multi-Perangkat: Menerapkan pembaruan atomik PUT /api/v1/vms/{id} dengan rollback state UI dan pesan galat jujur saat backend gagal atau offline, propagasi error payload HTTP 200 {status: \"error\"} pada proxy aksi power VM, pencegahan zombie re-upsert lewat pengecekan tombstone pada fallback 404, serta normalisasi days, resetCycleMode, dan pengiriman scheduleTimezone/tzOffsetMinutes pada VmManagerView.tsx & myserver_core_service.py.",
+            "Integrasi ZimaOS Backend v1.2.6: Menambahkan dukungan timezone dinamis (tzdata pada Dockerfile, kolom schedule_timezone & tz_offset_minutes, _get_vm_local_now), penghitungan progres runtime_minutes dinamis untuk VM manual (_compute_manual_runtime_minutes), inisialisasi serta refresh last_wake_time & last_sleep_time serta pemisahan mode Auto-On after_off dari filter active_days, jeda siklus cold_restart/full_reboot 5 detik pada execute_smart_reset, dan pengemasan arsip rilis 21 berkas yang bersih tanpa duplikasi entri."
+        ],
+        "features": [
+            "Deteksi Status & Bundling Paket Rilis OTA Backend ZimaOS (Dev, _MEIPASS & CI)",
+            "VM Power Control Atomik, Rollback State UI & Proteksi Tombstone 404",
+            "Sinkronisasi Timezone Jadwal VM & Normalisasi Siklus Multi-Perangkat",
+            "Integrasi ZimaOS Backend v1.2.6 & Arsip Rilis 21 Berkas Bersih"
+        ]
+    },
+    {
         "version": "4.5.7",
         "channel": "Beta",
         "date": "2026-11-14",

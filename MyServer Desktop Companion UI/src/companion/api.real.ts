@@ -960,7 +960,7 @@ export function createRealApi(): CompanionApi {
 
 
 
-    async syncInstaBoxVm(params: { apiKey: string; machineId?: string; vmName?: string; vmId?: string }) {
+    async syncInstaBoxVm(params: { apiKey: string; machineId?: string; vmName?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
@@ -980,7 +980,7 @@ export function createRealApi(): CompanionApi {
       return { success: false, error: 'Core service unreachable' }
     },
 
-    async smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string }) {
+    async smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
@@ -1000,7 +1000,7 @@ export function createRealApi(): CompanionApi {
       return { success: false, error: 'Core service unreachable' }
     },
 
-    async wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }) {
+    async wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
@@ -1020,7 +1020,7 @@ export function createRealApi(): CompanionApi {
       return { success: false, error: 'Core service unreachable' }
     },
 
-    async pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }) {
+    async pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke

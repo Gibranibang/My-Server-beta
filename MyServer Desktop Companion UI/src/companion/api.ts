@@ -126,13 +126,13 @@ export interface CompanionApi {
 
   openExternalBrowser(url: string): Promise<void>
 
-  syncInstaBoxVm(params: { apiKey: string; machineId?: string; vmName?: string; vmId?: string }): Promise<any>
+  syncInstaBoxVm(params: { apiKey: string; machineId?: string; vmName?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }): Promise<any>
 
-  smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
+  smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }): Promise<any>
 
-  wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
+  wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }): Promise<any>
 
-  pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string }): Promise<any>
+  pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }): Promise<any>
 
   loadVms?(): Promise<VirtualMachine[]>
 

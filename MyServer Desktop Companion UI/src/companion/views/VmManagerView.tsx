@@ -51,6 +51,46 @@ const getVmRuntimeTone = (usedPct: number, live: boolean): Tone => {
   return usedPct < 70 ? "success" : usedPct < 85 ? "warning" : "danger"
 }
 
+const DAY_NAME_TO_IDX: Record<string, number> = {
+  sun: 0, min: 0, minggu: 0, sunday: 0, "0": 0,
+  mon: 1, sen: 1, senin: 1, monday: 1, "1": 1,
+  tue: 2, sel: 2, selasa: 2, tuesday: 2, "2": 2,
+  wed: 3, rab: 3, rabu: 3, wednesday: 3, "3": 3,
+  thu: 4, kam: 4, kamis: 4, thursday: 4, "4": 4,
+  fri: 5, jum: 5, jumat: 5, friday: 5, "5": 5,
+  sat: 6, sab: 6, sabtu: 6, saturday: 6, "6": 6,
+}
+
+const normalizeAutoOnDays = (days?: Array<number | string>): number[] => {
+  if (!Array.isArray(days) || days.length === 0) return [1, 2, 3, 4, 5, 6, 0]
+  const normalized: number[] = []
+  for (const d of days) {
+    if (typeof d === "number" && d >= 0 && d <= 6) {
+      if (!normalized.includes(d)) normalized.push(d)
+    } else {
+      const idx = DAY_NAME_TO_IDX[String(d).trim().toLowerCase()]
+      if (idx !== undefined && !normalized.includes(idx)) normalized.push(idx)
+    }
+  }
+  return normalized.length > 0 ? normalized : [1, 2, 3, 4, 5, 6, 0]
+}
+
+const normalizeResetCycleMode = (mode?: string): "pause_resume" | "cold_restart" => {
+  const m = String(mode || "").trim().toLowerCase()
+  return m === "cold_restart" || m === "full_reboot" ? "cold_restart" : "pause_resume"
+}
+
+const getClientTimezoneInfo = () => {
+  let scheduleTimezone = ""
+  try {
+    scheduleTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""
+  } catch {}
+  return {
+    scheduleTimezone,
+    tzOffsetMinutes: -new Date().getTimezoneOffset(),
+  }
+}
+
 function VmRuntimeDotBar({ usedPct, tone, live = false }: { usedPct: number; tone: Tone; live?: boolean }) {
   const colStep = 6
   const rowStep = 6
@@ -219,6 +259,24 @@ export default function VmManagerView({ go }: ViewProps) {
         pendingMutationsRef.current.delete(result.id)
       }
     }
+    if (result.autoOn) {
+      result = {
+        ...result,
+        autoOn: {
+          ...result.autoOn,
+          days: normalizeAutoOnDays(result.autoOn.days),
+        },
+      }
+    }
+    if (result.autoRestart) {
+      result = {
+        ...result,
+        autoRestart: {
+          ...result.autoRestart,
+          resetCycleMode: normalizeResetCycleMode(result.autoRestart.resetCycleMode || result.autoRestart.resetMode),
+        },
+      }
+    }
     return result
   }, [])
 
@@ -316,7 +374,7 @@ export default function VmManagerView({ go }: ViewProps) {
   }, [syncVmsFromBackend, activeServerId])
 
   // Helper persisten untuk aksi pengguna eksplisit (Add, Edit, Migrate)
-  const persistVmChanges = useCallback((updatedVms: VirtualMachine[], syncRemote = true) => {
+  const persistVmChanges = useCallback((updatedVms: VirtualMachine[], syncRemote = true): Promise<any> => {
     setVms(updatedVms)
     if (typeof window !== "undefined") {
       try {
@@ -324,11 +382,108 @@ export default function VmManagerView({ go }: ViewProps) {
       } catch {}
     }
     if (syncRemote && api.saveVms) {
-      void api.saveVms(updatedVms).catch((err) => {
+      return api.saveVms(updatedVms).catch((err) => {
         console.warn("[VmManagerView] saveVms error:", err)
+        return null
       })
     }
+    return Promise.resolve({ status: "ok", success: true })
   }, [api])
+
+  // Helper atomik untuk menyimpan perubahan VM tunggal ke Core Service & ZimaOS dengan rollback jika gagal
+  const persistSingleVmPatch = useCallback(
+    async (
+      vm: VirtualMachine,
+      patch: Partial<VirtualMachine>,
+      uiExtra?: Partial<VirtualMachine>
+    ): Promise<boolean> => {
+      const includeTz = Boolean(patch.autoOn || patch.autoRestart || patch.keepAliveEnabled !== undefined)
+      const serverPatch: Partial<VirtualMachine> = includeTz
+        ? { ...patch, ...getClientTimezoneInfo() }
+        : { ...patch }
+      const optimisticPatch: Partial<VirtualMachine> = {
+        ...serverPatch,
+        ...(uiExtra || {}),
+      }
+
+      const prevSnapshot = vmsRef.current.find((item) => item.id === vm.id) || vm
+      recordPendingMutation(vm.id, optimisticPatch, 15000)
+
+      const applyLocalList = (list: VirtualMachine[]) => {
+        setVms(list)
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("myserver_vms", JSON.stringify(list))
+          } catch {}
+        }
+      }
+
+      const updatedList = vmsRef.current.map((item) =>
+        item.id === vm.id
+          ? {
+              ...item,
+              ...optimisticPatch,
+              autoOn: optimisticPatch.autoOn
+                ? {
+                    ...(item.autoOn || {}),
+                    ...optimisticPatch.autoOn,
+                    days: normalizeAutoOnDays(optimisticPatch.autoOn.days),
+                  }
+                : item.autoOn,
+              autoRestart: optimisticPatch.autoRestart
+                ? {
+                    ...(item.autoRestart || {}),
+                    ...optimisticPatch.autoRestart,
+                    resetCycleMode: normalizeResetCycleMode(
+                      optimisticPatch.autoRestart.resetCycleMode || optimisticPatch.autoRestart.resetMode
+                    ),
+                  }
+                : item.autoRestart,
+            }
+          : item
+      )
+      applyLocalList(updatedList)
+
+      if (!api.updateVm) {
+        const res = await persistVmChanges(updatedList, true)
+        return Boolean(!res || res.status !== "error")
+      }
+
+      const rollback = (errMsg: string) => {
+        pendingMutationsRef.current.delete(vm.id)
+        const restored = vmsRef.current.map((item) => (item.id === vm.id ? prevSnapshot : item))
+        applyLocalList(restored)
+        notify(errMsg, "danger")
+      }
+
+      try {
+        const res = await api.updateVm(vm.id, serverPatch, vm.serverId)
+        const failed =
+          !res ||
+          res.status === "error" ||
+          res.success === false ||
+          (vm.scope === "server" && res.backend_updated === false)
+        if (failed) {
+          rollback(
+            res?.message ||
+              (language === "id"
+                ? `Gagal menyinkronkan perubahan ${vm.name} ke server ZimaOS.`
+                : `Failed to sync ${vm.name} changes to ZimaOS server.`)
+          )
+          return false
+        }
+        return true
+      } catch (err: any) {
+        rollback(
+          language === "id"
+            ? `Gagal menyimpan ${vm.name}: ${err?.message || String(err)}`
+            : `Failed to save ${vm.name}: ${err?.message || String(err)}`
+        )
+        return false
+      }
+    },
+    [api, language, notify, persistVmChanges, recordPendingMutation]
+  )
 
   // Save to localStorage whenever vms change
   useEffect(() => {
@@ -568,29 +723,30 @@ export default function VmManagerView({ go }: ViewProps) {
       )
     )
 
-    if (disableKeepAliveOnManualSleep && api.updateVm) {
-      void api.updateVm(
-        vm.id,
-        {
-          keepAliveEnabled: false,
-          status: "sleeping",
-        },
-        vm.serverId
-      ).catch(() => {})
+    const restorePowerFailure = async (errMsg: string) => {
+      pendingMutationsRef.current.delete(vm.id)
+      setVms((prev) =>
+        prev.map((item) =>
+          item.id === vm.id
+            ? { ...item, status: prevStatus, keepAliveEnabled: prevKeepAlive, runtimeMinutes: prevRuntime }
+            : item
+        )
+      )
+      if (disableKeepAliveOnManualSleep && api.updateVm) {
+        await api.updateVm(vm.id, { keepAliveEnabled: prevKeepAlive }, vm.serverId).catch(() => {})
+      }
+      notify(errMsg, "danger")
     }
 
-    if (vm.provider === "instabox") {
+    // Pastikan Always-On dimatikan lebih dulu di backend sebelum sinyal /sleep agar scheduler tidak langsung membangunkan VM lagi
+    if (disableKeepAliveOnManualSleep && api.updateVm) {
       try {
-        const payload = {
-          apiKey: vm.apiKey,
-          machineId: vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined),
-          vmId: vm.id,
-        }
-        const res = isCurrentlyRunning
-          ? await api.pauseInstaBoxVm(payload)
-          : await api.wakeInstaBoxVm(payload)
-
-        if (res && res.status === "error") {
+        const kaRes = await api.updateVm(
+          vm.id,
+          { keepAliveEnabled: false, ...getClientTimezoneInfo() },
+          vm.serverId
+        )
+        if (!kaRes || kaRes.status === "error" || kaRes.success === false || (vm.scope === "server" && kaRes.backend_updated === false)) {
           pendingMutationsRef.current.delete(vm.id)
           setVms((prev) =>
             prev.map((item) =>
@@ -599,7 +755,43 @@ export default function VmManagerView({ go }: ViewProps) {
                 : item
             )
           )
-          notify(language === "id" ? `Gagal mengubah daya VM: ${res.message || "Error"}` : `Failed to change VM power: ${res.message || "Error"}`, "danger")
+          notify(
+            kaRes?.message ||
+              (language === "id" ? "Gagal menonaktifkan Always-On sebelum menidurkan VM." : "Failed to disable Always-On before sleeping VM."),
+            "danger"
+          )
+          setPowerBusyVmId(null)
+          return
+        }
+      } catch (err: any) {
+        await restorePowerFailure(
+          language === "id" ? `Gagal menonaktifkan Always-On: ${err?.message || String(err)}` : `Failed to disable Always-On: ${err?.message || String(err)}`
+        )
+        setPowerBusyVmId(null)
+        return
+      }
+    }
+
+    const useBackendPower = vm.provider === "instabox" || vm.scope === "server"
+    if (useBackendPower) {
+      try {
+        const payload = {
+          apiKey: vm.apiKey,
+          machineId: vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined),
+          vmId: vm.id,
+          scope: vm.scope,
+          serverId: vm.serverId,
+        }
+        const res = isCurrentlyRunning
+          ? await api.pauseInstaBoxVm(payload)
+          : await api.wakeInstaBoxVm(payload)
+
+        if (!res || res.status === "error" || res.success === false) {
+          await restorePowerFailure(
+            language === "id"
+              ? `Gagal mengubah daya VM: ${res?.message || "Error"}`
+              : `Failed to change VM power: ${res?.message || "Error"}`
+          )
           setPowerBusyVmId(null)
           return
         }
@@ -623,17 +815,19 @@ export default function VmManagerView({ go }: ViewProps) {
                   status: realStatus,
                   keepAliveEnabled: nextKeepAlive,
                   machineId: res?.machineId || item.machineId || payload.machineId,
-                  sshHost: item.sshHost || "ssh.instabox.sh",
-                  sshPort: item.sshPort || 2222,
+                  sshHost: item.sshHost || (item.provider === "instabox" ? "ssh.instabox.sh" : ""),
+                  sshPort: item.sshPort || (item.provider === "instabox" ? 2222 : 22),
                   sshUser: item.sshUser || res?.machineId || payload.machineId,
                   lastActive: realStatus === "running" ? "Just now" : "Sleeping",
                 }
               : item
           )
         )
-        setTimeout(() => {
-          syncActiveInstaboxVms(vm.id)
-        }, 4000)
+        if (vm.provider === "instabox") {
+          setTimeout(() => {
+            syncActiveInstaboxVms(vm.id)
+          }, 4000)
+        }
         notify(
           nextStatus === "running"
             ? (language === "id" ? `${vm.name}: VM Berhasil Dibangunkan!` : `${vm.name}: VM Woken Up Successfully!`)
@@ -643,28 +837,26 @@ export default function VmManagerView({ go }: ViewProps) {
           "success"
         )
       } catch (err: any) {
-        pendingMutationsRef.current.delete(vm.id)
-        setVms((prev) =>
-          prev.map((item) =>
-            item.id === vm.id
-              ? { ...item, status: prevStatus, keepAliveEnabled: prevKeepAlive, runtimeMinutes: prevRuntime }
-              : item
-          )
+        await restorePowerFailure(
+          language === "id" ? `Komunikasi API gagal: ${err?.message || String(err)}` : `API communication failed: ${err?.message || String(err)}`
         )
-        notify(language === "id" ? `Komunikasi API gagal: ${err?.message || String(err)}` : `API communication failed: ${err?.message || String(err)}`, "danger")
       } finally {
         setPowerBusyVmId(null)
       }
     } else {
-      if (api.updateVm) {
-        void api.updateVm(vm.id, { status: nextStatus, keepAliveEnabled: nextKeepAlive }, vm.serverId).catch(() => {})
-      }
-      notify(
-        nextStatus === "running"
-          ? `${vm.name}: ${language === "id" ? "VM Dibangunkan" : "VM Woken Up"}`
-          : `${vm.name}: ${language === "id" ? "VM Masuk Mode Tidur" : "VM Entered Sleep Mode"}`,
-        "neutral"
+      const ok = await persistSingleVmPatch(
+        vm,
+        { status: nextStatus, keepAliveEnabled: nextKeepAlive },
+        nextStatus === "sleeping" ? { runtimeMinutes: 0, sleepingSince: Date.now() } : { sleepingSince: undefined }
       )
+      if (ok) {
+        notify(
+          nextStatus === "running"
+            ? `${vm.name}: ${language === "id" ? "VM Dibangunkan" : "VM Woken Up"}`
+            : `${vm.name}: ${language === "id" ? "VM Masuk Mode Tidur" : "VM Entered Sleep Mode"}`,
+          "neutral"
+        )
+      }
       setPowerBusyVmId(null)
     }
   }
@@ -786,66 +978,20 @@ export default function VmManagerView({ go }: ViewProps) {
   // Dedicated Always-On Toggle for InstaBox (Immediately wakes sleeping VM!)
   const handleToggleKeepAlive = async (vm: VirtualMachine) => {
     const nextVal = !vm.keepAliveEnabled
-    const nextAutoRestart: VmAutoRestartSchedule | undefined = nextVal
-      ? (vm.autoRestart
-          ? {
-              ...vm.autoRestart,
-              enabled: true,
-              resetCycleMode: "pause_resume",
-            }
-          : {
-              enabled: true,
-              mode: "interval",
-              intervalValue: 6,
-              intervalUnit: "hours",
-              resetCycleMode: "pause_resume",
-            })
-      : vm.autoRestart
-
-    // Jika Always-On 24/7 diaktifkan, nonaktifkan Auto-On mode jeda (after_off) agar tidak bentrok
+    // Smart Reset batas 8 jam ditangani otomatis oleh scheduler server & daemon lokal ketika Always-On aktif,
+    // sehingga tombol Auto-Restart tetap independen dan tidak menyala/tersangkut otomatis.
     const nextAutoOn: VmAutoOnSchedule | undefined =
       nextVal && vm.autoOn?.enabled && vm.autoOn.mode === "after_off"
         ? { ...vm.autoOn, enabled: false }
         : vm.autoOn
 
-    recordPendingMutation(
-      vm.id,
-      {
-        keepAliveEnabled: nextVal,
-        autoRestart: nextAutoRestart,
-        autoOn: nextAutoOn,
-      },
-      15000
-    )
-
-    const updatedVms = vms.map((v) =>
-      v.id === vm.id
-        ? {
-            ...v,
-            keepAliveEnabled: nextVal,
-            autoRestart: nextAutoRestart,
-            autoOn: nextAutoOn,
-          }
-        : v
-    )
-    persistVmChanges(updatedVms, false)
-
-    // Atomic dedicated update ke Core Service & ZimaOS (tanpa balapan saveVms penuh)
-    if (api.updateVm) {
-      void api.updateVm(
-        vm.id,
-        {
-          keepAliveEnabled: nextVal,
-          autoRestart: nextAutoRestart,
-          autoOn: nextAutoOn,
-        },
-        vm.serverId
-      ).catch((err) => {
-        console.warn("[VmManagerView] updateVm keepAlive error:", err)
-      })
-    } else {
-      persistVmChanges(updatedVms, true)
+    const patch: Partial<VirtualMachine> = {
+      keepAliveEnabled: nextVal,
+      ...(nextAutoOn !== undefined ? { autoOn: nextAutoOn } : {}),
     }
+
+    const ok = await persistSingleVmPatch(vm, patch)
+    if (!ok) return
 
     notify(
       nextVal
@@ -858,7 +1004,6 @@ export default function VmManagerView({ go }: ViewProps) {
       await handleTogglePower({
         ...vm,
         keepAliveEnabled: true,
-        autoRestart: nextAutoRestart,
         autoOn: nextAutoOn,
       })
     }
@@ -871,7 +1016,7 @@ export default function VmManagerView({ go }: ViewProps) {
       setAutoOnEnabled(vm.autoOn.enabled)
       setAutoOnMode(vm.autoOn.mode || "clock")
       setAutoOnClockTime(vm.autoOn.clockTime || "07:00")
-      setAutoOnDays(vm.autoOn.days && vm.autoOn.days.length > 0 ? vm.autoOn.days : [1, 2, 3, 4, 5, 6, 0])
+      setAutoOnDays(normalizeAutoOnDays(vm.autoOn.days))
       setAutoOnDelayVal(vm.autoOn.delayValue || 30)
       setAutoOnDelayUnit(vm.autoOn.delayUnit || "minutes")
     } else {
@@ -892,56 +1037,34 @@ export default function VmManagerView({ go }: ViewProps) {
     )
   }
 
-  const handleSaveAutoOn = (e: React.FormEvent) => {
+  const handleSaveAutoOn = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!autoOnVm) return
     const nextAutoOn: VmAutoOnSchedule = {
       enabled: autoOnEnabled,
       mode: autoOnMode,
       clockTime: autoOnClockTime || "07:00",
-      days: autoOnDays,
+      days: normalizeAutoOnDays(autoOnDays),
       delayValue: Math.max(1, Number(autoOnDelayVal) || 30),
       delayUnit: autoOnDelayUnit,
     }
     const disableKeepAlive = Boolean(autoOnEnabled && autoOnMode === "after_off" && autoOnVm.keepAliveEnabled)
     const nextKeepAlive = disableKeepAlive ? false : autoOnVm.keepAliveEnabled
 
-    recordPendingMutation(
-      autoOnVm.id,
+    const uiExtra: Partial<VirtualMachine> =
+      autoOnVm.status !== "running"
+        ? { sleepingSince: autoOnEnabled && autoOnMode === "after_off" ? Date.now() : (autoOnVm.sleepingSince || Date.now()) }
+        : { sleepingSince: undefined }
+
+    const ok = await persistSingleVmPatch(
+      autoOnVm,
       {
         autoOn: nextAutoOn,
         keepAliveEnabled: nextKeepAlive,
       },
-      15000
+      uiExtra
     )
-
-    const updated = vms.map((item) =>
-      item.id === autoOnVm.id
-        ? {
-            ...item,
-            autoOn: nextAutoOn,
-            keepAliveEnabled: nextKeepAlive,
-            sleepingSince: item.status !== "running" ? (item.sleepingSince || Date.now()) : undefined,
-          }
-        : item
-    )
-    persistVmChanges(updated, false)
-
-    // Atomic dedicated update ke Core Service & ZimaOS
-    if (api.updateVm) {
-      void api.updateVm(
-        autoOnVm.id,
-        {
-          autoOn: nextAutoOn,
-          keepAliveEnabled: nextKeepAlive,
-        },
-        autoOnVm.serverId
-      ).catch((err) => {
-        console.warn("[VmManagerView] updateVm autoOn error:", err)
-      })
-    } else {
-      persistVmChanges(updated, true)
-    }
+    if (!ok) return
 
     notify(
       language === "id"
@@ -974,6 +1097,8 @@ export default function VmManagerView({ go }: ViewProps) {
     const finalApiKey = formApiKey.trim()
     const targetId = editingVm ? editingVm.id : `vm-${Date.now()}`
     const targetServerId = formScope === "server" ? (editingVm?.serverId || activeServerId) : undefined
+    const tzInfo = getClientTimezoneInfo()
+    let pendingInitialSave: Promise<any> = Promise.resolve()
 
     if (editingVm) {
       const editPatch: Partial<VirtualMachine> = {
@@ -991,21 +1116,28 @@ export default function VmManagerView({ go }: ViewProps) {
         screenOpenTarget: formScreenOpenTarget,
         apiKey: finalApiKey || undefined,
         ip: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
+        ...tzInfo,
       }
-      recordPendingMutation(editingVm.id, editPatch, 15000)
-
-      const updated = vms.map((item) =>
-        item.id === editingVm.id ? { ...item, ...editPatch } : item
-      )
       const scopeChanged = editingVm.scope !== formScope
-      persistVmChanges(updated, scopeChanged)
-      if (!scopeChanged && api.updateVm) {
-        void api.updateVm(editingVm.id, editPatch, targetServerId).catch(() => {})
-      } else if (scopeChanged && api.migrateVm) {
-        void api.migrateVm(editingVm.id, formScope).catch(() => {})
+      if (scopeChanged) {
+        recordPendingMutation(editingVm.id, editPatch, 15000)
+        const updated = vms.map((item) =>
+          item.id === editingVm.id ? { ...item, ...editPatch } : item
+        )
+        pendingInitialSave = persistVmChanges(updated, true)
+        if (api.migrateVm) {
+          void api.migrateVm(editingVm.id, formScope).catch(() => {})
+        }
+        notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
+        setEditingVm(null)
+      } else {
+        void persistSingleVmPatch(editingVm, editPatch).then((ok) => {
+          if (ok) {
+            notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
+            setEditingVm(null)
+          }
+        })
       }
-      notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
-      setEditingVm(null)
     } else {
       const finalName = cleanName || (addVmTab === "instabox" ? "InstaBox-MicroVM" : "Linux-VPS")
       const newVm: VirtualMachine = {
@@ -1028,6 +1160,7 @@ export default function VmManagerView({ go }: ViewProps) {
         maxRuntimeMinutes: addVmTab === "instabox" ? 480 : undefined,
         idleTimeoutMinutes: addVmTab === "instabox" ? 30 : undefined,
         lastActive: language === "id" ? "Baru ditambahkan" : "Just added",
+        ...tzInfo,
         telemetry: {
           cpuPct: null,
           ramUsedBytes: null,
@@ -1039,15 +1172,17 @@ export default function VmManagerView({ go }: ViewProps) {
       pendingCreatedVmsRef.current.set(targetId, { expiresAt: Date.now() + 15000, vm: newVm })
       recordPendingMutation(targetId, newVm, 15000)
       const nextList = [...vms, newVm]
-      persistVmChanges(nextList, true)
+      pendingInitialSave = persistVmChanges(nextList, true)
       notify(language === "id" ? `${finalName} berhasil ditambahkan!` : `${finalName} added successfully!`, "success")
       setIsAddingVm(false)
     }
 
-    // Trigger immediate InstaBox cloud sync if API Key is configured
+    // Trigger immediate InstaBox cloud sync if API Key is configured (tunggu save awal selesai agar ID sudah terdaftar)
     if (finalApiKey && addVmTab === "instabox") {
       notify(language === "id" ? "Menyinkronkan data dengan InstaBox Cloud…" : "Syncing data with InstaBox Cloud…", "info")
-      api.syncInstaBoxVm({ apiKey: finalApiKey, vmName: cleanName, machineId: editingVm?.machineId, vmId: targetId }).then((res: any) => {
+      void pendingInitialSave.then(() =>
+        api.syncInstaBoxVm({ apiKey: finalApiKey, vmName: cleanName, machineId: editingVm?.machineId, vmId: targetId, scope: formScope, serverId: targetServerId })
+      ).then(async (res: any) => {
         if (res && res.success) {
           const stateStr = String(res.state || "").toLowerCase()
           const isRunning = stateStr === "running" || stateStr === "active" || stateStr === "starting" || stateStr === "resuming"
@@ -1070,7 +1205,7 @@ export default function VmManagerView({ go }: ViewProps) {
             )
           )
           if (api.updateVm) {
-            void api.updateVm(targetId, syncPatch, targetServerId).catch(() => {})
+            await api.updateVm(targetId, syncPatch, targetServerId).catch(() => {})
           }
           notify(language === "id" ? `Terhubung ke InstaBox: ${res.machineName || 'MicroVM'}! Metrik berhasil disinkronkan.` : `Connected to InstaBox: ${res.machineName || 'MicroVM'}! Metrics synced successfully.`, "success")
         } else if (res && res.error) {
@@ -1112,13 +1247,7 @@ export default function VmManagerView({ go }: ViewProps) {
   const executeOpenScreenTarget = (vm: VirtualMachine, targetMode: "window" | "browser", remember: boolean) => {
     const targetUrl = resolveVmScreenUrl(vm)
     if (remember) {
-      recordPendingMutation(vm.id, { screenOpenTarget: targetMode }, 15000)
-      setVms((prev) =>
-        prev.map((item) => (item.id === vm.id ? { ...item, screenOpenTarget: targetMode } : item))
-      )
-      if (api.updateVm) {
-        void api.updateVm(vm.id, { screenOpenTarget: targetMode }, vm.serverId).catch(() => {})
-      }
+      void persistSingleVmPatch(vm, { screenOpenTarget: targetMode })
     }
     if (targetMode === "window") {
       const winTitle = `${vm.name} - Virtual Screen`
@@ -1173,7 +1302,7 @@ export default function VmManagerView({ go }: ViewProps) {
       setSchedIntervalVal(vm.autoRestart.intervalValue || 6)
       setSchedIntervalUnit(vm.autoRestart.intervalUnit || "hours")
       setSchedClockTime(vm.autoRestart.clockTime || "04:00")
-      setSchedResetMode(vm.autoRestart.resetCycleMode || "pause_resume")
+      setSchedResetMode(normalizeResetCycleMode(vm.autoRestart.resetCycleMode || vm.autoRestart.resetMode))
     } else {
       setSchedEnabled(false)
       setSchedMode("interval")
@@ -1185,7 +1314,7 @@ export default function VmManagerView({ go }: ViewProps) {
   }
 
   // Save Auto-Restart schedule
-  const handleSaveSchedule = (e: React.FormEvent) => {
+  const handleSaveSchedule = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!schedulingVm) return
     const newSchedule: VmAutoRestartSchedule = {
@@ -1194,37 +1323,12 @@ export default function VmManagerView({ go }: ViewProps) {
       intervalValue: Number(schedIntervalVal) || 6,
       intervalUnit: schedIntervalUnit,
       clockTime: schedClockTime,
-      resetCycleMode: schedResetMode,
+      resetCycleMode: normalizeResetCycleMode(schedResetMode),
       lastExecuted: schedulingVm.autoRestart?.lastExecuted || "Never",
     }
 
-    recordPendingMutation(
-      schedulingVm.id,
-      {
-        autoRestart: newSchedule,
-      },
-      15000
-    )
-
-    const updated = vms.map((item) =>
-      item.id === schedulingVm.id ? { ...item, autoRestart: newSchedule } : item
-    )
-    persistVmChanges(updated, false)
-
-    // Atomic dedicated update ke Core Service & ZimaOS
-    if (api.updateVm) {
-      void api.updateVm(
-        schedulingVm.id,
-        {
-          autoRestart: newSchedule,
-        },
-        schedulingVm.serverId
-      ).catch((err) => {
-        console.warn("[VmManagerView] updateVm autoRestart error:", err)
-      })
-    } else {
-      persistVmChanges(updated, true)
-    }
+    const ok = await persistSingleVmPatch(schedulingVm, { autoRestart: newSchedule })
+    if (!ok) return
 
     notify(language === "id" ? `Jadwal Auto-Restart ${schedulingVm.name} disimpan!` : `Auto-Restart schedule for ${schedulingVm.name} saved!`, "success")
     setSchedulingVm(null)
@@ -1232,6 +1336,8 @@ export default function VmManagerView({ go }: ViewProps) {
 
   // Immediate 8-hour reset cycle for InstaBox
   const handleImmediateResetCycle = async (vm: VirtualMachine) => {
+    const prevStatus = vm.status
+    const prevRuntime = vm.runtimeMinutes
     notify(language === "id" ? `Memulai siklus reset limit 8 jam untuk ${vm.name}…` : `Starting 8-hour limit reset cycle for ${vm.name}…`, "info")
     lastSmartResetRef.current.set(vm.id, Date.now())
     recordPendingMutation(vm.id, { status: "sleeping", runtimeMinutes: 0 }, 25000)
@@ -1241,12 +1347,40 @@ export default function VmManagerView({ go }: ViewProps) {
       )
     )
     try {
-      await api.smartResetInstaBox({
+      const res = await api.smartResetInstaBox({
         apiKey: vm.apiKey,
         machineId: vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined),
         vmId: vm.id,
+        scope: vm.scope,
+        serverId: vm.serverId,
       })
-    } catch {}
+      if (!res || res.success === false || res.status === "error") {
+        pendingMutationsRef.current.delete(vm.id)
+        setVms((prev) =>
+          prev.map((item) =>
+            item.id === vm.id ? { ...item, status: prevStatus, runtimeMinutes: prevRuntime } : item
+          )
+        )
+        notify(
+          res?.message || res?.error ||
+            (language === "id" ? `Gagal melakukan smart reset pada ${vm.name}.` : `Failed to smart reset ${vm.name}.`),
+          "danger"
+        )
+        return
+      }
+    } catch (err: any) {
+      pendingMutationsRef.current.delete(vm.id)
+      setVms((prev) =>
+        prev.map((item) =>
+          item.id === vm.id ? { ...item, status: prevStatus, runtimeMinutes: prevRuntime } : item
+        )
+      )
+      notify(
+        language === "id" ? `Smart reset gagal: ${err?.message || String(err)}` : `Smart reset failed: ${err?.message || String(err)}`,
+        "danger"
+      )
+      return
+    }
     lastSmartResetRef.current.set(vm.id, Date.now())
     recordPendingMutation(vm.id, { status: "running", runtimeMinutes: 0 }, 15000)
     setVms((prev) =>
@@ -1274,7 +1408,7 @@ export default function VmManagerView({ go }: ViewProps) {
           let shouldWake = false
           if (vm.autoOn.mode === "clock") {
             const targetClock = vm.autoOn.clockTime || "07:00"
-            const activeDays = vm.autoOn.days || [0, 1, 2, 3, 4, 5, 6]
+            const activeDays = normalizeAutoOnDays(vm.autoOn.days)
             const lastTrig = vm.autoOn.lastTriggeredTimestamp || 0
             if (activeDays.includes(currentDay) && currentTimeStr === targetClock && now - lastTrig > 65000) {
               shouldWake = true
@@ -1294,6 +1428,8 @@ export default function VmManagerView({ go }: ViewProps) {
                 apiKey: vm.apiKey,
                 machineId: vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined),
                 vmId: vm.id,
+                scope: vm.scope,
+                serverId: vm.serverId,
               }).then((res: any) => {
                 if (res && res.status === "error") {
                   setVms((prev) =>

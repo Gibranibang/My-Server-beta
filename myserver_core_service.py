@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.7"
+APP_VERSION_NUMBER = "4.5.8"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3808,7 +3808,8 @@ def _prepare_vm_payload_for_backend(vm):
     # 3. Auto-On
     ao = p.get("autoOn")
     DAY_NUM_TO_STR = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
-    if isinstance(ao, dict):
+    if "autoOn" in p and isinstance(p["autoOn"], dict):
+        ao = p["autoOn"]
         if "enabled" in ao and ao["enabled"] is not None:
             p["auto_on_enabled"] = bool(ao.get("enabled"))
             p["autoOnEnabled"] = bool(ao.get("enabled"))
@@ -3831,7 +3832,204 @@ def _prepare_vm_payload_for_backend(vm):
     elif "autoOnEnabled" in p and p["autoOnEnabled"] is not None:
         p["auto_on_enabled"] = bool(p["autoOnEnabled"])
 
+    tz_name = p.get("scheduleTimezone") or p.get("schedule_timezone") or p.get("timezone")
+    if tz_name:
+        p["schedule_timezone"] = str(tz_name).strip()
+        p["scheduleTimezone"] = p["schedule_timezone"]
+    raw_tz_offset = p.get("tzOffsetMinutes") if p.get("tzOffsetMinutes") is not None else p.get("tz_offset_minutes")
+    if raw_tz_offset is not None:
+        try:
+            p["tz_offset_minutes"] = int(raw_tz_offset)
+            p["tzOffsetMinutes"] = int(raw_tz_offset)
+        except Exception:
+            pass
+
     return p
+
+
+def _normalize_day_indices(raw_days):
+    """Mengonversi daftar hari JS index [0..6] maupun singkatan ['Mon', ...] ke index integer [0..6]."""
+    str_to_num = {
+        "sun": 0, "min": 0, "minggu": 0, "sunday": 0, "0": 0,
+        "mon": 1, "sen": 1, "senin": 1, "monday": 1, "1": 1,
+        "tue": 2, "sel": 2, "selasa": 2, "tuesday": 2, "2": 2,
+        "wed": 3, "rab": 3, "rabu": 3, "wednesday": 3, "3": 3,
+        "thu": 4, "kam": 4, "kamis": 4, "thursday": 4, "4": 4,
+        "fri": 5, "jum": 5, "jumat": 5, "friday": 5, "5": 5,
+        "sat": 6, "sab": 6, "sabtu": 6, "saturday": 6, "6": 6,
+    }
+    if not isinstance(raw_days, list) or len(raw_days) == 0:
+        return [0, 1, 2, 3, 4, 5, 6]
+    out = []
+    for d in raw_days:
+        if isinstance(d, int) and 0 <= d <= 6:
+            if d not in out:
+                out.append(d)
+        else:
+            key = str(d).strip().lower()
+            if key in str_to_num and str_to_num[key] not in out:
+                out.append(str_to_num[key])
+    return out or [0, 1, 2, 3, 4, 5, 6]
+
+
+def _normalize_server_vm_entry(svm, srv):
+    """Menormalisasi properti camelCase/snake_case VM dari backend ZimaOS untuk UI & multi-device sync."""
+    svm["scope"] = "server"
+    svm["serverId"] = srv.get("id")
+    svm["serverName"] = srv.get("name")
+    if "keep_alive_enabled" in svm and "keepAliveEnabled" not in svm:
+        svm["keepAliveEnabled"] = bool(svm["keep_alive_enabled"])
+    if "api_key" in svm and "apiKey" not in svm:
+        svm["apiKey"] = svm["api_key"]
+    if "machine_id" in svm and "machineId" not in svm:
+        svm["machineId"] = svm["machine_id"]
+    if "runtime_minutes" in svm and "runtimeMinutes" not in svm:
+        svm["runtimeMinutes"] = svm["runtime_minutes"]
+    if "max_runtime_minutes" in svm and "maxRuntimeMinutes" not in svm:
+        svm["maxRuntimeMinutes"] = svm["max_runtime_minutes"]
+    if "schedule_timezone" in svm and "scheduleTimezone" not in svm:
+        svm["scheduleTimezone"] = svm["schedule_timezone"]
+    if "tz_offset_minutes" in svm and "tzOffsetMinutes" not in svm:
+        svm["tzOffsetMinutes"] = svm["tz_offset_minutes"]
+    if "auto_restart_enabled" in svm and "autoRestart" not in svm:
+        svm["autoRestart"] = {
+            "enabled": bool(svm.get("auto_restart_enabled")),
+            "mode": svm.get("auto_restart_mode", "interval"),
+            "intervalValue": svm.get("auto_restart_val", 7),
+            "intervalUnit": svm.get("auto_restart_unit", "hours"),
+            "clockTime": svm.get("auto_restart_time", "03:00"),
+            "resetCycleMode": svm.get("smart_reset_cycle", "sleep_2s"),
+        }
+    if "auto_on_enabled" in svm and "autoOn" not in svm:
+        svm["autoOn"] = {
+            "enabled": bool(svm.get("auto_on_enabled")),
+            "mode": svm.get("auto_on_mode", "clock"),
+            "clockTime": svm.get("auto_on_time", "07:00"),
+            "delayValue": svm.get("auto_on_delay_min", 60),
+            "delayUnit": svm.get("auto_on_delay_unit", "minutes"),
+            "days": svm.get("auto_on_days", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
+        }
+    _apply_recent_vm_mutation(svm)
+    return svm
+
+
+def _fetch_server_vms_from_backend(cfg, now_ts=None):
+    """Mengambil daftar VM server secara otoritatif dari ZimaOS Backend (mengembalikan (server_vms, server_online))."""
+    ts = now_ts if now_ts is not None else time.time()
+    srv = config_manager.get_active_server(cfg) if config_manager else None
+    backend_url = _get_active_server_backend_url(cfg)
+    server_vms = []
+    server_online = False
+    if srv and backend_url:
+        try:
+            ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=5.0, retries=1)
+            if ok and isinstance(data, dict):
+                server_online = True
+                for svm in (data.get("vms", []) or []):
+                    if not isinstance(svm, dict):
+                        continue
+                    if _deleted_vms_tombstone.get(svm.get("id"), 0) > ts:
+                        continue
+                    server_vms.append(_normalize_server_vm_entry(svm, srv))
+        except Exception as be:
+            logger_manager.log_debug(f"[api/vms] Gagal sync server VMs dari backend ZimaOS: {be}")
+    return server_vms, server_online
+
+
+def _execute_vm_update_operation(body):
+    """Menjalankan pembaruan VM secara atomik ke backend ZimaOS & config lokal. Return (http_status, response_dict)."""
+    vm_id = (body.get("vmId") or body.get("vm_id") or body.get("id") or "").strip()
+    if not vm_id:
+        return 400, {"status": "error", "success": False, "message": "vmId is required"}
+
+    updates = body.get("vm") or body.get("updates") or {}
+    if not isinstance(updates, dict):
+        updates = {}
+    server_id = (body.get("serverId") or updates.get("serverId") or "").strip()
+
+    cfg = config_manager.load_or_create_config()
+    local_vms = cfg.get("vms", []) or []
+    target_vm = next((v for v in local_vms if isinstance(v, dict) and v.get("id") == vm_id), None)
+
+    if not server_id and target_vm:
+        server_id = target_vm.get("serverId", "")
+
+    req_scope = str(updates.get("scope") or (target_vm.get("scope") if target_vm else "") or "").strip().lower()
+    is_server_scope = req_scope == "server" or bool(server_id) or (bool(target_vm) and bool(target_vm.get("serverId")))
+
+    merged_vm = dict(target_vm) if isinstance(target_vm, dict) else {"id": vm_id}
+    for k, val in updates.items():
+        merged_vm[k] = val
+
+    backend_url = _get_active_server_backend_url(cfg, target_server_id=server_id)
+    backend_updated = False
+    resp_data = None
+    last_err = None
+
+    if is_server_scope:
+        if not backend_url:
+            _recent_vm_mutations.pop(vm_id, None)
+            return 503, {
+                "status": "error",
+                "success": False,
+                "backend_updated": False,
+                "vmId": vm_id,
+                "message": "Server ZimaOS tidak terhubung atau offline.",
+            }
+        try:
+            b_payload = _prepare_vm_payload_for_backend(updates)
+            ok, data, code = _backend_http_request(
+                f"{backend_url}/api/v1/vms/{vm_id}",
+                method="PUT",
+                json_body=b_payload,
+                timeout=6.0,
+                retries=1,
+            )
+            if not ok and code == 404 and _deleted_vms_tombstone.get(vm_id, 0) <= time.time() and merged_vm.get("name"):
+                upsert_payload = _prepare_vm_payload_for_backend(merged_vm)
+                ok, data, code = _backend_http_request(
+                    f"{backend_url}/api/v1/vms",
+                    method="POST",
+                    json_body=upsert_payload,
+                    timeout=6.0,
+                    retries=1,
+                )
+            backend_updated = bool(ok)
+            resp_data = data
+            if not ok:
+                last_err = f"Backend ZimaOS HTTP {code}: {data}"
+                logger_manager.log_error(f"[/api/vms/update] Gagal update VM {vm_id} di ZimaOS: {last_err}")
+            else:
+                logger_manager.log_info(f"[/api/vms/update] VM {vm_id} berhasil diupdate di ZimaOS (code {code})")
+        except Exception as ue:
+            last_err = str(ue)
+            logger_manager.log_error(f"[/api/vms/update] Gagal update VM {vm_id} di server ZimaOS: {ue}")
+
+        if not backend_updated:
+            _recent_vm_mutations.pop(vm_id, None)
+            return 502, {
+                "status": "error",
+                "success": False,
+                "backend_updated": False,
+                "vmId": vm_id,
+                "message": f"Gagal menyinkronkan ke server ZimaOS: {last_err or 'Unknown error'}",
+            }
+
+    if target_vm and updates:
+        for k, val in updates.items():
+            target_vm[k] = val
+        config_manager.save_config(cfg)
+
+    if updates:
+        _record_recent_vm_mutation(vm_id, updates, ttl=12.0)
+
+    return 200, {
+        "status": "ok",
+        "success": True,
+        "backend_updated": backend_updated,
+        "vmId": vm_id,
+        "data": resp_data,
+    }
 
 
 def _parse_backend_semver(v_str):
@@ -22040,54 +22238,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     vm["scope"] = "local"
                 _apply_recent_vm_mutation(vm)
 
-            srv = config_manager.get_active_server(cfg)
-            backend_url = _get_active_server_backend_url(cfg)
-            server_vms = []
-            server_online = False
-            if srv and backend_url:
-                try:
-                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.5)
-                    if ok and isinstance(data, dict):
-                        server_online = True
-                        raw_server_vms = data.get("vms", [])
-                        for svm in raw_server_vms:
-                            if _deleted_vms_tombstone.get(svm.get("id"), 0) > now_ts:
-                                continue
-                            svm["scope"] = "server"
-                            svm["serverId"] = srv.get("id")
-                            svm["serverName"] = srv.get("name")
-                            if "keep_alive_enabled" in svm and "keepAliveEnabled" not in svm:
-                                svm["keepAliveEnabled"] = bool(svm["keep_alive_enabled"])
-                            if "api_key" in svm and "apiKey" not in svm:
-                                svm["apiKey"] = svm["api_key"]
-                            if "machine_id" in svm and "machineId" not in svm:
-                                svm["machineId"] = svm["machine_id"]
-                            if "runtime_minutes" in svm and "runtimeMinutes" not in svm:
-                                svm["runtimeMinutes"] = svm["runtime_minutes"]
-                            if "max_runtime_minutes" in svm and "maxRuntimeMinutes" not in svm:
-                                svm["maxRuntimeMinutes"] = svm["max_runtime_minutes"]
-                            if "auto_restart_enabled" in svm and "autoRestart" not in svm:
-                                svm["autoRestart"] = {
-                                    "enabled": bool(svm.get("auto_restart_enabled")),
-                                    "mode": svm.get("auto_restart_mode", "interval"),
-                                    "intervalValue": svm.get("auto_restart_val", 7),
-                                    "intervalUnit": svm.get("auto_restart_unit", "hours"),
-                                    "clockTime": svm.get("auto_restart_time", "03:00"),
-                                    "resetCycleMode": svm.get("smart_reset_cycle", "sleep_2s"),
-                                }
-                            if "auto_on_enabled" in svm and "autoOn" not in svm:
-                                svm["autoOn"] = {
-                                    "enabled": bool(svm.get("auto_on_enabled")),
-                                    "mode": svm.get("auto_on_mode", "clock"),
-                                    "clockTime": svm.get("auto_on_time", "07:00"),
-                                    "delayValue": svm.get("auto_on_delay_min", 60),
-                                    "delayUnit": svm.get("auto_on_delay_unit", "minutes"),
-                                    "days": svm.get("auto_on_days", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
-                                }
-                            _apply_recent_vm_mutation(svm)
-                            server_vms.append(svm)
-                except Exception as be:
-                    logger_manager.log_debug(f"[api/vms] Gagal sync server VMs dari backend ZimaOS: {be}")
+            server_vms, server_online = _fetch_server_vms_from_backend(cfg, now_ts)
 
             seen_ids = set()
             combined = []
@@ -29060,7 +29211,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             server_deleted = False
             if backend_url:
                 try:
-                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0, retries=1)
+                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=5.0, retries=1)
                     server_deleted = ok
                     logger_manager.log_info(f"[/api/vms/delete] VM {vm_id} berhasil dihapus dari ZimaOS: {ok} (code {code})")
                 except Exception as de:
@@ -29070,45 +29221,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             return
 
         if path in ("/api/vms/update", "/api/vms_update"):
-            vm_id = (body.get("vmId") or body.get("vm_id") or body.get("id") or "").strip()
-            if not vm_id:
-                self._send_json({"status": "error", "message": "vmId is required"}, status=400)
-                return
-
-            updates = body.get("vm") or body.get("updates") or {}
-            server_id = (body.get("serverId") or updates.get("serverId") or "").strip()
-
-            if isinstance(updates, dict):
-                _record_recent_vm_mutation(vm_id, updates, ttl=12.0)
-
-            cfg = config_manager.load_or_create_config()
-            local_vms = cfg.get("vms", []) or []
-            target_vm = next((v for v in local_vms if isinstance(v, dict) and v.get("id") == vm_id), None)
-
-            if not server_id and target_vm:
-                server_id = target_vm.get("serverId", "")
-
-            # Perbarui config lokal
-            if target_vm and isinstance(updates, dict):
-                for k, val in updates.items():
-                    target_vm[k] = val
-                config_manager.save_config(cfg)
-
-            # Teruskan update secara atomik ke backend ZimaOS
-            backend_url = _get_active_server_backend_url(cfg, target_server_id=server_id)
-            backend_updated = False
-            resp_data = None
-            if backend_url:
-                try:
-                    b_payload = _prepare_vm_payload_for_backend(updates)
-                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="PUT", json_body=b_payload, timeout=3.0)
-                    backend_updated = ok
-                    resp_data = data
-                    logger_manager.log_info(f"[/api/vms/update] VM {vm_id} berhasil diupdate di ZimaOS: {ok} (code {code})")
-                except Exception as ue:
-                    logger_manager.log_error(f"[/api/vms/update] Gagal update VM {vm_id} di server ZimaOS: {ue}")
-
-            self._send_json({"status": "ok", "success": True, "backend_updated": backend_updated, "vmId": vm_id, "data": resp_data})
+            http_status, resp_body = _execute_vm_update_operation(body)
+            self._send_json(resp_body, status=http_status)
             return
 
         if path in ("/api/vms", "/api/vms/load"):
@@ -29141,27 +29255,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         vm["scope"] = "local"
                     _apply_recent_vm_mutation(vm)
 
-                srv = config_manager.get_active_server(cfg)
-                backend_url = _get_active_server_backend_url(cfg)
-                server_vms = []
-                server_online = False
-                if srv and backend_url:
-                    try:
-                        ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.5)
-                        if ok and isinstance(data, dict):
-                            server_online = True
-                            raw_server_vms = data.get("vms", [])
-                            for svm in raw_server_vms:
-                                # Lindungi dari tombstone penghapusan multi-perangkat
-                                if _deleted_vms_tombstone.get(svm.get("id"), 0) > time.time():
-                                    continue
-                                svm["scope"] = "server"
-                                svm["serverId"] = srv.get("id")
-                                svm["serverName"] = srv.get("name")
-                                _apply_recent_vm_mutation(svm)
-                                server_vms.append(svm)
-                    except Exception as be:
-                        logger_manager.log_debug(f"[api/vms/load] Info: Server VMs belum tersedia dari backend ZimaOS: {be}")
+                server_vms, server_online = _fetch_server_vms_from_backend(cfg, now_ts)
 
                 seen_ids = set()
                 combined = []
@@ -29233,7 +29327,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     # Isolasi: VM yang dulu scope server tapi kini lokal / dihapus harus hilang dari ZimaOS
                     for gone_id in (prev_server_ids - new_server_ids):
                         try:
-                            _backend_http_request(f"{backend_url}/api/v1/vms/{gone_id}", method="DELETE", timeout=3.0)
+                            _backend_http_request(f"{backend_url}/api/v1/vms/{gone_id}", method="DELETE", timeout=5.0, retries=1)
                             logger_manager.log_info(f"[api/vms/save] VM {gone_id} dihapus dari server ZimaOS")
                         except Exception as de:
                             logger_manager.log_debug(f"[api/vms/save] Gagal hapus VM {gone_id} di server: {de}")
@@ -29244,7 +29338,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             try:
                                 b_payload = _prepare_vm_payload_for_backend(vm)
                                 target_srv_url = _get_active_server_backend_url(cfg, target_server_id=vm.get("serverId")) or backend_url
-                                _backend_http_request(f"{target_srv_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=2.5)
+                                _backend_http_request(f"{target_srv_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=5.0, retries=1)
                             except Exception as be:
                                 logger_manager.log_debug(f"[api/vms/save] Gagal sync server VM {vid}: {be}")
 
@@ -29449,13 +29543,15 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             all_vms = (cfg.get("vms", []) or []) + (cfg.get("instabox_vms", []) or [])
 
             # Isolasi: VM scope server dieksekusi oleh backend ZimaOS, bukan dari PC ini
-            if _find_server_vm(cfg, vm_id):
+            req_scope = str(body.get("scope") or "").strip().lower()
+            req_server_id = (body.get("serverId") or "").strip() or None
+            if _find_server_vm(cfg, vm_id) or req_scope == "server" or bool(req_server_id):
                 srv_action = "wake" if action_type == "resume" else "sleep"
                 patch_data = {"status": new_status}
                 if new_status != "running":
                     patch_data["runtimeMinutes"] = 0
                 _record_recent_vm_mutation(vm_id, patch_data, ttl=15.0)
-                ok, data, code = _proxy_server_vm_action(cfg, vm_id, srv_action)
+                ok, data, code = _proxy_server_vm_action(cfg, vm_id, srv_action, target_server_id=req_server_id)
                 if ok:
                     for v in cfg.get("vms", []):
                         if isinstance(v, dict) and v.get("id") == vm_id:
@@ -29586,9 +29682,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             machine_id = (body.get("machineId") or "").strip()
             vm_id = body.get("id") or body.get("vmId")
             _sr_cfg = config_manager.load_or_create_config() if config_manager else {}
-            if _find_server_vm(_sr_cfg, vm_id):
+            _sr_scope = str(body.get("scope") or "").strip().lower()
+            _sr_srv_id = (body.get("serverId") or "").strip() or None
+            if _find_server_vm(_sr_cfg, vm_id) or _sr_scope == "server" or bool(_sr_srv_id):
                 _record_recent_vm_mutation(vm_id, {"status": "running", "runtimeMinutes": 0, "_lastResetAt": time.time()}, ttl=25.0)
-                ok, data, code = _proxy_server_vm_action(_sr_cfg, vm_id, "smart-reset", timeout=60.0)
+                ok, data, code = _proxy_server_vm_action(_sr_cfg, vm_id, "smart-reset", timeout=60.0, target_server_id=_sr_srv_id)
                 if ok:
                     for v in _sr_cfg.get("vms", []):
                         if isinstance(v, dict) and v.get("id") == vm_id:
@@ -29650,8 +29748,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
         if path == "/api/instabox/sync":
             _sy_vm_id = (body.get("vmId") or "").strip()
             _sy_cfg = config_manager.load_or_create_config() if config_manager else {}
-            if _find_server_vm(_sy_cfg, _sy_vm_id):
-                ok, data, code = _proxy_server_vm_action(_sy_cfg, _sy_vm_id, "sync", timeout=20.0)
+            _sy_scope = str(body.get("scope") or "").strip().lower()
+            _sy_srv_id = (body.get("serverId") or "").strip() or None
+            if _find_server_vm(_sy_cfg, _sy_vm_id) or _sy_scope == "server" or bool(_sy_srv_id):
+                ok, data, code = _proxy_server_vm_action(_sy_cfg, _sy_vm_id, "sync", timeout=20.0, target_server_id=_sy_srv_id)
                 if ok and isinstance(data, dict):
                     _apply_recent_vm_mutation(data)
                     st = str(data.get("status") or "").lower()
@@ -32916,15 +33016,18 @@ def _find_server_vm(cfg, vm_id):
     return None
 
 
-def _proxy_server_vm_action(cfg, vm_id, action, timeout=40.0):
+def _proxy_server_vm_action(cfg, vm_id, action, timeout=40.0, target_server_id=None):
     """Meneruskan aksi VM ke backend ZimaOS. Return (ok, data_or_error, http_status)."""
-    backend_url = _get_active_server_backend_url(cfg)
+    backend_url = _get_active_server_backend_url(cfg, target_server_id=target_server_id)
     if not backend_url:
         return False, "Server ZimaOS tidak terhubung atau offline. VM server hanya bisa dikontrol lewat server.", 503
     url = f"{backend_url}/api/v1/vms/{vm_id}/{action}"
     ok, data, code = _backend_http_request(url, method="POST", json_body={}, timeout=timeout, retries=1)
     if not ok:
         return False, f"Backend ZimaOS ({code}): {data}", code
+    if isinstance(data, dict) and str(data.get("status") or "").lower() == "error":
+        err_msg = data.get("message") or data.get("detail") or f"Aksi '{action}' gagal pada backend ZimaOS."
+        return False, err_msg, 502
     return True, data, code
 
 
@@ -33111,9 +33214,7 @@ def vm_power_scheduler_loop():
                         last_trig = int(auto_on.get("lastTriggeredAt") or 0)
                         if mode_on == "clock":
                             target_hhmm = str(auto_on.get("clockTime") or "07:00")
-                            active_days = auto_on.get("days")
-                            if not isinstance(active_days, list) or len(active_days) == 0:
-                                active_days = [0, 1, 2, 3, 4, 5, 6]
+                            active_days = _normalize_day_indices(auto_on.get("days"))
                             if curr_hhmm == target_hhmm and curr_day_js in active_days and (now_ms - last_trig > 65000):
                                 should_wake = True
                         elif mode_on == "after_off":

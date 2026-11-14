@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.9"
+APP_VERSION_NUMBER = "4.5.10"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3885,8 +3885,14 @@ def _normalize_server_vm_entry(svm, srv):
         svm["machineId"] = svm["machine_id"]
     if "runtime_minutes" in svm and "runtimeMinutes" not in svm:
         svm["runtimeMinutes"] = svm["runtime_minutes"]
-    if "max_runtime_minutes" in svm and "maxRuntimeMinutes" not in svm:
+    if "max_runtime_minutes" in svm and svm["max_runtime_minutes"] is not None and "maxRuntimeMinutes" not in svm:
         svm["maxRuntimeMinutes"] = svm["max_runtime_minutes"]
+    elif "runtime_limit_hours" in svm and svm["runtime_limit_hours"] is not None and "maxRuntimeMinutes" not in svm:
+        try:
+            rlh = int(svm["runtime_limit_hours"])
+            svm["maxRuntimeMinutes"] = -1 if rlh < 0 else (480 if rlh == 0 else rlh * 60)
+        except Exception:
+            pass
     if "schedule_timezone" in svm and "scheduleTimezone" not in svm:
         svm["scheduleTimezone"] = svm["schedule_timezone"]
     if "tz_offset_minutes" in svm and "tzOffsetMinutes" not in svm:
@@ -4015,6 +4021,8 @@ def _execute_vm_update_operation(body):
                 "message": f"Gagal menyinkronkan ke server ZimaOS: {last_err or 'Unknown error'}",
             }
 
+    prev_keep_alive = bool(target_vm.get("keepAliveEnabled")) if isinstance(target_vm, dict) else False
+
     if target_vm and updates:
         for k, val in updates.items():
             target_vm[k] = val
@@ -4022,6 +4030,26 @@ def _execute_vm_update_operation(body):
 
     if updates:
         _record_recent_vm_mutation(vm_id, updates, ttl=12.0)
+
+    if not is_server_scope and ("keepAliveEnabled" in updates or "keep_alive_enabled" in updates):
+        ka_now = bool(merged_vm.get("keepAliveEnabled") if "keepAliveEnabled" in merged_vm else merged_vm.get("keep_alive_enabled"))
+        if ka_now != prev_keep_alive and merged_vm.get("provider", "instabox") == "instabox":
+            ka_key = str(merged_vm.get("apiKey") or "").strip()
+            ka_mid = str(merged_vm.get("machineId") or "").strip()
+            ka_status = str(merged_vm.get("status") or "").lower()
+            if ka_key and ka_mid:
+                if ka_now and ka_status == "running":
+                    threading.Thread(
+                        target=_instabox_maintain_keepalive,
+                        args=(ka_key, ka_mid, vm_id, True),
+                        daemon=True,
+                    ).start()
+                elif not ka_now:
+                    threading.Thread(
+                        target=_instabox_release_lease,
+                        args=(ka_key, ka_mid, vm_id),
+                        daemon=True,
+                    ).start()
 
     return 200, {
         "status": "ok",
@@ -29693,6 +29721,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 "Idempotency-Key": str(uuid.uuid4())
             }
             try:
+                if action_type == "suspend":
+                    try:
+                        _instabox_release_lease(api_key, machine_id, vm_id)
+                    except Exception:
+                        pass
                 req = urllib.request.Request(req_url, data=b"{}", headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=12) as resp:
                     raw_b = resp.read()
@@ -29706,11 +29739,13 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
                 # Update status secara persisten di config
                 changed = False
+                ka_enabled_local = False
                 for v in cfg.get("vms", []):
                     if isinstance(v, dict) and (v.get("id") == vm_id or v.get("machineId") == machine_id):
                         v["status"] = new_status
                         v["machineId"] = machine_id
                         v["apiKey"] = api_key
+                        ka_enabled_local = ka_enabled_local or bool(v.get("keepAliveEnabled"))
                         if new_status != "running":
                             v["runtimeMinutes"] = 0
                             v["sleepingSince"] = int(time.time() * 1000)
@@ -29720,6 +29755,12 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         changed = True
                 if changed and config_manager:
                     config_manager.save_config(cfg)
+                if action_type == "resume" and ka_enabled_local:
+                    threading.Thread(
+                        target=_instabox_maintain_keepalive,
+                        args=(api_key, machine_id, vm_id or machine_id, True),
+                        daemon=True,
+                    ).start()
 
                 self._send_json({
                     "status": "ok",
@@ -29922,6 +29963,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
                     is_running = state in ("running", "active")
 
+                    raw_max_run = target.get("maxRunMinutes")
+                    if raw_max_run is not None:
+                        try:
+                            max_run_int = int(raw_max_run)
+                            max_run_mins = -1 if max_run_int < 0 else max(1, max_run_int)
+                        except Exception:
+                            max_run_mins = 480
+                    else:
+                        max_run_mins = 480
+
                     # v4.5.2+ Beta: Ekstraksi durasi runtime riil dari seluruh kemungkinan field InstaBox
                     runtime_mins = 0
                     if is_running:
@@ -29941,11 +29992,13 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                                         if reset_dt > dt:
                                             dt = reset_dt
                                     now = datetime.datetime.now(datetime.timezone.utc)
-                                    runtime_mins = max(0, min(480, int((now - dt).total_seconds() / 60)))
+                                    raw_mins = max(0, int((now - dt).total_seconds() / 60))
+                                    runtime_mins = min(max_run_mins, raw_mins) if max_run_mins > 0 else raw_mins
                                 except Exception:
                                     runtime_mins = int((existing_local_vm or {}).get("runtimeMinutes") or 0)
                             elif run_secs and run_secs > 0:
-                                runtime_mins = max(0, min(480, int(run_secs // 60)))
+                                raw_mins = max(0, int(run_secs // 60))
+                                runtime_mins = min(max_run_mins, raw_mins) if max_run_mins > 0 else raw_mins
                             else:
                                 # Pertahankan runtimeMinutes sebelumnya jika API tidak mengembalikan runStartedAt
                                 runtime_mins = int((existing_local_vm or {}).get("runtimeMinutes") or 0)
@@ -30029,7 +30082,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         existing_local_vm["machineId"] = mid
                         existing_local_vm["status"] = "running" if is_running else "sleeping"
                         existing_local_vm["runtimeMinutes"] = runtime_mins
-                        existing_local_vm["maxRuntimeMinutes"] = target.get("maxRunMinutes", 480)
+                        existing_local_vm["maxRuntimeMinutes"] = max_run_mins
                         existing_local_vm["sshHost"] = conn_host or "ssh.instabox.sh"
                         existing_local_vm["sshPort"] = conn_port or 2222
                         existing_local_vm["sshUser"] = conn_user or mid
@@ -30042,7 +30095,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         "machineName": target.get("name"),
                         "state": state,
                         "runtimeMinutes": runtime_mins,
-                        "maxRuntimeMinutes": target.get("maxRunMinutes", 480),
+                        "maxRuntimeMinutes": max_run_mins,
                         "idleTimeoutMinutes": int(target.get("autoSuspendAfterSeconds", 1800) / 60),
                         "screenUrl": f"https://dashboard.instabox.sh/machines/{mid}",
                         "sshHost": conn_host or "ssh.instabox.sh",
@@ -33072,7 +33125,83 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 _vm_daemon_state = {
     "last_keepalive": {},
     "last_heartbeat": {},
+    "last_lease": {},
+    "last_exec": {},
 }
+
+_INSTABOX_LEASE_TASK_ID = "myserver-always-on"
+_INSTABOX_LEASE_TTL_SEC = 600
+_INSTABOX_LEASE_RENEW_SEC = 120.0
+_INSTABOX_EXEC_KEEPALIVE_SEC = 180.0
+
+
+def _instabox_lease_request(api_key, machine_id, method="PUT", ttl_seconds=_INSTABOX_LEASE_TTL_SEC):
+    if not api_key or not machine_id:
+        return False
+    req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/activity-leases/{_INSTABOX_LEASE_TASK_ID}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Idempotency-Key": str(uuid.uuid4()),
+        "User-Agent": f"MyServer-Companion/{APP_VERSION_NUMBER}",
+    }
+    body = None
+    if method == "PUT":
+        headers["Content-Type"] = "application/json"
+        body = json.dumps({"ttlSeconds": max(30, min(3600, int(ttl_seconds)))}).encode("utf-8")
+    req = urllib.request.Request(req_url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except urllib.error.HTTPError as he:
+        if method == "DELETE" and he.code == 404:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _instabox_exec_keepalive(api_key, machine_id):
+    if not api_key or not machine_id:
+        return False
+    req_url = f"https://api.instabox.sh/v1/machines/{machine_id}/exec"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Idempotency-Key": str(uuid.uuid4()),
+        "User-Agent": f"MyServer-Companion/{APP_VERSION_NUMBER}",
+    }
+    req = urllib.request.Request(req_url, data=b'{"cmd": "true"}', headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except Exception:
+        return False
+
+
+def _instabox_release_lease(api_key, machine_id, vm_id=None):
+    if vm_id:
+        _vm_daemon_state["last_lease"].pop(vm_id, None)
+        _vm_daemon_state["last_exec"].pop(vm_id, None)
+    return _instabox_lease_request(api_key, machine_id, method="DELETE")
+
+
+def _instabox_maintain_keepalive(api_key, machine_id, vm_id, force=False):
+    res = {"lease_sent": False, "exec_sent": False}
+    if not api_key or not machine_id:
+        return res
+    now_ts = time.time()
+    key = str(vm_id or machine_id)
+    if force or (now_ts - _vm_daemon_state["last_lease"].get(key, 0.0) >= _INSTABOX_LEASE_RENEW_SEC):
+        if _instabox_lease_request(api_key, machine_id, method="PUT", ttl_seconds=_INSTABOX_LEASE_TTL_SEC):
+            _vm_daemon_state["last_lease"][key] = now_ts
+            res["lease_sent"] = True
+    if force or (now_ts - _vm_daemon_state["last_exec"].get(key, 0.0) >= _INSTABOX_EXEC_KEEPALIVE_SEC):
+        if _instabox_exec_keepalive(api_key, machine_id):
+            _vm_daemon_state["last_exec"][key] = now_ts
+            res["exec_sent"] = True
+    return res
 
 def _find_server_vm(cfg, vm_id):
     """Mengembalikan VM ber-scope server dari config lokal (None jika bukan VM server)."""
@@ -33200,18 +33329,34 @@ def vm_power_scheduler_loop():
                                             vm.pop("sleepingSince", None)
                                             patch["sleepingSince"] = None
 
-                                    # Ambil detail mesin bila runStartedAt tidak disertakan di endpoint list
+                                    # Ambil detail mesin bila runStartedAt atau maxRunMinutes tidak disertakan di endpoint list
+                                    raw_max_run = target.get("maxRunMinutes")
                                     run_started = target.get("runStartedAt")
-                                    if not run_started and mid and real_status == "running":
+                                    if (not run_started or raw_max_run is None) and mid:
                                         try:
                                             d_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{mid}", headers=headers)
                                             with urllib.request.urlopen(d_req, timeout=6) as d_resp:
                                                 d_json = json.loads(d_resp.read().decode("utf-8") or "{}")
                                                 d_obj = d_json.get("machine", d_json) if isinstance(d_json, dict) else {}
                                                 if isinstance(d_obj, dict):
-                                                    run_started = d_obj.get("runStartedAt")
+                                                    if not run_started:
+                                                        run_started = d_obj.get("runStartedAt")
+                                                    if raw_max_run is None:
+                                                        raw_max_run = d_obj.get("maxRunMinutes")
                                         except Exception:
                                             pass
+
+                                    if raw_max_run is not None:
+                                        try:
+                                            raw_max_int = int(raw_max_run)
+                                            max_run_mins = -1 if raw_max_int < 0 else max(1, raw_max_int)
+                                        except Exception:
+                                            max_run_mins = int(vm.get("maxRuntimeMinutes") if vm.get("maxRuntimeMinutes") is not None else 480)
+                                    else:
+                                        max_run_mins = int(vm.get("maxRuntimeMinutes") if vm.get("maxRuntimeMinutes") is not None else 480)
+                                    if vm.get("maxRuntimeMinutes") != max_run_mins:
+                                        vm["maxRuntimeMinutes"] = max_run_mins
+                                        patch["maxRuntimeMinutes"] = max_run_mins
 
                                     runtime_mins = int(vm.get("runtimeMinutes") or 0)
                                     if real_status != "running":
@@ -33227,7 +33372,8 @@ def vm_power_scheduler_loop():
                                                 reset_dt = datetime.datetime.fromtimestamp(last_reset_ms / 1000.0, tz=datetime.timezone.utc)
                                                 if reset_dt > dt:
                                                     dt = reset_dt
-                                            runtime_mins = max(0, min(480, int((datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() / 60)))
+                                            raw_mins = max(0, int((datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() / 60))
+                                            runtime_mins = min(max_run_mins, raw_mins) if max_run_mins > 0 else raw_mins
                                             vm["runtimeMinutes"] = runtime_mins
                                             patch["runtimeMinutes"] = runtime_mins
                                         except Exception:
@@ -33238,39 +33384,26 @@ def vm_power_scheduler_loop():
                                         if real_status != "running" and mid:
                                             logger_manager.log_info(f"[VMDaemon] Always-On aktif: membangunkan VM InstaBox {vm.get('name')} ({mid})")
                                             _instabox_api_action(api_key, mid, "resume")
+                                            _instabox_maintain_keepalive(api_key, mid, vm_id, force=True)
                                             vm["status"] = "running"
                                             vm.pop("sleepingSince", None)
                                             patch["status"] = "running"
                                             patch["sleepingSince"] = None
                                         elif real_status == "running" and mid:
-                                            if runtime_mins >= 450:
-                                                logger_manager.log_info(f"[VMDaemon] Always-On 8h guard: mereset siklus runtime VM {vm.get('name')} ({mid})")
+                                            if max_run_mins > 0 and runtime_mins >= max(30, max_run_mins - 5):
+                                                logger_manager.log_info(f"[VMDaemon] Always-On runtime guard ({max_run_mins}m): mereset siklus runtime VM {vm.get('name')} ({mid})")
+                                                _instabox_release_lease(api_key, mid, vm_id)
                                                 _instabox_api_action(api_key, mid, "suspend")
                                                 time.sleep(5.0)
                                                 _instabox_api_action(api_key, mid, "resume")
+                                                _instabox_maintain_keepalive(api_key, mid, vm_id, force=True)
                                                 vm["runtimeMinutes"] = 0
                                                 vm["lastResetAt"] = int(time.time() * 1000)
                                                 patch["runtimeMinutes"] = 0
                                                 patch["lastResetAt"] = vm["lastResetAt"]
                                             else:
-                                                # Anti-idle heartbeat setiap 10 menit (600 detik)
-                                                last_hb = _vm_daemon_state["last_heartbeat"].get(vm_id, 0.0)
-                                                if now_ts - last_hb >= 600.0:
-                                                    _vm_daemon_state["last_heartbeat"][vm_id] = now_ts
-                                                    try:
-                                                        ci_req = urllib.request.Request(f"https://api.instabox.sh/v1/machines/{mid}/connection-info", headers=headers)
-                                                        with urllib.request.urlopen(ci_req, timeout=6) as ci_resp:
-                                                            ci_data = json.loads(ci_resp.read().decode("utf-8") or "{}")
-                                                            c_host = ci_data.get("host") or vm.get("sshHost") or "ssh.instabox.sh"
-                                                            c_port = int(ci_data.get("port") or vm.get("sshPort") or 2222)
-                                                        with socket.create_connection((c_host, c_port), timeout=4.0) as s:
-                                                            s.settimeout(2.0)
-                                                            try:
-                                                                _ = s.recv(64)
-                                                            except Exception:
-                                                                pass
-                                                    except Exception:
-                                                        pass
+                                                # Akuisisi Activity Lease + eksekusi perintah /exec berkala agar InstaBox tidak menganggap VM idle
+                                                _instabox_maintain_keepalive(api_key, mid, vm_id)
                         except Exception as e_ka:
                             logger_manager.log_debug(f"[VMDaemon] InstaBox sync/keepalive warning ({vm.get('name')}): {e_ka}")
 

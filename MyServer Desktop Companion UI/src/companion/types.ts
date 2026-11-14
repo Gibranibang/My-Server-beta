@@ -74,7 +74,7 @@ export interface VirtualMachine {
     storage?: string
   }
   runtimeMinutes?: number // minutes running today
-  maxRuntimeMinutes?: number // 480 min (8 hours)
+  maxRuntimeMinutes?: number // batas sesi runtime dalam menit (-1 = unlimited)
   idleTimeoutMinutes?: number // 30 min
   cooldownRemainingMinutes?: number
   lastActive?: string

@@ -1,5 +1,12 @@
 # Changelog MyServer Desktop
 
+## [v4.5.10 - Beta] - 2026-11-14
+
+- Anti-Idle Nyata Fitur Always-On InstaBox (Backend v1.2.8 & Daemon Lokal): Menambahkan akuisisi/perpanjangan InstaBox Activity Lease resmi (`PUT /v1/machines/{id}/activity-leases/myserver-always-on`, TTL 600s diperpanjang tiap 120s) dan eksekusi perintah nyata ringan di dalam VM (`POST /v1/machines/{id}/exec` `{"cmd": "true"}` tiap 180s) saat VM berstatus running — menggantikan logika lama yang hanya membangunkan VM setelah telanjur di-suspend idle ~30 menit atau sekadar membaca banner TCP port 2222 tanpa autentikasi.
+- Siklus Lease Bersih Saat Toggle & Manual Sleep: Mengakuisisi lease secara instan ketika Always-On diaktifkan atau VM dibangunkan via POST/PUT `/api/v1/vms` maupun endpoint lokal `/api/instabox/wake`, serta melepaskan lease (`DELETE /activity-leases/myserver-always-on`) saat Always-On dimatikan atau VM ditidurkan manual.
+- Penanganan Batas Runtime Nyata & Paket Unlimited (-1): Memperbaiki bug pada `vm_scheduler.py`, `database.py`, dan `myserver_core_service.py` yang sebelumnya mengubah `maxRunMinutes = -1` (unlimited) menjadi `runtime_limit_hours = 1` (memicu Smart Reset palsu setiap 55 menit dan menjepit `runtime_minutes` ke 0), kini menambahkan kolom `max_runtime_minutes` presisi yang mendukung `-1` maupun batas kustom (mis. 120 menit).
+- Keselarasan Tampilan Persentase & Batas Runtime UI (`VmManagerView.tsx`): Menghapus teks hardcoded `/ 8h runtime` sehingga kartu VM kini menampilkan batas durasi dinamis sesuai paket mesin sebenarnya (mis. `/ 2j runtime` saat `maxRuntimeMinutes = 120` selaras dengan `23% terpakai`, atau `∞ Tanpa Batas` untuk paket unlimited) dan menyesuaikan ambang reset lokal mengikuti `maxRuntimeMinutes`.
+
 ## [v4.5.9 - Beta] - 2026-11-14
 
 - Verifikasi Restart Nyata & Anti-Sukses Palsu (Bug 1): Endpoint /health dan /api/v1/system/update backend kini menyertakan boot_id unik per proses; Core Service (handle_remote_backend_action) menunggu jeda awal 2,5 detik lalu mem-polling /health hingga 30 detik (15 x 2,0 detik), menolak respons lama pra-restart yang memiliki boot_id atau versi lama identik, tidak pernah lagi memalsukan status online/versi saat backend gagal menyala kembali, serta otomatis melakukan failover ke instalasi SSH jika kredensial admin tersedia.

@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.10",
+        "channel": "Beta",
+        "date": "2026-11-14",
+        "title": "Perbaikan Nyata Anti-Idle Always-On InstaBox (Activity Lease + /exec), Penanganan maxRunMinutes Unlimited (-1), & Backend v1.2.8",
+        "notes": [
+            "Anti-Idle Nyata Fitur Always-On InstaBox (Backend v1.2.8 & Daemon Lokal): Menambahkan akuisisi/perpanjangan InstaBox Activity Lease resmi (`PUT /v1/machines/{id}/activity-leases/myserver-always-on`, TTL 600s diperpanjang tiap 120s) dan eksekusi perintah nyata ringan di dalam VM (`POST /v1/machines/{id}/exec` `{\"cmd\": \"true\"}` tiap 180s) saat VM berstatus running — menggantikan logika lama yang hanya membangunkan VM setelah telanjur di-suspend idle ~30 menit atau sekadar membaca banner TCP port 2222 tanpa autentikasi.",
+            "Siklus Lease Bersih Saat Toggle & Manual Sleep: Mengakuisisi lease secara instan ketika Always-On diaktifkan atau VM dibangunkan via POST/PUT `/api/v1/vms` maupun endpoint lokal `/api/instabox/wake`, serta melepaskan lease (`DELETE /activity-leases/myserver-always-on`) saat Always-On dimatikan atau VM ditidurkan manual.",
+            "Penanganan Batas Runtime Nyata & Paket Unlimited (-1): Memperbaiki bug pada `vm_scheduler.py`, `database.py`, dan `myserver_core_service.py` yang sebelumnya mengubah `maxRunMinutes = -1` (unlimited) menjadi `runtime_limit_hours = 1` (memicu Smart Reset palsu setiap 55 menit dan menjepit `runtime_minutes` ke 0), kini menambahkan kolom `max_runtime_minutes` presisi yang mendukung `-1` maupun batas kustom (mis. 120 menit).",
+            "Keselarasan Tampilan Persentase & Batas Runtime UI (`VmManagerView.tsx`): Menghapus teks hardcoded `/ 8h runtime` sehingga kartu VM kini menampilkan batas durasi dinamis sesuai paket mesin sebenarnya (mis. `/ 2j runtime` saat `maxRuntimeMinutes = 120` selaras dengan `23% terpakai`, atau `∞ Tanpa Batas` untuk paket unlimited) dan menyesuaikan ambang reset lokal mengikuti `maxRuntimeMinutes`."
+        ],
+        "features": [
+            "Always-On Nyata via InstaBox Activity Lease (PUT) + Perintah In-VM `/exec` (v1.2.8)",
+            "Pelepasan Lease Otomatis Saat Manual Sleep / Toggle Off",
+            "Dukungan Presisi `maxRunMinutes` (-1 Unlimited & Kustom) Tanpa Reset 55m Palsu",
+            "Tampilan UI Kartu VM Dinamis Selaras dengan Persentase Runtime Nyata"
+        ]
+    },
+    {
         "version": "4.5.9",
         "channel": "Beta",
         "date": "2026-11-14",

@@ -80,6 +80,16 @@ const normalizeResetCycleMode = (mode?: string): "pause_resume" | "cold_restart"
   return m === "cold_restart" || m === "full_reboot" ? "cold_restart" : "pause_resume"
 }
 
+const formatRuntimeLimit = (maxMins: number | undefined | null, language: string): string => {
+  const m = maxMins != null ? Number(maxMins) : 480
+  if (m < 0) return "∞"
+  const hUnit = language === "id" ? "j" : "h"
+  if (m % 60 === 0) return `${m / 60}${hUnit}`
+  const hrs = Math.floor(m / 60)
+  const rem = m % 60
+  return hrs > 0 ? `${hrs}${hUnit} ${rem}m` : `${rem}m`
+}
+
 const getClientTimezoneInfo = () => {
   let scheduleTimezone = ""
   try {
@@ -522,7 +532,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     typeof res.runtimeMinutes === "number"
                       ? res.runtimeMinutes
                       : (v.runtimeMinutes ?? 0),
-                  maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
+                  maxRuntimeMinutes: res.maxRuntimeMinutes != null ? res.maxRuntimeMinutes : 480,
                   idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
                   screenUrl: v.screenUrl || res.screenUrl,
                   sshHost: res.sshHost || v.sshHost || "ssh.instabox.sh",
@@ -564,7 +574,8 @@ export default function VmManagerView({ go }: ViewProps) {
               }
             }).catch(() => {})
           }
-          if (vm.status === "running" && (vm.runtimeMinutes || 0) >= 450) {
+          const limitMins = vm.maxRuntimeMinutes != null ? vm.maxRuntimeMinutes : 480
+          if (vm.status === "running" && limitMins > 0 && (vm.runtimeMinutes || 0) >= Math.max(30, limitMins - 5)) {
             handleImmediateResetCycle(vm)
           }
         }
@@ -1190,7 +1201,7 @@ export default function VmManagerView({ go }: ViewProps) {
             machineId: res.machineId || editingVm?.machineId,
             status: isRunning ? "running" : "sleeping",
             runtimeMinutes: typeof res.runtimeMinutes === "number" ? res.runtimeMinutes : 0,
-            maxRuntimeMinutes: res.maxRuntimeMinutes || 480,
+            maxRuntimeMinutes: res.maxRuntimeMinutes != null ? res.maxRuntimeMinutes : 480,
             idleTimeoutMinutes: res.idleTimeoutMinutes || 30,
             screenUrl: formScreenUrl.trim() || res.screenUrl || undefined,
             sshHost: cleanHost || res.sshHost || "ssh.instabox.sh",
@@ -1550,10 +1561,13 @@ export default function VmManagerView({ go }: ViewProps) {
     const isDeleting = deletingVmIds.has(vm.id)
     const isRunning = isOnline && vm.status === "running"
     const live = isOnline && vm.status === "running"
+    const rawMaxRuntime = vm.maxRuntimeMinutes != null ? vm.maxRuntimeMinutes : 480
+    const isUnlimitedRuntime = rawMaxRuntime < 0
     const runtimeMinutes = vm.runtimeMinutes != null ? vm.runtimeMinutes : 0
-    const maxRuntime = vm.maxRuntimeMinutes || 480
-    const runtimePct = Math.min(100, Math.max(0, (runtimeMinutes / maxRuntime) * 100))
-    const dotTone = getVmRuntimeTone(runtimePct, isRunning)
+    const maxRuntime = isUnlimitedRuntime ? 0 : Math.max(1, rawMaxRuntime || 480)
+    const runtimePct = isUnlimitedRuntime ? 0 : Math.min(100, Math.max(0, (runtimeMinutes / maxRuntime) * 100))
+    const dotTone = isUnlimitedRuntime ? (isRunning ? "success" : "neutral") : getVmRuntimeTone(runtimePct, isRunning)
+    const limitLabel = formatRuntimeLimit(rawMaxRuntime, language)
 
     return (
       <div className={cx("flex flex-col gap-2.5", inAccordion ? "pt-1" : "")}>
@@ -1640,7 +1654,7 @@ export default function VmManagerView({ go }: ViewProps) {
         {vm.provider === "instabox" && (
           <div className="rounded-tile bg-surface-sunken/40 border border-line/60 p-2.5 flex flex-col gap-2">
             <div className="w-full px-0.5">
-              <VmRuntimeDotBar usedPct={runtimePct} tone={dotTone} live={isRunning} />
+              <VmRuntimeDotBar usedPct={isUnlimitedRuntime ? (isRunning ? 100 : 0) : runtimePct} tone={dotTone} live={isRunning} />
             </div>
 
             <div className="flex items-center justify-between text-micro text-ink-subtle">
@@ -1648,12 +1662,14 @@ export default function VmManagerView({ go }: ViewProps) {
                 <Clock className="size-3 text-ink-muted" />
                 <span>
                   {vm.runtimeMinutes != null
-                    ? `${Math.floor(vm.runtimeMinutes / 60)}${language === "id" ? "j" : "h"} ${vm.runtimeMinutes % 60}m / 8${language === "id" ? "j" : "h"} runtime`
-                    : `— / 8${language === "id" ? "j" : "h"} runtime`}
+                    ? `${Math.floor(vm.runtimeMinutes / 60)}${language === "id" ? "j" : "h"} ${vm.runtimeMinutes % 60}m / ${limitLabel} runtime`
+                    : `— / ${limitLabel} runtime`}
                 </span>
               </Mono>
               <Mono className={cx("shrink-0 font-semibold", isRunning ? "text-ink" : "text-ink-subtle")}>
-                {vm.runtimeMinutes != null ? `${Math.round(runtimePct)}%` : "0%"} {language === "id" ? "terpakai" : "used"}
+                {isUnlimitedRuntime
+                  ? (language === "id" ? "∞ Bebas" : "∞ Unlimited")
+                  : `${vm.runtimeMinutes != null ? Math.round(runtimePct) : 0}% ${language === "id" ? "terpakai" : "used"}`}
               </Mono>
             </div>
 

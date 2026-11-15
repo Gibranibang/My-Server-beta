@@ -12,6 +12,26 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.13",
+        "channel": "Beta",
+        "date": "2026-11-15",
+        "title": "Isolasi Jaringan EasyTier Multi-Server, Auto-Switching Remote ID, dan Eliminasi Fallback IP Palsu",
+        "notes": [
+            "Isolasi EasyTier Multi-Server: Setiap server pada daftar multi-server kini menyimpan remote_id dan easytier_virtual_ip masing-masing secara independen di config.json dan companion UI, mencegah bentrokan IP antar-server.",
+            "Auto-Switching Jaringan EasyTier saat Beralih Server: Mengalihkan daemon EasyTier di background secara otomatis ke Remote ID server target saat pengguna berpindah server aktif di /api/switch_server.",
+            "Eliminasi Total Fallback IP 10.126.126.1: Menghapus hardcoded fallback IP di ServerView.tsx dan config_manager.py, sehingga status rute yang belum terhubung menampilkan indikator sesungguhnya tanpa memaksakan IP palsu.",
+            "Pencarian Peer Berbasis Identitas Server: get_peer_ip() kini mendukung pencarian peer dengan target_ip spesifik dan target_hostname, mencegah Server B merebut entri peer milik Server A.",
+            "Sanitasi Validasi Ping HTTP: Menghapus port SMB (445) dari pengujian reachability rute web di check_server_ping() untuk mencegah false-positive aktif akibat layanan SMB Windows lokal."
+        ],
+        "features": [
+            "Isolasi Remote ID & IP Virtual per Server untuk Multi-Server Setup",
+            "Auto-Switching Daemon EasyTier ke Remote ID Server Aktif",
+            "Pencarian Peer Cerdas Berbasis Target IP dan Hostname",
+            "Penghapusan Seluruh Fallback Palsu 10.126.126.1",
+            "Pembersihan Uji Ping HTTP Murni (Bebas False-Positive Port 445 SMB)"
+        ]
+    },
+    {
         "version": "4.5.12",
         "channel": "Beta",
         "date": "2026-11-15",

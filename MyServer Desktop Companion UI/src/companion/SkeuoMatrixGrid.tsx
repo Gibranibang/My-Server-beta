@@ -1,7 +1,7 @@
 import React from "react"
 import type { ViewId } from "./types"
 
-// 1:1 Official Figma SVGs from D:\Projek\MyServer\Beta\ui\New UI with full CRT suite (v4.0.6 Beta)
+// 1:1 Official Figma SVGs with full CRT suite (bundled UI assets)
 const BACKUP_SVG = "<svg class=\"w-[122px] h-[110px] overflow-visible card-svg\" viewBox=\"0 0 122 110\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n"
   + "<rect x=\"0.5\" y=\"0.5\" width=\"121\" height=\"109\" rx=\"9.5\" fill=\"white\"/>\n"
   + "<rect x=\"0.5\" y=\"0.5\" width=\"121\" height=\"109\" rx=\"9.5\" stroke=\"#E2E8F0\"/>\n"

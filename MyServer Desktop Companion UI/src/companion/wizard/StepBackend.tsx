@@ -48,7 +48,7 @@ function deriveDefaultHost(draft: WizardDraft): string {
     }
   }
   if (draft.zerotierIp.trim()) return draft.zerotierIp.trim()
-  return "192.168.1.50"
+  return ""
 }
 
 export function StepBackend({
@@ -243,8 +243,10 @@ export function StepBackend({
     }
   }
 
-  const displayServer = `${draft.serverName || t("wiz_server_name_default")} (${defaultHost})`
-  const displaySsh = `${sshUser.trim() || "admin"}@${sshHost.trim() || defaultHost}:${sshPort.trim() || "22"}`
+  const displayServer = defaultHost
+    ? `${draft.serverName || t("wiz_server_name_default")} (${defaultHost})`
+    : `${draft.serverName || t("wiz_server_name_default")}`
+  const displaySsh = `${sshUser.trim() || "admin"}@${sshHost.trim() || defaultHost || "—"}:${sshPort.trim() || "22"}`
 
   const statusText = (() => {
     if (installState === "checking") return t("wiz_testing_conn")
@@ -305,6 +307,7 @@ export function StepBackend({
                 id="wiz-ssh-host"
                 type="text"
                 className="wiz-input"
+                placeholder={defaultHost || "zimaos.local"}
                 value={sshHost}
                 disabled={deploying}
                 onChange={e => {

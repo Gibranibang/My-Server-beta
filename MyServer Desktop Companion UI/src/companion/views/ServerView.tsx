@@ -1408,7 +1408,7 @@ export default function ServerView({ go }: ViewProps) {
                         required
                         value={formUrl}
                         onChange={(e) => setFormUrl(e.target.value)}
-                        placeholder="http://192.168.1.6:80"
+                        placeholder="http://zimaos.local:80"
                         className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-caption font-mono text-ink focus:border-brand focus:outline-none"
                       />
                     </div>
@@ -1469,7 +1469,7 @@ export default function ServerView({ go }: ViewProps) {
                         required
                         value={formUrl}
                         onChange={(e) => setFormUrl(e.target.value)}
-                        placeholder="http://192.168.1.6:80"
+                        placeholder="http://zimaos.local:80"
                         className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-caption font-mono text-ink focus:border-brand focus:outline-none"
                       />
                     </div>

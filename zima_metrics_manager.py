@@ -824,7 +824,7 @@ class ZimaMetricsClient:
             elif p_size > 0 and p_avail == 0 and p_used > 0:
                 p_avail = max(p_size - p_used, 0)
 
-            # Utamakan nama atau label volume yang mudah dibaca (e.g. "Disk_Aldhy", "Toshiba 1TB")
+            # Utamakan nama atau label volume yang mudah dibaca (e.g. "Data_Disk_1", "External_Drive")
             p_name = item.get("name") or item.get("label") or item.get("drive_name") or item.get("path", "Disk")
             p_type = item.get("fs_type") or item.get("disk_type", "")
             m_point = item.get("mount_point") or item.get("mountpoint")
@@ -1402,7 +1402,7 @@ class ZimaMetricsClient:
             self._start_bg_storage_fetch()
 
         # Ambil seluruh mount points server dari /v2/local_storage/mount (respons instan ~20ms)
-        # dan daftarkan ke detailed_partitions_map agar partisi seperti /media/Disk_Aldhy memiliki size dan used
+        # dan daftarkan ke detailed_partitions_map agar partisi seperti /media/<VolumeName> memiliki size dan used
         mount_res = self._make_request("/v2/local_storage/mount", timeout=2.5)
         raw_mount_items = []
         if mount_res and isinstance(mount_res, dict):

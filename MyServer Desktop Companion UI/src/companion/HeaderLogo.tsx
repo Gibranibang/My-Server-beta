@@ -2,7 +2,7 @@ import React from "react"
 import { APP_VERSION } from "./version"
 
 /**
- * 1:1 Official Figma div.flex Header Lockup from D:\Projek\MyServer\Beta\ui\New UI\div.flex.svg
+ * 1:1 Official Figma div.flex Header Lockup (bundled SVG asset)
  * Contains exact vector "My", CRT "Server" screen, "by algitha" pill, dynamic V{APP_VERSION},
  * and Fredoka One "BETA" pill badge.
  */

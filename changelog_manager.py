@@ -12,6 +12,23 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.11",
+        "channel": "Beta",
+        "date": "2026-11-15",
+        "title": "Eliminasi Hardcoding Kredensial/Server & Hardening Keamanan Backend v1.2.9 serta Packaging Installer",
+        "notes": [
+            "Perbaikan Kebocoran Prefill Setup Wizard & Penghapusan Hardcoding Lintas Repositori: Memperbaiki alur SetupWizard.tsx saat dibuka kembali dari menu Settings agar tidak lagi membawa nilai default personal yang hardcoded, serta membersihkan seluruh domain, path absolut, alamat IP privat, dan secret fallback hardcoded di Desktop maupun Backend (dilengkapi regresi SetupWizard.reentry.test.tsx & test_no_hardcoding.py).",
+            "Hardening Keamanan Backend ZimaOS v1.2.9: Mengganti JWT secret fallback statis di app/config.py dengan generator secret acak yang dipersistensi otomatis di DATA_DIR (mendukung override env MYSERVER_JWT_SECRET), menambahkan helper is_admin_username() berbasis MYSERVER_ADMIN_USERNAMES, mengetatkan konfigurasi CORS di app/main.py, dan membersihkan hardcoding pada router, dev_server.py, explorer.html, docker-compose.yml, serta README.md.",
+            "Hardening Packaging & Installer Windows: Menggunakan PyInstaller --onedir, menyematkan PE Version Info & App Manifest resmi, menyertakan verifikasi SHA256SUMS, serta memakai mekanisme resmi Inno Setup CloseApplications=yes untuk mencegah false-positive antivirus saat pembaruan aplikasi."
+        ],
+        "features": [
+            "Setup Wizard Bebas Prefill Hardcoded Saat Re-Entry dari Settings",
+            "Backend ZimaOS v1.2.9: Dynamic Persisted JWT Secret & Admin Config Helper",
+            "Pembersihan Menyeluruh Hardcoded Domain, IP Privat, Path, & Secret Fallback",
+            "Hardening Rilis & Installer Windows (PyInstaller Onedir, PE Metadata, & CloseApplications=yes)"
+        ]
+    },
+    {
         "version": "4.5.10",
         "channel": "Beta",
         "date": "2026-11-14",

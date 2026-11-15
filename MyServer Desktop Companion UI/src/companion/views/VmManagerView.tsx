@@ -2352,7 +2352,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     <input
                       type="text"
                       required
-                      placeholder="e.g. 192.168.1.100 atau vps.example.com"
+                      placeholder="e.g. zimaos.local atau vps.example.com"
                       value={formSshHost}
                       onChange={(e) => setFormSshHost(e.target.value)}
                       className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"
@@ -2419,7 +2419,7 @@ export default function VmManagerView({ go }: ViewProps) {
                     </label>
                     <input
                       type="url"
-                      placeholder="e.g. http://192.168.1.100:6080/vnc.html"
+                      placeholder="e.g. http://zimaos.local:6080/vnc.html"
                       value={formScreenUrl}
                       onChange={(e) => setFormScreenUrl(e.target.value)}
                       className="w-full rounded border border-line bg-surface-sunken px-2 py-0.5 text-caption text-ink focus:outline-none focus:border-brand text-[10.5px] h-6.5"

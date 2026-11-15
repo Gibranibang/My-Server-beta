@@ -98,9 +98,9 @@ export default function SettingsView() {
     if (typeof window !== "undefined" && window.location.search.includes("mock_update=1")) {
       return {
         upToDate: false,
-        version: "4.1.0-beta",
+        version: APP_VERSION,
         htmlUrl: "https://github.com/Gibranibang/My-Server-beta/releases/latest",
-        downloadUrl: "https://github.com/Gibranibang/My-Server-beta/releases/download/v4.1.0-beta/MyServer-v4.1.0-Beta-Setup.exe"
+        downloadUrl: "https://github.com/Gibranibang/My-Server-beta/releases/latest"
       }
     }
     return null

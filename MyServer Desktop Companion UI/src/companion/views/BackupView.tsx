@@ -1166,7 +1166,7 @@ export default function BackupView() {
                         setNewTaskServerPath(`/DATA/Backups/${name}`)
                       }
                     }}
-                    placeholder="Contoh: D:\Data Kerja atau C:\Users\NamaUser\Documents"
+                    placeholder="Contoh: C:\BackupData atau C:\Users\NamaUser\Documents"
                     className="flex-1 rounded-control border border-line bg-surface-sunken px-2 py-1 text-micro font-mono text-ink outline-none focus:border-info"
                   />
                   <Button
@@ -1798,7 +1798,7 @@ export default function BackupView() {
                     type="text"
                     value={serverLanIp}
                     onChange={(e) => setServerLanIp(e.target.value)}
-                    placeholder="Contoh: 192.168.1.10"
+                    placeholder="Contoh: zimaos.local"
                     className="w-full rounded-control border border-line bg-surface px-2 py-1 text-micro font-mono text-ink outline-none focus:border-info"
                   />
                 </div>
@@ -1842,7 +1842,7 @@ export default function BackupView() {
                   type="text"
                   value={serverWanUrl}
                   onChange={(e) => setServerWanUrl(e.target.value)}
-                  placeholder="Contoh: 172.24.0.1 atau sync.algitha.my.id"
+                  placeholder="Contoh: 192.0.2.10 atau sync.example.com"
                   className="w-full rounded-control border border-line bg-surface px-2 py-1 text-micro font-mono text-ink outline-none focus:border-info"
                 />
               </div>

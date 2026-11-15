@@ -3,7 +3,7 @@
 ; Industry Standard Windows Setup Engine
 
 #define MyAppName "My-Server by algitha BETA"
-#define MyAppVersion "4.5.10"
+#define MyAppVersion "4.5.11"
 #define MyAppPublisher "Algitha Project"
 #define MyAppURL "https://github.com/Gibranibang/My-Server-beta"
 #define MyAppExeName "MyServer-Beta.exe"
@@ -21,7 +21,7 @@ DefaultDirName={code:GetInstallDir}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=dist
-OutputBaseFilename=MyServer-v4.5.10-Beta-Setup
+OutputBaseFilename=MyServer-v4.5.11-Beta-Setup
 SetupIconFile=app_icon.ico
 Compression=lzma2/max
 SolidCompression=yes

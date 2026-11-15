@@ -140,7 +140,7 @@ def _get_wnet_remote_unc(drive_letter):
             return (ret, (buf.value or "").strip())
         lanman_target = _get_dos_lanman_target(clean_drive)
         if lanman_target:
-            # Ekstrak UNC dari \Device\LanmanRedirector\;Z:000000000010017c\192.168.1.11\Share
+            # Ekstrak UNC dari \Device\LanmanRedirector\;Z:000000000010017c\<ServerHost>\Share
             parts = [p for p in lanman_target.split("\\") if p]
             if len(parts) >= 4:
                 unc_extracted = "\\\\" + "\\".join(parts[3:])

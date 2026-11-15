@@ -79,7 +79,7 @@ export function SetupWizard({ onCompleted }: { onCompleted?: () => void }) {
     setDraft((prev) => ({ ...prev, ...patch }))
   }, [])
 
-  // Settings re-entry: target the active configured server instead of the unconfigured 'srv_default'.
+  // Settings re-entry: target the active configured server ID without prefilling existing config values.
   useEffect(() => {
     if (!openedFromSettings) return
     let cancelled = false
@@ -87,12 +87,8 @@ export function SetupWizard({ onCompleted }: { onCompleted?: () => void }) {
       .then(() => api.getServerDetails())
       .then((details) => {
         if (cancelled || !details) return
-        const active = details.routes?.find((r) => r.active)
         const patch: Partial<WizardDraft> = { step1And3Done: true }
         if (details.serverId) patch.serverId = details.serverId
-        if (details.serverName) patch.serverName = details.serverName
-        const lan = active?.url || details.activeHost
-        if (lan) patch.lanUrl = lan
         setDraft((prev) => ({ ...prev, ...patch }))
       })
       .catch(() => undefined)

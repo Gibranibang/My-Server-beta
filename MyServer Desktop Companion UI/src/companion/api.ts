@@ -740,7 +740,7 @@ export function createMockApi(): CompanionApi {
 
     async chooseLogFolder() {
 
-      return { success: true, logDirectory: "D:\\Logs", defaultDirectory: "C:\\MyServer\\logs", isCustom: true }
+      return { success: true, logDirectory: "C:\\MyServer\\logs", defaultDirectory: "C:\\MyServer\\logs", isCustom: false }
 
     },
 
@@ -922,9 +922,9 @@ export function createMockApi(): CompanionApi {
 
           { id: "conn_lan", name: "Local / Primary", url: "http://zimaos.local", active: true, pingMs: 287 },
 
-          { id: "conn_ip", name: "IP Local", url: "http://192.168.1.6", active: false, pingMs: 2 },
+          { id: "conn_ip", name: "IP Local", url: "http://192.0.2.10", active: false, pingMs: 2 },
 
-          { id: "conn_zt", name: "ZeroTier Remote (P2P)", url: "http://172.24.0.1", active: false, isZeroTier: true, pingMs: 18 },
+          { id: "conn_zt", name: "ZeroTier Remote (P2P)", url: "http://192.0.2.20", active: false, isZeroTier: true, pingMs: 18 },
 
         ],
 
@@ -934,8 +934,8 @@ export function createMockApi(): CompanionApi {
           networkName: "IceWhale-RemoteAccess",
           configuredNwid: "0000000000000000",
           nodeId: "0000000000",
-          virtualIp: "172.24.0.10",
-          serverVirtualIp: "172.24.0.1",
+          virtualIp: "192.0.2.21",
+          serverVirtualIp: "192.0.2.20",
           joined: true,
         },
         easyTier: {
@@ -987,9 +987,9 @@ export function createMockApi(): CompanionApi {
 
       return [
 
-        { id: "app_1", name: "Jellyfin", url: "http://192.168.1.50:8096", port: "8096" },
+        { id: "app_1", name: "Jellyfin", url: "http://zimaos.local:8096", port: "8096" },
 
-        { id: "app_2", name: "Nextcloud", url: "http://192.168.1.50:8081", port: "8081" },
+        { id: "app_2", name: "Nextcloud", url: "http://zimaos.local:8081", port: "8081" },
 
       ]
 
@@ -1040,7 +1040,7 @@ export function createMockApi(): CompanionApi {
     },
 
     async getBackendStatus(_serverId?: string) {
-      return { online: true, version: "1.0.0", latestVersion: "1.0.0", url: "http://192.168.1.50:8788" }
+      return { online: true, version: "1.0.0", latestVersion: "1.0.0", url: "http://zimaos.local:8788" }
     },
 
     async getEasyTierStatus() {
@@ -1255,7 +1255,7 @@ export function createMockApi(): CompanionApi {
       return {
         success: true,
         username: payload.username,
-        resolvedUrl: payload.url || "http://192.168.1.50",
+        resolvedUrl: payload.url || "http://zimaos.local",
         isAdmin: true,
       }
     },

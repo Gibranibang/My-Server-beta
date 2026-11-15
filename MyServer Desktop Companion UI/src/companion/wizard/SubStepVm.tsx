@@ -17,12 +17,12 @@ export interface SubStepVmProps {
 
 function parseLanHost(lanUrl: string): string {
   const trimmed = lanUrl.trim()
-  if (!trimmed) return "127.0.0.1"
+  if (!trimmed) return ""
   try {
     const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
-    return new URL(normalized).hostname || "127.0.0.1"
+    return new URL(normalized).hostname || ""
   } catch {
-    return "127.0.0.1"
+    return ""
   }
 }
 
@@ -451,7 +451,7 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
                     type="text"
                     value={sshHost}
                     onChange={(e) => setSshHost(e.target.value)}
-                    placeholder={defaultManualHost || "192.168.1.100"}
+                    placeholder={defaultManualHost || "zimaos.local"}
                     disabled={saving}
                   />
                 </div>

@@ -1,4 +1,12 @@
 ===================================================
+[v4.5.11 - Beta] - 2026-11-15
+Catatan:
+1. Perbaikan Kebocoran Prefill Setup Wizard & Penghapusan Hardcoding Lintas Repositori: Memperbaiki alur SetupWizard.tsx saat dibuka kembali dari menu Settings agar tidak lagi membawa nilai default personal yang hardcoded, serta membersihkan seluruh domain, path absolut, alamat IP privat, dan secret fallback hardcoded di Desktop maupun Backend (dilengkapi regresi SetupWizard.reentry.test.tsx & test_no_hardcoding.py).
+2. Hardening Keamanan Backend ZimaOS v1.2.9: Mengganti JWT secret fallback statis di app/config.py dengan generator secret acak yang dipersistensi otomatis di DATA_DIR (mendukung override env MYSERVER_JWT_SECRET), menambahkan helper is_admin_username() berbasis MYSERVER_ADMIN_USERNAMES, mengetatkan konfigurasi CORS di app/main.py, dan membersihkan hardcoding pada router, dev_server.py, explorer.html, docker-compose.yml, serta README.md.
+3. Hardening Packaging & Installer Windows: Menggunakan PyInstaller --onedir, menyematkan PE Version Info & App Manifest resmi, menyertakan verifikasi SHA256SUMS, serta memakai mekanisme resmi Inno Setup CloseApplications=yes untuk mencegah false-positive antivirus saat pembaruan aplikasi.
+===================================================
+
+===================================================
 [v4.5.10 - Beta] - 2026-11-14
 Catatan:
 1. Anti-Idle Nyata Fitur Always-On InstaBox (Backend v1.2.8 & Daemon Lokal): Menambahkan akuisisi/perpanjangan InstaBox Activity Lease resmi (`PUT /v1/machines/{id}/activity-leases/myserver-always-on`, TTL 600s diperpanjang tiap 120s) dan eksekusi perintah nyata ringan di dalam VM (`POST /v1/machines/{id}/exec` `{"cmd": "true"}` tiap 180s) saat VM berstatus running — menggantikan logika lama yang hanya membangunkan VM setelah telanjur di-suspend idle ~30 menit atau sekadar membaca banner TCP port 2222 tanpa autentikasi.

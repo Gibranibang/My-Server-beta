@@ -71,12 +71,12 @@ def find_easytier_binaries():
     if hasattr(sys, "_MEIPASS"):
         candidates.append(os.path.join(sys._MEIPASS, "resources", "deps", "easytier", "win32", "x64"))
 
-    # 2. Lokasi direktori executable (misal D:\Softwares\MyServer atau D:\Projek\MyServer\Beta\dist)
+    # 2. Lokasi direktori executable (misal <AppInstallDir> atau <RepoDir>/dist)
     exe_dir = os.path.dirname(os.path.abspath(sys.executable))
     candidates.append(os.path.join(exe_dir, "resources", "deps", "easytier", "win32", "x64"))
     candidates.append(os.path.join(exe_dir, "easytier"))
 
-    # 3. Lokasi direktori script saat ini (D:\Projek\MyServer\Beta)
+    # 3. Lokasi direktori script saat ini (<RepoDir>)
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates.append(os.path.join(base_dir, "resources", "deps", "easytier", "win32", "x64"))
     candidates.append(os.path.join(base_dir, "dist", "resources", "deps", "easytier", "win32", "x64"))

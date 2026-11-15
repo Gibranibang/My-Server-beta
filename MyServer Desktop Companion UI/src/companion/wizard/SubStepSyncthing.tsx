@@ -547,7 +547,7 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
                 type="text"
                 value={lanIp}
                 onChange={(e) => setLanIp(e.target.value)}
-                placeholder="192.168.1.50"
+                placeholder="zimaos.local"
                 disabled={saving}
               />
             </div>
@@ -587,7 +587,7 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
                 type="text"
                 value={remoteIp}
                 onChange={(e) => setRemoteIp(e.target.value)}
-                placeholder="10.147.20.15"
+                placeholder="192.0.2.20"
                 disabled={saving}
               />
             </div>

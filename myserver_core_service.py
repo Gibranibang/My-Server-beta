@@ -22112,13 +22112,9 @@ def apply_zip_update(zip_file_path=None):
 
 
 
-    # Hentikan daemon EasyTier terlebih dahulu agar handle berkas Packet.dll & wintun.dll dilepas
-    try:
-        import easytier_manager
-        easytier_manager.get_easytier_manager().stop()
-        time.sleep(0.5)
-    except Exception as _et_err:
-        logger_manager.log_error(f"[ZipUpdate] Gagal menghentikan EasyTier: {_et_err}")
+    # Hentikan daemon EasyTier & Syncthing terlebih dahulu secara teratur agar handle berkas dilepas
+    shutdown_background_daemons()
+    time.sleep(0.3)
 
     kill_gui_cmd = f"taskkill /PID {gui_pid} /F >nul 2>&1" if gui_pid > 0 else ""
 
@@ -33329,7 +33325,15 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                time.sleep(0.5)
+                time.sleep(0.15)
+
+
+
+
+
+
+
+                shutdown_background_daemons()
 
 
 
@@ -33473,6 +33477,29 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+def shutdown_background_daemons():
+    """Menghentikan daemon EasyTier dan Syncthing lokal secara teratur sebelum proses berhenti."""
+    try:
+        if easytier_manager is not None:
+            easytier_manager.get_easytier_manager().stop()
+    except Exception as _et_err:
+        logger_manager.log_error(f"[CoreService] Gagal menghentikan EasyTier: {_et_err}")
+
+    try:
+        if _local_st_daemon is not None:
+            cfg = None
+            st_port = "8384"
+            try:
+                cfg = config_manager.load_or_create_config()
+                st_port = str((cfg or {}).get("local_syncthing", {}).get("port") or "8384").strip() or "8384"
+            except Exception:
+                pass
+            st_key = get_local_syncthing_api_key(cfg)
+            _local_st_daemon.stop(custom_port=st_port, api_key=st_key)
+    except Exception as _st_err:
+        logger_manager.log_error(f"[CoreService] Gagal menghentikan Syncthing lokal: {_st_err}")
+
+
 def parent_watchdog(parent_pid):
 
 
@@ -33570,6 +33597,14 @@ def parent_watchdog(parent_pid):
 
 
             logger_manager.log_info(f"[CoreService] Parent process {parent_pid} berhenti, mematikan Core Service...")
+
+
+
+
+
+
+
+            shutdown_background_daemons()
 
 
 

@@ -115,7 +115,15 @@ def sync_version(version_str, channel="Beta"):
             f.write(c)
         print(f"  [v] installer.iss tersinkronisasi.")
 
-    # 7. changelog_manager.py
+    # 7. file_version_info.txt & app.manifest
+    try:
+        import generate_version_info
+        generate_version_info.generate_version_info(clean_ver, channel)
+        print("  [v] file_version_info.txt & app.manifest tersinkronisasi.")
+    except Exception as e:
+        print(f"  [!] Peringatan sinkronisasi PE metadata: {e}")
+
+    # 8. changelog_manager.py
     chg_p = os.path.join(ROOT_DIR, "changelog_manager.py")
     if os.path.exists(chg_p):
         with open(chg_p, "r", encoding="utf-8") as f:

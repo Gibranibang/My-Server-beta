@@ -3,8 +3,8 @@ name = "app"
 version = "4.5.10"
 description = "MyServer Companion"
 authors = ["Algitha Project"]
-license = ""
-repository = ""
+license = "MIT"
+repository = "https://github.com/Gibranibang/My-Server-beta"
 edition = "2024"
 rust-version = "1.90"
 

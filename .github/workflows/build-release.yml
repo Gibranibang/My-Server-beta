@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-windows:
@@ -88,47 +89,69 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller pywebview pythonnet paramiko cryptography bcrypt pynacl
 
-      - name: Build Core Service (myserver-core.exe)
+      - name: Generate Windows PE version info and manifest
+        shell: pwsh
+        run: |
+          python generate_version_info.py "${{ steps.meta.outputs.version }}" "Beta"
+          if (-not (Test-Path "file_version_info.txt")) {
+            throw "file_version_info.txt was not generated"
+          }
+
+      - name: Build Core Service (myserver-core --onedir)
         shell: pwsh
         run: |
           pyinstaller --noconfirm myserver-core.spec
-          if (-not (Test-Path "dist\myserver-core.exe")) {
-            throw "dist\myserver-core.exe was not generated"
+          if (-not (Test-Path "dist\myserver-core\myserver-core.exe")) {
+            throw "dist\myserver-core\myserver-core.exe was not generated"
           }
 
       - name: Verify Core Service bundled DLLs
         shell: python
         run: |
-          import struct
-          with open(r"dist\myserver-core.exe", "rb") as f:
+          import os, struct
+          core_dir = os.path.join("dist", "myserver-core")
+          core_exe = os.path.join(core_dir, "myserver-core.exe")
+          assert os.path.isfile(core_exe), f"Missing {core_exe}"
+
+          disk_dlls = []
+          bad_disk = []
+          for root, _, files in os.walk(core_dir):
+              for fn in sorted(files):
+                  low = fn.lower()
+                  if low.endswith(".dll"):
+                      rel = os.path.relpath(os.path.join(root, fn), core_dir)
+                      disk_dlls.append(rel)
+                      if "ucrtbase" in low or low.startswith("api-ms-win-"):
+                          bad_disk.append(rel)
+
+          print("On-disk DLL count:", len(disk_dlls))
+          for d in disk_dlls:
+              print("  DLL:", d)
+          assert len(disk_dlls) > 0, "Expected --onedir runtime DLLs in dist\\myserver-core"
+          assert not bad_disk, f"Unexpected UCRT/API-set DLLs in --onedir output: {bad_disk}"
+
+          with open(core_exe, "rb") as f:
               raw = f.read()
           idx = raw.rfind(b"MEI\x0c\x0b\x0a\x0b\x0e")
-          assert idx >= 0, "PyInstaller archive not found"
-          _, pkg_len, toc_off, toc_len, pyver, pylib = struct.unpack("!8sIIII64s", raw[idx:idx+88])
-          pkg_start = idx + 88 - pkg_len
-          toc_data = raw[pkg_start + toc_off : pkg_start + toc_off + toc_len]
-          pos = 0
-          dlls = []
-          bad = []
-          while pos < len(toc_data):
-              elen, *_ = struct.unpack("!IIIIBB", toc_data[pos:pos+18])
-              name = toc_data[pos+18:pos+elen].split(b"\x00")[0].decode("utf-8", errors="replace")
-              low = name.lower()
-              if low.endswith(".dll"):
-                  dlls.append(name)
-              if "ucrtbase" in low or low.startswith("api-ms-win-"):
-                  bad.append(name)
-              pos += elen
-          print("Bundled DLL count:", len(dlls))
-          for d in sorted(dlls):
-              print("  DLL:", d)
-          assert not bad, f"Unexpected UCRT/API-set DLLs bundled: {bad}"
+          if idx >= 0:
+              _, pkg_len, toc_off, toc_len, _, _ = struct.unpack("!8sIIII64s", raw[idx:idx+88])
+              pkg_start = idx + 88 - pkg_len
+              toc_data = raw[pkg_start + toc_off : pkg_start + toc_off + toc_len]
+              pos = 0
+              bad_carchive = []
+              while pos < len(toc_data):
+                  elen, *_ = struct.unpack("!IIIIBB", toc_data[pos:pos+18])
+                  name = toc_data[pos+18:pos+elen].split(b"\x00")[0].decode("utf-8", errors="replace").lower()
+                  if "ucrtbase" in name or name.startswith("api-ms-win-"):
+                      bad_carchive.append(name)
+                  pos += elen
+              assert not bad_carchive, f"Unexpected UCRT/API-set DLLs in archive: {bad_carchive}"
 
       - name: Smoke test Core Service startup
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $proc = Start-Process -FilePath "dist\myserver-core.exe" -ArgumentList "--standalone", "--port", "48199" -PassThru
+          $proc = Start-Process -FilePath "dist\myserver-core\myserver-core.exe" -ArgumentList "--standalone", "--port", "48199" -PassThru
           try {
             $ready = $false
             for ($i = 0; $i -lt 30; $i++) {
@@ -159,36 +182,105 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path "bin\easytier" | Out-Null
+          New-Item -ItemType Directory -Force -Path "bin" | Out-Null
           New-Item -ItemType Directory -Force -Path "resources\deps\easytier\win32\x64" | Out-Null
           $tmpDir = Join-Path $env:RUNNER_TEMP "myserver_deps"
           New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 
-          # 1. Syncthing
+          # 1. Syncthing (single canonical bin\syncthing.exe)
           $stZip = Join-Path $tmpDir "syncthing.zip"
           $stExtract = Join-Path $tmpDir "syncthing"
           $stUrl = "https://github.com/syncthing/syncthing/releases/download/$($env:SYNCTHING_VERSION)/syncthing-windows-amd64-$($env:SYNCTHING_VERSION).zip"
           Write-Host "Downloading Syncthing from $stUrl"
           Invoke-WebRequest -Uri $stUrl -OutFile $stZip
+          Write-Host "Syncthing ZIP SHA256: $((Get-FileHash -Path $stZip -Algorithm SHA256).Hash)"
           Expand-Archive -Path $stZip -DestinationPath $stExtract -Force
           $stExe = Get-ChildItem -Path $stExtract -Recurse -Filter "syncthing.exe" | Select-Object -First 1
           if (-not $stExe) { throw "syncthing.exe not found in downloaded archive" }
           Copy-Item -Path $stExe.FullName -Destination "bin\syncthing.exe" -Force
+          Write-Host "syncthing.exe SHA256: $((Get-FileHash -Path 'bin\syncthing.exe' -Algorithm SHA256).Hash)"
 
-          # 2. EasyTier
+          # 2. EasyTier (single canonical resources\deps\easytier\win32\x64\)
           $etZip = Join-Path $tmpDir "easytier.zip"
           $etExtract = Join-Path $tmpDir "easytier"
           $etUrl = "https://github.com/EasyTier/EasyTier/releases/download/$($env:EASYTIER_VERSION)/easytier-windows-x86_64-$($env:EASYTIER_VERSION).zip"
           Write-Host "Downloading EasyTier from $etUrl"
           Invoke-WebRequest -Uri $etUrl -OutFile $etZip
+          Write-Host "EasyTier ZIP SHA256: $((Get-FileHash -Path $etZip -Algorithm SHA256).Hash)"
           Expand-Archive -Path $etZip -DestinationPath $etExtract -Force
           $requiredFiles = @("easytier-core.exe", "easytier-cli.exe", "wintun.dll", "Packet.dll", "WinDivert64.sys")
           foreach ($fname in $requiredFiles) {
             $found = Get-ChildItem -Path $etExtract -Recurse -Filter $fname | Select-Object -First 1
             if (-not $found) { throw "$fname not found in EasyTier archive" }
-            Copy-Item -Path $found.FullName -Destination "bin\easytier\$fname" -Force
-            Copy-Item -Path $found.FullName -Destination "resources\deps\easytier\win32\x64\$fname" -Force
+            $dst = "resources\deps\easytier\win32\x64\$fname"
+            Copy-Item -Path $found.FullName -Destination $dst -Force
+            $sig = Get-AuthenticodeSignature -FilePath $dst
+            Write-Host "$fname SHA256: $((Get-FileHash -Path $dst -Algorithm SHA256).Hash) | Authenticode: $($sig.Status)"
           }
+
+      - name: Detect Windows Code Signing configuration
+        id: signcfg
+        shell: pwsh
+        env:
+          HAS_AZURE_VARS: ${{ vars.AZURE_SIGNING_ENDPOINT != '' && vars.AZURE_SIGNING_ACCOUNT != '' && vars.AZURE_SIGNING_PROFILE != '' }}
+          HAS_AZURE_CLIENT: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
+          HAS_PFX_SECRET: ${{ secrets.WINDOWS_SIGNING_CERT_B64 != '' && secrets.WINDOWS_SIGNING_CERT_PASSWORD != '' }}
+        run: |
+          if ($env:HAS_AZURE_VARS -eq "true" -and $env:HAS_AZURE_CLIENT -eq "true") {
+            "mode=azure" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif ($env:HAS_PFX_SECRET -eq "true") {
+            "mode=pfx" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "mode=none" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "::warning::No CA Code Signing credentials configured (Azure Artifact Signing or WINDOWS_SIGNING_CERT_B64). Release EXEs remain unsigned."
+          }
+
+      - name: Azure login for Artifact Signing
+        if: steps.signcfg.outputs.mode == 'azure'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign application executables with Azure Artifact Signing
+        if: steps.signcfg.outputs.mode == 'azure'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\src-tauri\target\release\MyServer-Beta.exe
+            ${{ github.workspace }}\dist\myserver-core\myserver-core.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Sign application executables with PFX and configure ISCC SignTool
+        if: steps.signcfg.outputs.mode == 'pfx'
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERT_B64: ${{ secrets.WINDOWS_SIGNING_CERT_B64 }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT_B64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) {
+            throw "signtool.exe not found in Windows Kits"
+          }
+          foreach ($target in @("src-tauri\target\release\MyServer-Beta.exe", "dist\myserver-core\myserver-core.exe")) {
+            & $signtool.FullName sign /fd SHA256 /tr "http://timestamp.digicert.com" /td SHA256 /f $pfxPath /p $env:WINDOWS_SIGNING_CERT_PASSWORD $target
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool.exe failed signing $target"
+            }
+          }
+          $isccSignCmd = '$q' + $signtool.FullName + '$q sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $q' + $pfxPath + '$q /p $q' + $env:WINDOWS_SIGNING_CERT_PASSWORD + '$q $f'
+          "MYSERVER_ISCC_SIGNTOOL=$isccSignCmd" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Ensure Inno Setup 6 is installed
         shell: pwsh
@@ -219,6 +311,10 @@ jobs:
             "dist\MyServer-v$ver-Beta.zip",
             "dist\MyServer-v$ver-Beta-Setup.exe",
             "dist\MyServer-Setup.exe",
+            "dist\SHA256SUMS.txt",
+            "dist\staging_payload\myserver-core.exe",
+            "dist\staging_payload\_internal",
+            "dist\staging_payload\resources\deps\easytier\win32\x64\WinDivert64.sys",
             "dist\staging_payload\resources\backend_manifest.json",
             "dist\staging_payload\resources\MyServer-Backend-ZimaOS.zip",
             "dist\staging_payload\resources\MyServer-Backend-ZimaOS.tar.gz"
@@ -227,6 +323,56 @@ jobs:
             if (-not (Test-Path $f)) {
               throw "Expected package missing: $f"
             }
+          }
+          if (Test-Path "dist\staging_payload\bin\easytier") {
+            throw "Unexpected duplicate staging directory: dist\staging_payload\bin\easytier"
+          }
+          if (Test-Path "dist\staging_payload\bin\myserver-core.exe") {
+            throw "Unexpected duplicate binary: dist\staging_payload\bin\myserver-core.exe"
+          }
+
+      - name: Sign installer executables with Azure Artifact Signing
+        if: steps.signcfg.outputs.mode == 'azure'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\dist\MyServer-v${{ steps.meta.outputs.version }}-Beta-Setup.exe
+            ${{ github.workspace }}\dist\MyServer-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Finalize SHA256SUMS.txt and verify signatures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python build_installer_package.py --checksums-only
+          $ver = "${{ steps.meta.outputs.version }}"
+          $signedTargets = @(
+            "src-tauri\target\release\MyServer-Beta.exe",
+            "dist\myserver-core\myserver-core.exe",
+            "dist\MyServer-v$ver-Beta-Setup.exe",
+            "dist\MyServer-Setup.exe"
+          )
+          foreach ($t in $signedTargets) {
+            $sig = Get-AuthenticodeSignature -FilePath $t
+            Write-Host "$t Authenticode Status: $($sig.Status)"
+            if ("${{ steps.signcfg.outputs.mode }}" -ne "none" -and $sig.Status -ne "Valid") {
+              throw "Authenticode signature verification failed for $t (Status=$($sig.Status))"
+            }
+          }
+          Get-Content "dist\SHA256SUMS.txt"
+
+      - name: Clean up temporary PFX certificate
+        if: always()
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          if (Test-Path $pfxPath) {
+            Remove-Item -Path $pfxPath -Force -ErrorAction SilentlyContinue
           }
 
       - name: Upload workflow artifacts
@@ -237,6 +383,7 @@ jobs:
             dist/MyServer-v*-Beta.zip
             dist/MyServer-v*-Beta-Setup.exe
             dist/MyServer-Setup.exe
+            dist/SHA256SUMS.txt
             resources/backend_manifest.json
             resources/MyServer-Backend-ZimaOS.zip
             resources/MyServer-Backend-ZimaOS.tar.gz
@@ -253,6 +400,7 @@ jobs:
           $zipPath = "dist\MyServer-v$ver-Beta.zip"
           $setupVerPath = "dist\MyServer-v$ver-Beta-Setup.exe"
           $setupGenericPath = "dist\MyServer-Setup.exe"
+          $sumsPath = "dist\SHA256SUMS.txt"
           $backendAssets = @(
             "resources\backend_manifest.json",
             "resources\MyServer-Backend-ZimaOS.zip",
@@ -276,5 +424,5 @@ jobs:
           }
 
           Write-Host "Uploading Windows desktop packages and ZimaOS backend assets to release $tag..."
-          gh release upload $tag $zipPath $setupVerPath $setupGenericPath @backendAssets --clobber
+          gh release upload $tag $zipPath $setupVerPath $setupGenericPath $sumsPath @backendAssets --clobber
           if ($LASTEXITCODE -ne 0) { throw "Failed to upload assets to release $tag" }

@@ -3852,10 +3852,13 @@ def _handle_wizard_commit_server(body):
     local_url_raw = str(body.get("localUrl") or body.get("local_url") or body.get("url") or "").strip()
     wan_url_raw = str(body.get("wanUrl") or body.get("wan_url") or "").strip()
     zt_nwid = str(
-        body.get("zerotierNetworkId") or body.get("zerotier_network_id") or body.get("remoteId") or ""
+        body.get("zerotierNetworkId") or body.get("zerotier_network_id") or body.get("remoteId") or body.get("remote_id") or ""
     ).strip().lower()
     zt_vip = str(
         body.get("zerotierVirtualIp") or body.get("zerotier_virtual_ip") or body.get("zerotierIp") or ""
+    ).strip()
+    et_vip = str(
+        body.get("easytierVirtualIp") or body.get("easytier_virtual_ip") or body.get("easytierIp") or zt_vip
     ).strip()
     username = str(body.get("username") or "").strip()
     password = str(body.get("password") or "")
@@ -3948,6 +3951,8 @@ def _handle_wizard_commit_server(body):
             target["remote_id"] = zt_nwid
         if zt_vip:
             target["zerotier_virtual_ip"] = zt_vip
+        if et_vip:
+            target["easytier_virtual_ip"] = et_vip
         if ssh_user:
             target["ssh_user"] = ssh_user
 
@@ -16699,7 +16704,12 @@ def get_server_details_data(cfg=None):
 
 
 
-                "active": (s.get("id") == active_srv_id)
+                "active": (s.get("id") == active_srv_id),
+                "remote_id": s.get("remote_id") or s.get("zerotier_network_id") or "",
+                "easytier_virtual_ip": s.get("easytier_virtual_ip") or "",
+                "zerotier_network_id": s.get("zerotier_network_id") or "",
+                "zerotier_virtual_ip": s.get("zerotier_virtual_ip") or "",
+                "remote_mode": s.get("remote_mode") or "auto"
 
 
 
@@ -17120,7 +17130,11 @@ def get_server_details_data(cfg=None):
 
 
         "zeroTier": zt_info,
-        "easyTier": (lambda s: (s.update({"remote_id": s.get("remote_id") or srv.get("remote_id") or srv.get("zerotier_network_id") or cfg.get("easytier", {}).get("remote_id")}), s)[1])(easytier_manager.get_easytier_manager().get_status_overview()) if easytier_manager else {"running": False},
+        "easyTier": (lambda s: (s.update({
+            "remote_id": s.get("remote_id") or srv.get("remote_id") or srv.get("zerotier_network_id") or cfg.get("easytier", {}).get("remote_id"),
+            "server_peer_ip": (rem_info.get("ip") if rem_info and rem_info.get("engine") == "easytier" else None) or srv.get("easytier_virtual_ip") or (s.get("server_peer_ip") if (not srv.get("remote_id") or srv.get("remote_id") == (easytier_manager.get_easytier_manager().get_remote_id() or "")) else "") or "",
+            "running": bool(s.get("running") and (not srv.get("remote_id") or not easytier_manager.get_easytier_manager().get_remote_id() or srv.get("remote_id").strip().lower() == (easytier_manager.get_easytier_manager().get_remote_id() or "").strip().lower())),
+        }), s)[1])(easytier_manager.get_easytier_manager().get_status_overview()) if easytier_manager else {"running": False},
         "remoteMode": srv.get("remote_mode") or cfg.get("remote_mode", "auto"),
         "activeRemoteEngine": rem_info.get("engine", "none") if rem_info else "none",
         "activeRemoteIp": rem_info.get("ip", "") if rem_info else "",
@@ -31169,6 +31183,24 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 logger_manager.log_info(f"[CoreService] Server aktif beralih ke: {server_id} ({s_name})")
+                # Beralih jaringan EasyTier otomatis ke Remote ID milik server target jika berbeda
+                target_rid = (target_srv.get("remote_id") or target_srv.get("zerotier_network_id") or "").strip().lower()
+                r_mode = (target_srv.get("remote_mode") or cfg.get("remote_mode", "auto")).lower()
+                if easytier_manager and r_mode in ("auto", "easytier"):
+                    try:
+                        et_mgr = easytier_manager.get_easytier_manager()
+                        cur_rid = (et_mgr.get_remote_id() or "").strip().lower()
+                        if target_rid and target_rid != cur_rid and et_mgr.is_running():
+                            logger_manager.log_info(f"[CoreService] Beralih jaringan EasyTier ke Remote ID target: {target_rid}")
+                            et_params = easytier_manager.derive_easytier_params(target_rid)
+                            et_mgr.start_easytier(
+                                network_name=et_params["network_name"],
+                                network_secret=et_params["network_secret"],
+                                remote_id=target_rid,
+                                ipv4=target_srv.get("easytier_client_ipv4") or "10.126.126.2/24",
+                            )
+                    except Exception as et_switch_err:
+                        logger_manager.log_error(f"[CoreService] Gagal beralih EasyTier ke server target: {et_switch_err}")
 
 
 

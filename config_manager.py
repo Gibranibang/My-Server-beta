@@ -1085,29 +1085,35 @@ def get_dynamic_remote_info(server, config=None):
     r_mode = (server.get("remote_mode") or config.get("remote_mode", "auto")).lower()
     srv_zt_vip = (server.get("zerotier_virtual_ip") or "").strip()
     srv_et_vip = (server.get("easytier_virtual_ip") or "").strip()
+    srv_rid = (server.get("remote_id") or server.get("zerotier_network_id") or "").strip().lower()
+    srv_name = (server.get("name") or "").strip()
 
     # Cek EasyTier jika modul tersedia
     et_peer_ip = None
     et_running = False
+    daemon_matches_server = False
     try:
         import easytier_manager
         mgr = easytier_manager.get_easytier_manager()
         et_running = mgr.is_running()
         if et_running:
-            et_peer_ip = mgr.get_peer_ip()
-            # Jika belum terdeteksi dari tabel rute, uji apakah IP gateway standar ZimaOS 10.126.126.1
-            # merespons secara nyata di port 80 (bukan adapter lokal milik sendiri)
-            if not et_peer_ip and not srv_et_vip:
-                if mgr.is_peer_reachable("10.126.126.1", timeout=0.3):
-                    et_peer_ip = "10.126.126.1"
+            running_rid = (mgr.get_remote_id() or "").strip().lower()
+            # Daemon hanya cocok jika server tidak menetapkan remote_id atau remote_id-nya sama persis
+            daemon_matches_server = bool(not srv_rid or not running_rid or srv_rid == running_rid)
+            if daemon_matches_server:
+                if srv_et_vip:
+                    et_peer_ip = mgr.get_peer_ip(target_ip=srv_et_vip) or srv_et_vip
+                else:
+                    et_peer_ip = mgr.get_peer_ip(target_hostname=srv_name)
     except Exception:
         pass
 
-    chosen_et_ip = et_peer_ip or srv_et_vip
+    # Prioritaskan IP spesifik server jika sudah didefinisikan, jika tidak gunakan peer terdeteksi
+    chosen_et_ip = srv_et_vip or (et_peer_ip if daemon_matches_server else None)
 
     # 1. Jika mode paksa easytier
     if r_mode == "easytier":
-        final_ip = chosen_et_ip or srv_et_vip
+        final_ip = chosen_et_ip
         if final_ip:
             return {
                 "engine": "easytier",
@@ -1139,9 +1145,10 @@ def get_dynamic_remote_info(server, config=None):
         return None
 
     # 3. Mode AUTO FAILOVER (Default: EasyTier Utama -> ZeroTier Cadangan)
-    # EasyTier hanya dipromosikan jika daemon aktif DAN server peer terhubung / dapat dijangkau
+    # EasyTier hanya dipromosikan jika daemon aktif, cocok dengan jaringan server ini,
+    # DAN server peer terhubung / dapat dijangkau
     et_healthy = False
-    if et_running and chosen_et_ip:
+    if et_running and daemon_matches_server and chosen_et_ip:
         try:
             import easytier_manager
             mgr = easytier_manager.get_easytier_manager()
@@ -1168,14 +1175,14 @@ def get_dynamic_remote_info(server, config=None):
             "badge": "Fallback" if et_running else "P2P"
         }
 
-    # Jika ZeroTier juga tidak ada, kembalikan EasyTier HANYA jika peer IP nyata sudah ditemukan
-    if et_running and chosen_et_ip:
+    # Jika ZeroTier juga tidak ada, kembalikan EasyTier jika server memiliki virtual IP terkonfigurasi atau peer cocok
+    if chosen_et_ip:
         return {
             "engine": "easytier",
             "name": "EasyTier Remote (P2P)",
             "ip": chosen_et_ip,
             "url": f"http://{chosen_et_ip}",
-            "badge": "P2P"
+            "badge": "P2P" if (et_running and daemon_matches_server and et_healthy) else "Offline"
         }
 
     return None

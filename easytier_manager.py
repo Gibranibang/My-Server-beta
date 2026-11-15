@@ -477,8 +477,21 @@ class EasyTierManager:
                 return data["items"]
         return []
 
-    def get_peer_ip(self):
-        """Mencari alamat IPv4 dari peer server di jaringan mesh EasyTier."""
+    def get_remote_id(self):
+        """Mengembalikan Remote ID jaringan EasyTier yang sedang aktif berjalan."""
+        return self._remote_id
+
+    def get_network_name(self):
+        """Mengembalikan Network Name jaringan EasyTier yang sedang aktif berjalan."""
+        return self._network_name
+
+    def get_peer_ip(self, target_ip=None, target_hostname=None):
+        """
+        Mencari alamat IPv4 dari peer server di jaringan mesh EasyTier.
+        - Jika target_ip diberikan, validasi apakah target_ip tersebut ada di tabel rute/peer atau merespons.
+        - Jika target_hostname diberikan, cari peer yang nama host-nya cocok.
+        - Jika tanpa parameter, ambil peer pertama yang bukan merupakan IP lokal adapter mesin sendiri.
+        """
         if not self.is_running():
             return None
         node_info = self.get_node_info()
@@ -495,18 +508,43 @@ class EasyTierManager:
         except Exception:
             pass
 
+        clean_target = str(target_ip or "").split("/")[0].strip()
+        if clean_target and clean_target in local_ips:
+            return None
+
         routes = self.get_routes()
-        for r in routes:
-            if isinstance(r, dict):
-                ipv4 = r.get("ipv4_addr") or r.get("ipv4") or r.get("ip") or r.get("peer_ipv4")
-                if ipv4:
-                    clean = str(ipv4).split("/")[0].strip()
-                    if clean and clean not in local_ips and not clean.startswith("127."):
-                        return clean
         peers = self.get_peers()
-        for p in peers:
-            if isinstance(p, dict):
-                ipv4 = p.get("ipv4_addr") or p.get("ipv4") or p.get("ip") or p.get("peer_ipv4")
+        all_entries = list(routes) + list(peers)
+
+        # 1. Jika target_ip spesifik diminta, cek apakah ada di entri atau dapat dijangkau
+        if clean_target:
+            for item in all_entries:
+                if isinstance(item, dict):
+                    ipv4 = item.get("ipv4_addr") or item.get("ipv4") or item.get("ip") or item.get("peer_ipv4")
+                    if ipv4 and str(ipv4).split("/")[0].strip() == clean_target:
+                        return clean_target
+            # Validasi apakah target_ip merespons HTTP port 80 jika belum sinkron di CLI
+            if self.is_peer_reachable(clean_target, timeout=0.2):
+                return clean_target
+            return None
+
+        # 2. Jika target_hostname diminta, cari kecocokan nama host
+        if target_hostname:
+            cand_host = target_hostname.strip().lower()
+            for item in all_entries:
+                if isinstance(item, dict):
+                    h = str(item.get("hostname") or item.get("name") or "").strip().lower()
+                    if h and (h == cand_host or cand_host in h or h in cand_host):
+                        ipv4 = item.get("ipv4_addr") or item.get("ipv4") or item.get("ip") or item.get("peer_ipv4")
+                        if ipv4:
+                            clean = str(ipv4).split("/")[0].strip()
+                            if clean and clean not in local_ips and not clean.startswith("127."):
+                                return clean
+
+        # 3. Fallback: ambil peer pertama yang valid dan bukan mesin lokal
+        for item in all_entries:
+            if isinstance(item, dict):
+                ipv4 = item.get("ipv4_addr") or item.get("ipv4") or item.get("ip") or item.get("peer_ipv4")
                 if ipv4:
                     clean = str(ipv4).split("/")[0].strip()
                     if clean and clean not in local_ips and not clean.startswith("127."):

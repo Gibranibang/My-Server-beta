@@ -309,8 +309,8 @@ export default function ServerView({ go }: ViewProps) {
     setActiveItem(cur)
     setFormName(cur.name || "")
     setFormUrl(activeRouteObj?.url || "")
-    setFormNwid(details?.zeroTier?.configuredNwid || "")
-    setFormVip(details?.zeroTier?.serverVirtualIp || "")
+    setFormNwid((cur as any).remote_id || (cur as any).zerotier_network_id || details?.easyTier?.remote_id || details?.zeroTier?.configuredNwid || "")
+    setFormVip((cur as any).easytier_virtual_ip || (cur as any).zerotier_virtual_ip || details?.activeRemoteIp || details?.zeroTier?.serverVirtualIp || "")
     setModalMode("editServer")
   }
 
@@ -480,11 +480,11 @@ export default function ServerView({ go }: ViewProps) {
     setIsSubmitting(true)
     try {
       if (modalMode === "addServer") {
-        const res = await api.saveServer({ name: formName, url: formUrl, username: formUser, password: formPass, zerotierNetworkId: formNwid, zerotierVirtualIp: formVip })
+        const res = await api.saveServer({ name: formName, url: formUrl, username: formUser, password: formPass, remoteId: formNwid, zerotierNetworkId: formNwid, easytierVirtualIp: formVip, zerotierVirtualIp: formVip })
         if (res?.success === false) throw new Error(res.message || "Gagal menyimpan server")
         notify(t("server_added_notice", "Server baru berhasil ditambahkan"), "success")
       } else if (modalMode === "editServer") {
-        const res = await api.saveServer({ id: activeItem?.id || details?.serverId, name: formName, url: formUrl, zerotierNetworkId: formNwid, zerotierVirtualIp: formVip })
+        const res = await api.saveServer({ id: activeItem?.id || details?.serverId, name: formName, url: formUrl, remoteId: formNwid, zerotierNetworkId: formNwid, easytierVirtualIp: formVip, zerotierVirtualIp: formVip })
         if (res?.success === false) throw new Error(res.message || "Gagal memperbarui server")
         notify(t("server_updated_notice", "Server berhasil diperbarui"), "success")
       } else if (modalMode === "deleteServer") {
@@ -850,11 +850,11 @@ export default function ServerView({ go }: ViewProps) {
                         {details?.easyTier?.virtual_ipv4 || details?.easyTier?.virtual_ip || (details?.easyTier?.running ? "10.126.126.2" : "–")}
                       </Mono>
                     </div>
-                    {(details?.easyTier?.server_peer_ip || details?.easyTier?.running) && (
+                    {Boolean(details?.easyTier?.server_peer_ip || details?.activeRemoteIp) && (
                       <div className="col-span-2 flex items-center justify-between text-nano border-t border-line/40 pt-1">
                         <span className="text-ink-subtle">Server IP:</span>
                         <Mono className="text-ink font-semibold text-[9.5px]">
-                          {details?.easyTier?.server_peer_ip || "10.126.126.1"}
+                          {details?.easyTier?.server_peer_ip || details?.activeRemoteIp || "–"}
                         </Mono>
                       </div>
                     )}

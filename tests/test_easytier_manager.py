@@ -119,6 +119,94 @@ class TestEasyTierManager(unittest.TestCase):
             peer_ip = self.mgr.get_peer_ip()
             self.assertEqual(peer_ip, "10.126.126.1")
 
+    def test_get_peer_ip_targets_specific_server_ip(self):
+        """Memastikan jika target_ip spesifik (misal Server B 10.126.126.3) dicari, ia tidak mengambil IP Server A (10.126.126.1)."""
+        mock_routes = [
+            {"ipv4_addr": "10.126.126.1/24", "hostname": "Server-A"},
+            {"ipv4_addr": "10.126.126.3/24", "hostname": "Server-B"},
+        ]
+        with patch.object(self.mgr, "is_running", return_value=True), \
+             patch.object(self.mgr, "get_node_info", return_value={"virtual_ipv4": "10.126.126.2"}), \
+             patch.object(self.mgr, "get_routes", return_value=mock_routes), \
+             patch.object(self.mgr, "get_peers", return_value=[]):
+            # Minta Server B
+            ip_b = self.mgr.get_peer_ip(target_ip="10.126.126.3")
+            self.assertEqual(ip_b, "10.126.126.3")
+
+            # Minta Server A
+            ip_a = self.mgr.get_peer_ip(target_ip="10.126.126.1")
+            self.assertEqual(ip_a, "10.126.126.1")
+
+            # Minta hostname Server-B
+            ip_b_host = self.mgr.get_peer_ip(target_hostname="Server-B")
+            self.assertEqual(ip_b_host, "10.126.126.3")
+
+    def test_multi_server_isolation_in_config_manager(self):
+        """Memastikan Server A dan Server B tidak pernah memiliki IP EasyTier yang sama."""
+        import config_manager
+        server_a = {
+            "id": "srv_a",
+            "name": "Server A",
+            "remote_id": "aaaaaaaaaaaaaaaa",
+            "easytier_virtual_ip": "10.126.126.1",
+            "connections": []
+        }
+        server_b = {
+            "id": "srv_b",
+            "name": "Server B",
+            "remote_id": "bbbbbbbbbbbbbbbb",
+            "easytier_virtual_ip": "10.126.126.3",
+            "connections": []
+        }
+
+        # Simulasikan daemon sedang berjalan pada Remote ID Server A
+        with patch.object(self.mgr, "is_running", return_value=True), \
+             patch.object(self.mgr, "get_remote_id", return_value="aaaaaaaaaaaaaaaa"), \
+             patch.object(self.mgr, "is_peer_reachable", return_value=True), \
+             patch("easytier_manager.get_easytier_manager", return_value=self.mgr):
+
+            info_a = config_manager.get_dynamic_remote_info(server_a, config={})
+            info_b = config_manager.get_dynamic_remote_info(server_b, config={})
+
+            self.assertIsNotNone(info_a)
+            self.assertEqual(info_a["ip"], "10.126.126.1")
+
+            self.assertIsNotNone(info_b)
+            self.assertEqual(info_b["ip"], "10.126.126.3")
+            self.assertNotEqual(info_a["ip"], info_b["ip"])
+
+    def test_server_b_different_network_does_not_steal_server_a_peer_ip(self):
+        """Jika Server B belum punya explicit IP dan daemon berada di network Server A, Server B tidak mencuri peer IP Server A."""
+        import config_manager
+        server_a = {
+            "id": "srv_a",
+            "name": "Server A",
+            "remote_id": "aaaaaaaaaaaaaaaa",
+            "connections": []
+        }
+        server_b = {
+            "id": "srv_b",
+            "name": "Server B",
+            "remote_id": "bbbbbbbbbbbbbbbb",
+            "connections": []
+        }
+
+        # Daemon berjalan di jaringan Server A dan menemukan peer 10.126.126.1
+        with patch.object(self.mgr, "is_running", return_value=True), \
+             patch.object(self.mgr, "get_remote_id", return_value="aaaaaaaaaaaaaaaa"), \
+             patch.object(self.mgr, "get_peer_ip", return_value="10.126.126.1"), \
+             patch.object(self.mgr, "is_peer_reachable", return_value=True), \
+             patch("easytier_manager.get_easytier_manager", return_value=self.mgr):
+
+            info_a = config_manager.get_dynamic_remote_info(server_a, config={})
+            info_b = config_manager.get_dynamic_remote_info(server_b, config={})
+
+            # Server A mengambil 10.126.126.1 dari daemon
+            self.assertEqual(info_a["ip"], "10.126.126.1")
+
+            # Server B TIDAK boleh mengambil 10.126.126.1 karena berada di jaringan terpisah
+            self.assertIsNone(info_b)
+
 
 if __name__ == "__main__":
     unittest.main()

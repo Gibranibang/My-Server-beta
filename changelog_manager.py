@@ -12,6 +12,26 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.12",
+        "channel": "Beta",
+        "date": "2026-11-15",
+        "title": "Perbaikan Komprehensif Daemon & Telemetri EasyTier Mesh P2P, Pencegahan Konflik IP DHCP, dan Pembersihan Duplikasi Route",
+        "notes": [
+            "Dukungan Penuh Mode Tanpa TUN & Fallback Otomatis: Parameter use_no_tun dan external_node kini diteruskan dengan benar ke daemon easytier-core.exe (--no-tun dan --external-node), memungkinkan operasi sub-node proxy tanpa memerlukan hak Administrator atau driver Wintun saat UAC ditolak.",
+            "Pencegahan Konflik IP dengan Native DHCP: Mengganti hardcoded IP static 10.126.126.2/24 dengan flag native EasyTier DHCP (-d) saat IP kustom tidak ditentukan, mencegah tabrakan IP otomatis antar-klien.",
+            "Sinkronisasi Skema Telemetri CLI EasyTier v2.6.4: Memperbarui fungsi get_node_info() untuk membaca field virtual_ipv4 secara langsung dari struct MyNodeInfo, dan memperluas parsing get_peers()/get_routes() agar mendukung wrapper payload items.",
+            "Pembersihan Rute Shadowed & Duplikat Endpoint: Memperbaiki endpoint /api/easytier/status dan /api/easytier_status agar mengembalikan format gabungan (success, data, dan top-level overview), serta menghapus 52 baris duplikasi kode mati di myserver_core_service.py.",
+            "Penyelarasan Verifikasi Koneksi Wizard UI: Memperbarui StepConnection.tsx untuk mendeteksi IP peer server yang aktif (server_peer_ip) dan memberikan umpan balik visual yang akurat kepada pengguna."
+        ],
+        "features": [
+            "Dukungan Parameter use_no_tun & external_node pada EasyTier Daemon",
+            "Pencegahan Bentrokan IP Otomatis Berbasis Native EasyTier DHCP (-d)",
+            "Koreksi Telemetri virtual_ipv4 & Parsing Route items pada easytier-cli",
+            "Eliminasi 52 Baris Duplikasi Route Mati di myserver_core_service.py",
+            "Indikator Server Peer IP pada Verifikasi Wizard UI"
+        ]
+    },
+    {
         "version": "4.5.11",
         "channel": "Beta",
         "date": "2026-11-15",

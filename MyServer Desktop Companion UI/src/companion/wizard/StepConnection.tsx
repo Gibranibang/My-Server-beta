@@ -150,14 +150,17 @@ export function StepConnection({
       }
 
       const remoteStatus = api.getRemoteStatus ? await api.getRemoteStatus() : null
+      const et = remoteStatus?.easytier
       const running = remoteStatus
-        ? Boolean(remoteStatus?.easytier?.running ?? remoteStatus?.running)
+        ? Boolean(et?.running ?? remoteStatus?.running)
         : Boolean(startRes?.status?.running ?? startRes?.success)
 
       if (running) {
         onPatchDraft({ remoteId: cleanId, connectionVerified: true })
-        setProbeOkMsg(t("wiz_conn_ok"))
-        onNotify?.(t("wiz_conn_ok"), "success")
+        const serverIp = et?.server_peer_ip || null
+        const okMsg = serverIp ? `${t("wiz_conn_ok")} (${serverIp})` : t("wiz_conn_ok")
+        setProbeOkMsg(okMsg)
+        onNotify?.(okMsg, "success")
       } else {
         onPatchDraft({ connectionVerified: false })
         setProbeError(startRes?.message || t("wiz_conn_err"))

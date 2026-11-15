@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.5.11"
+APP_VERSION_NUMBER = "4.5.12"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -22737,9 +22737,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
         elif path in ("/api/easytier/status", "/api/easytier_status"):
             if easytier_manager:
                 mgr = easytier_manager.get_easytier_manager()
-                self._send_json(mgr.get_status_overview())
+                status = mgr.get_status_overview()
+                self._send_json({"success": True, "data": status, **status})
             else:
-                self._send_json({"running": False, "error": "easytier_manager not available"})
+                self._send_json({"success": False, "running": False, "error": "easytier_manager not available", "data": {"running": False}})
         elif path in ("/api/vms", "/api/vms/load"):
             cfg = config_manager.load_or_create_config()
             now_ts = time.time()
@@ -30647,9 +30648,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
         if path in ("/api/easytier/status", "/api/easytier_status"):
             if easytier_manager:
                 mgr = easytier_manager.get_easytier_manager()
-                self._send_json(mgr.get_status_overview())
+                status = mgr.get_status_overview()
+                self._send_json({"success": True, "data": status, **status})
             else:
-                self._send_json({"running": False, "error": "easytier_manager not available"})
+                self._send_json({"success": False, "running": False, "error": "easytier_manager not available", "data": {"running": False}})
             return
 
         if path in ("/api/easytier/peers", "/api/easytier_peers"):
@@ -32689,58 +32691,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             self._send_json({"success": ok, "message": msg})
             return
 
-        if path == "/api/easytier_status":
-            if easytier_manager:
-                status = easytier_manager.easytier_instance.get_full_status()
-                self._send_json({"success": True, "data": status})
-            else:
-                self._send_json({"success": False, "error": "EasyTier module not loaded", "data": {"running": False}})
-            return
 
-        if path == "/api/easytier_start":
-            rid = (body.get("remote_id") or body.get("remoteId") or "").strip().lower()
-            net_name = (body.get("network_name") or body.get("networkName") or "").strip()
-            net_secret = (body.get("network_secret") or body.get("networkSecret") or "").strip()
-            peers = body.get("peers") or []
-            if not rid and not net_name:
-                self._send_json({"success": False, "error": "Remote ID atau Network Name wajib diisi."})
-                return
-            if easytier_manager:
-                mgr = easytier_manager.get_easytier_manager()
-                ok, msg = mgr.start(
-                    remote_id=rid or None,
-                    network_name=net_name or None,
-                    network_secret=net_secret or None,
-                    peers=peers
-                )
-                if ok:
-                    try:
-                        cfg = config_manager.load_or_create_config()
-                        et_cfg = cfg.setdefault("easytier", {})
-                        et_cfg["enabled"] = True
-                        if rid:
-                            et_cfg["remote_id"] = rid
-                            params = easytier_manager.derive_easytier_params(rid)
-                            et_cfg["network_name"] = params["network_name"]
-                            et_cfg["network_secret"] = params["network_secret"]
-                            srv = config_manager.get_active_server(cfg)
-                            if srv:
-                                srv["remote_id"] = rid
-                        config_manager.save_config(cfg)
-                    except Exception as ce:
-                        logger_manager.log_debug(f"[EasyTierStart] Gagal simpan config: {ce}")
-                self._send_json({"success": ok, "message": msg, "status": mgr.get_status_overview()})
-            else:
-                self._send_json({"success": False, "error": "EasyTier module not available."})
-            return
-
-        if path == "/api/easytier_stop":
-            if easytier_manager:
-                ok, msg = easytier_manager.easytier_instance.stop()
-                self._send_json({"success": ok, "message": msg})
-            else:
-                self._send_json({"success": False, "error": "EasyTier module not available."})
-            return
 
 
 

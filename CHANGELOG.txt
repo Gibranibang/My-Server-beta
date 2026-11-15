@@ -1,4 +1,14 @@
 ===================================================
+[v4.5.12 - Beta] - 2026-11-15
+Catatan:
+1. Dukungan Penuh Mode Tanpa TUN & Fallback Otomatis: Parameter use_no_tun dan external_node kini diteruskan dengan benar ke daemon easytier-core.exe (--no-tun dan --external-node), memungkinkan operasi sub-node proxy tanpa memerlukan hak Administrator atau driver Wintun saat UAC ditolak.
+2. Pencegahan Konflik IP dengan Native DHCP: Mengganti hardcoded IP static 10.126.126.2/24 dengan flag native EasyTier DHCP (-d) saat IP kustom tidak ditentukan, mencegah tabrakan IP otomatis antar-klien.
+3. Sinkronisasi Skema Telemetri CLI EasyTier v2.6.4: Memperbarui fungsi get_node_info() untuk membaca field virtual_ipv4 secara langsung dari struct MyNodeInfo, dan memperluas parsing get_peers()/get_routes() agar mendukung wrapper payload items.
+4. Pembersihan Rute Shadowed & Duplikat Endpoint: Memperbaiki endpoint /api/easytier/status dan /api/easytier_status agar mengembalikan format gabungan (success, data, dan top-level overview), serta menghapus 52 baris duplikasi kode mati di myserver_core_service.py.
+5. Penyelarasan Verifikasi Koneksi Wizard UI: Memperbarui StepConnection.tsx untuk mendeteksi IP peer server yang aktif (server_peer_ip) dan memberikan umpan balik visual yang akurat kepada pengguna.
+===================================================
+
+===================================================
 [v4.5.11 - Beta] - 2026-11-15
 Catatan:
 1. Perbaikan Kebocoran Prefill Setup Wizard & Penghapusan Hardcoding Lintas Repositori: Memperbaiki alur SetupWizard.tsx saat dibuka kembali dari menu Settings agar tidak lagi membawa nilai default personal yang hardcoded, serta membersihkan seluruh domain, path absolut, alamat IP privat, dan secret fallback hardcoded di Desktop maupun Backend (dilengkapi regresi SetupWizard.reentry.test.tsx & test_no_hardcoding.py).

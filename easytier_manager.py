@@ -168,7 +168,7 @@ class EasyTierManager:
                 return False
         return False
 
-    def start(self, network_name=None, network_secret=None, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None):
+    def start(self, network_name=None, network_secret=None, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, use_no_tun=False, external_node=None):
         """
         Meluncurkan daemon easytier-core.exe secara headless di background.
         Mendukung peluncuran via remote_id ZimaOS (mengikuti standar Zima Client)
@@ -204,8 +204,6 @@ class EasyTierManager:
             self._remote_id = clean_rid if clean_rid else None
             self._network_name = target_net_name
             self._network_secret = target_net_secret
-            # Gunakan IP subnet default ZimaNet (10.126.126.2/24) jika tidak ditentukan
-            self._ipv4 = str(ipv4).strip() if ipv4 else "10.126.126.2/24"
             self._rpc_port = int(rpc_port)
 
             core_exe = self._binaries["core_path"]
@@ -218,8 +216,22 @@ class EasyTierManager:
                 "-r", f"127.0.0.1:{self._rpc_port}",
                 "--listeners", "wss://0.0.0.0:0", "tcp://0.0.0.0:0", "udp://0.0.0.0:0",
                 "--lazy-p2p",
-                "-i", self._ipv4
             ]
+
+            if use_no_tun:
+                cmd.append("--no-tun")
+            if external_node:
+                cmd.extend(["--external-node", str(external_node).strip()])
+
+            # Konfigurasi IP: Jika ipv4 spesifik ditentukan dan bukan 'dhcp', gunakan -i.
+            # Jika tidak ditentukan atau 'dhcp', gunakan DHCP native (-d) untuk mencegah konflik IP.
+            clean_ipv4 = str(ipv4 or "").strip()
+            if clean_ipv4 and clean_ipv4.lower() != "dhcp":
+                self._ipv4 = clean_ipv4
+                cmd.extend(["-i", self._ipv4])
+            else:
+                self._ipv4 = None
+                cmd.append("-d")
 
             # Gabungkan relay peers standar IceWhale + public relays
             relay_list = list(peers) if peers else DEFAULT_RELAY_PEERS
@@ -228,7 +240,7 @@ class EasyTierManager:
                 if clean_p:
                     cmd.extend(["-p", clean_p])
 
-            logger.info("Meluncurkan EasyTier Core: %s (network=%s, ip=%s)", core_exe, self._network_name, self._ipv4)
+            logger.info("Meluncurkan EasyTier Core: %s (network=%s, ip=%s, no_tun=%s)", core_exe, self._network_name, self._ipv4 or "dhcp", use_no_tun)
 
             is_admin = False
             if os.name == "nt":
@@ -244,7 +256,8 @@ class EasyTierManager:
                 stdout_log = open(os.path.join(log_dir, "easytier.stdout.log"), "w", encoding="utf-8")
                 stderr_log = open(os.path.join(log_dir, "easytier.stderr.log"), "w", encoding="utf-8")
 
-                if is_admin or os.name != "nt":
+                if use_no_tun or is_admin or os.name != "nt":
+                    # Mode tanpa TUN atau sudah Admin: dapat langsung dijalankan tanpa prompt UAC
                     self._proc = subprocess.Popen(
                         cmd,
                         cwd=working_dir,
@@ -253,7 +266,7 @@ class EasyTierManager:
                         creationflags=creationflags
                     )
                 else:
-                    # Elevasi resmi via Win32 ShellExecuteW RunAs agar UAC prompt muncul secara interaktif
+                    # Mode dengan TUN membutuhkan elevasi UAC untuk membuat Wintun interface
                     logger.info("Proses berjalan tanpa hak Admin -> Meluncurkan EasyTier dengan elevasi ShellExecuteW RunAs...")
                     args_str = subprocess.list2cmdline(cmd[1:])
                     ret = ctypes.windll.shell32.ShellExecuteW(
@@ -276,8 +289,9 @@ class EasyTierManager:
                 self._start_time = time.time()
                 self._cached_summary = None
 
-                # Tunggu RPC socket menjadi responsif (maksimal 4 detik)
-                for _ in range(20):
+                # Berikan waktu tunggu RPC responsif (hingga 12 detik jika lewat UAC, 4 detik jika child langsung)
+                max_checks = 60 if (not is_admin and not use_no_tun and os.name == "nt") else 20
+                for _ in range(max_checks):
                     time.sleep(0.2)
                     if self._is_rpc_reachable():
                         logger.info("EasyTier daemon berhasil aktif dan RPC reachable.")
@@ -288,7 +302,21 @@ class EasyTierManager:
                 if self._is_rpc_reachable():
                     return True, "EasyTier aktif."
 
-                logger.warning("EasyTier RPC portal belum merespons setelah 4s.")
+                # Jika UAC gagal atau TUN gagal dibuat, coba fallback otomatis ke mode --no-tun
+                if not use_no_tun and os.name == "nt":
+                    logger.warning("EasyTier TUN gagal aktif. Mencoba fallback ke mode --no-tun (sub-node proxy)...")
+                    return self.start(
+                        network_name=network_name,
+                        network_secret=network_secret,
+                        ipv4=ipv4,
+                        peers=peers,
+                        rpc_port=rpc_port,
+                        remote_id=remote_id,
+                        use_no_tun=True,
+                        external_node=external_node
+                    )
+
+                logger.warning("EasyTier RPC portal belum merespons setelah inisialisasi.")
                 return False, "Gagal membuat virtual TUN adapter. Pastikan izin Administrator diberikan saat prompt UAC muncul."
             except Exception as e:
                 logger.error("Gagal meluncurkan EasyTier Core: %s", e)
@@ -388,7 +416,7 @@ class EasyTierManager:
             data, err = self.run_cli(["node"])
         uptime = int(time.time() - self._start_time) if self._start_time else 0
         if data and isinstance(data, dict):
-            raw_vip = data.get("ipv4_addr") or data.get("ipv4") or self._ipv4 or "10.126.126.2"
+            raw_vip = data.get("virtual_ipv4") or data.get("ipv4_addr") or data.get("ipv4") or self._ipv4 or "10.126.126.2"
             clean_vip = str(raw_vip).split("/")[0].strip()
             return {
                 "running": True,
@@ -419,8 +447,11 @@ class EasyTierManager:
             data, err = self.run_cli(["peer"])
         if isinstance(data, list):
             return data
-        elif isinstance(data, dict) and "peers" in data:
-            return data["peers"]
+        elif isinstance(data, dict):
+            if "peers" in data and isinstance(data["peers"], list):
+                return data["peers"]
+            if "items" in data and isinstance(data["items"], list):
+                return data["items"]
         return []
 
     def get_routes(self):
@@ -433,8 +464,11 @@ class EasyTierManager:
             data, err = self.run_cli(["route"])
         if isinstance(data, list):
             return data
-        elif isinstance(data, dict) and "routes" in data:
-            return data["routes"]
+        elif isinstance(data, dict):
+            if "routes" in data and isinstance(data["routes"], list):
+                return data["routes"]
+            if "items" in data and isinstance(data["items"], list):
+                return data["items"]
         return []
 
     def get_peer_ip(self):
@@ -446,20 +480,19 @@ class EasyTierManager:
         routes = self.get_routes()
         for r in routes:
             if isinstance(r, dict):
-                ipv4 = r.get("ipv4") or r.get("ipv4_addr") or r.get("ip") or r.get("peer_ipv4")
+                ipv4 = r.get("ipv4_addr") or r.get("ipv4") or r.get("ip") or r.get("peer_ipv4")
                 if ipv4:
                     clean = str(ipv4).split("/")[0].strip()
-                    if clean and clean != local_ip and not clean.startswith("127."):
+                    if clean and clean != local_ip and not clean.startswith("127.") and clean != "0.0.0.0":
                         return clean
         peers = self.get_peers()
         for p in peers:
             if isinstance(p, dict):
-                ipv4 = p.get("ipv4") or p.get("ipv4_addr") or p.get("ip") or p.get("peer_ipv4")
+                ipv4 = p.get("ipv4_addr") or p.get("ipv4") or p.get("ip") or p.get("peer_ipv4")
                 if ipv4:
                     clean = str(ipv4).split("/")[0].strip()
-                    if clean and clean != local_ip and not clean.startswith("127."):
+                    if clean and clean != local_ip and not clean.startswith("127.") and clean != "0.0.0.0":
                         return clean
-        # Jika tidak ada peer aktif di routes atau peers, jangan buat IP fiktif
         return None
 
     def is_peer_reachable(self, target_ip=None, timeout=0.25):
@@ -528,7 +561,16 @@ class EasyTierManager:
 
     def start_easytier(self, network_name=None, network_secret=None, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None):
         """Alias untuk start() dengan parameter fleksibel."""
-        return self.start(network_name=network_name, network_secret=network_secret, ipv4=ipv4, peers=peers, rpc_port=rpc_port, remote_id=remote_id)
+        return self.start(
+            network_name=network_name,
+            network_secret=network_secret,
+            ipv4=ipv4,
+            peers=peers,
+            rpc_port=rpc_port,
+            remote_id=remote_id,
+            use_no_tun=use_no_tun,
+            external_node=external_node
+        )
 
     def stop_easytier(self):
         """Alias untuk stop() demi kompatibilitas penuh."""

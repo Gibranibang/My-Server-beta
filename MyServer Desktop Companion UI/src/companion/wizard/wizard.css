@@ -1,133 +1,219 @@
-/* MyServer Setup Wizard — tokens transplanted from .planning/sketches/themes/{default,light}.css.
-   Everything is scoped under .wizard-win so the Companion dashboard styles stay untouched. */
+/* =====================================================================
+   Phase 3: First-Time Setup Wizard Stylesheet
+   Faithful 1:1 port of approved prototypes:
+   - .planning/sketches/themes/default.css
+   - .planning/sketches/themes/light.css
+   - .planning/sketches/001-wizard-shell-stepper/index.html
+   - .planning/sketches/002-connection-wan-auth-steps/index.html
+   - .planning/sketches/003-backend-deploy-tools-finish/index.html
+   ===================================================================== */
 
+.wizard-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wizard-boot-loading {
+  width: 460px;
+  min-height: 392px;
+  border-radius: 16px;
+  background: #0B0E09;
+}
+
+/* =====================================================================
+   THEME TOKENS — DARK (DEFAULT) & LIGHT OVERRIDE
+   ===================================================================== */
 .wizard-win {
-  --wz-accent: #7bc504;
-  --wz-accent-soft: rgba(123, 197, 4, 0.16);
-  --wz-accent-border: rgba(132, 204, 22, 0.42);
-  --wz-win-bg: #0b0e09;
-  --wz-win-border: rgba(255, 255, 255, 0.15);
-  --wz-win-shadow: 0 28px 70px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(255, 255, 255, 0.08);
-  --wz-ink: #f8fafc;
-  --wz-ink-muted: #cbd5e1;
-  --wz-ink-subtle: #94a3b8;
-  --wz-surface: rgba(17, 21, 13, 0.88);
-  --wz-surface-hover: rgba(255, 255, 255, 0.11);
-  --wz-line: rgba(255, 255, 255, 0.13);
-  --wz-line-strong: rgba(255, 255, 255, 0.24);
-  --wz-input-bg: rgba(11, 14, 9, 0.92);
-  --wz-input-border: rgba(255, 255, 255, 0.18);
-  --wz-input-focus: rgba(132, 204, 22, 0.58);
-  --wz-seg-track: rgba(11, 14, 9, 0.9);
-  --wz-seg-active: rgba(255, 255, 255, 0.15);
-  --wz-seg-active-border: rgba(255, 255, 255, 0.22);
-  --wz-ok-bg: rgba(20, 38, 6, 0.9);
-  --wz-ok-border: rgba(132, 204, 22, 0.44);
-  --wz-ok-ink: #ecfccb;
-  --wz-danger-bg: rgba(69, 10, 10, 0.9);
-  --wz-danger-border: rgba(248, 113, 113, 0.48);
-  --wz-danger-ink: #fee2e2;
-  --wz-btn-primary-bg: linear-gradient(180deg, #8ce012 0%, #6cb402 100%);
-  --wz-btn-primary-border: rgba(217, 249, 157, 0.45);
-  --wz-btn-primary-ink: #081202;
-  --wz-btn-primary-disabled-bg: rgba(255, 255, 255, 0.1);
-  --wz-btn-primary-disabled-ink: #cbd5e1;
-  --wz-btn-sec-bg: rgba(255, 255, 255, 0.08);
-  --wz-btn-sec-border: rgba(255, 255, 255, 0.2);
-  --wz-btn-sec-ink: #f8fafc;
-  --wz-progress-track: rgba(255, 255, 255, 0.2);
-  --wz-scrim: linear-gradient(
-    180deg,
-    rgba(11, 14, 9, 0.22) 0%,
-    rgba(11, 14, 9, 0.56) 52%,
-    rgba(11, 14, 9, 0.78) 100%
-  );
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Core Brand Accent (high-contrast MyServer lime + deep ink) */
+  --accent: #7BC504;
+  --accent-strong: #65A30D;
+  --accent-soft: rgba(123, 197, 4, 0.16);
+  --accent-border: rgba(132, 204, 22, 0.42);
+
+  --danger: #EF4444;
+  --danger-bg: rgba(69, 10, 10, 0.90);
+  --danger-border: rgba(248, 113, 113, 0.48);
+  --danger-ink: #FEE2E2;
+
+  --ok-bg: rgba(20, 38, 6, 0.90);
+  --ok-border: rgba(132, 204, 22, 0.44);
+  --ok-ink: #ECFCCB;
+
+  --warn-bg: rgba(69, 26, 3, 0.90);
+  --warn-border: rgba(251, 191, 36, 0.45);
+  --warn-ink: #FEF3C7;
+
+  /* Dark Mode Surfaces & Inks */
+  --win-bg: #0B0E09;
+  --win-border: rgba(255, 255, 255, 0.15);
+  --win-shadow: 0 28px 70px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(255, 255, 255, 0.08);
+
+  --ink: #F8FAFC;
+  --ink-muted: #CBD5E1;
+  --ink-subtle: #94A3B8;
+
+  --surface-elevated: rgba(17, 21, 13, 0.88);
+  --surface-hover: rgba(255, 255, 255, 0.11);
+  --line: rgba(255, 255, 255, 0.13);
+  --line-strong: rgba(255, 255, 255, 0.24);
+
+  --input-bg: rgba(11, 14, 9, 0.92);
+  --input-border: rgba(255, 255, 255, 0.18);
+  --input-focus: rgba(132, 204, 22, 0.58);
+
+  --seg-track: rgba(11, 14, 9, 0.90);
+  --seg-active: rgba(255, 255, 255, 0.15);
+  --seg-active-border: rgba(255, 255, 255, 0.22);
+  --seg-active-ink: #FFFFFF;
+
+  --btn-primary-bg: linear-gradient(180deg, #8CE012 0%, #6CB402 100%);
+  --btn-primary-border: rgba(217, 249, 157, 0.45);
+  --btn-primary-ink: #081202;
+  --btn-primary-shadow: 0 4px 14px rgba(123, 197, 4, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  --btn-primary-disabled-bg: rgba(255, 255, 255, 0.10);
+  --btn-primary-disabled-border: rgba(255, 255, 255, 0.14);
+  --btn-primary-disabled-ink: #94A3B8;
+
+  --btn-sec-bg: rgba(255, 255, 255, 0.08);
+  --btn-sec-border: rgba(255, 255, 255, 0.18);
+  --btn-sec-ink: #F1F5F9;
+  --btn-sec-hover-bg: rgba(255, 255, 255, 0.15);
+  --btn-sec-hover-border: rgba(255, 255, 255, 0.30);
+
+  --btn-subtle-bg: rgba(17, 21, 13, 0.78);
+  --btn-subtle-border: rgba(255, 255, 255, 0.11);
+  --btn-subtle-ink: #CBD5E1;
+
+  --progress-track: rgba(255, 255, 255, 0.18);
 }
 
 .wizard-win[data-theme="light"] {
-  --wz-accent-soft: rgba(101, 163, 13, 0.14);
-  --wz-accent-border: rgba(77, 124, 15, 0.42);
-  --wz-win-bg: #ffffff;
-  --wz-win-border: rgba(15, 23, 42, 0.12);
-  --wz-win-shadow: 0 24px 60px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.08);
-  --wz-ink: #0f172a;
-  --wz-ink-muted: #334155;
-  --wz-ink-subtle: #475569;
-  --wz-surface: rgba(255, 255, 255, 0.94);
-  --wz-surface-hover: rgba(15, 23, 42, 0.07);
-  --wz-line: rgba(15, 23, 42, 0.12);
-  --wz-line-strong: rgba(15, 23, 42, 0.24);
-  --wz-input-bg: #ffffff;
-  --wz-input-border: #cbd5e1;
-  --wz-input-focus: rgba(70, 114, 12, 0.45);
-  --wz-seg-track: #e9eff4;
-  --wz-seg-active: #ffffff;
-  --wz-seg-active-border: rgba(15, 23, 42, 0.12);
-  --wz-ok-bg: #f7fee7;
-  --wz-ok-border: #a3e635;
-  --wz-ok-ink: #365314;
-  --wz-danger-bg: #fef2f2;
-  --wz-danger-border: #fca5a5;
-  --wz-danger-ink: #991b1b;
-  --wz-btn-primary-bg: linear-gradient(180deg, #46720c 0%, #365314 100%);
-  --wz-btn-primary-border: #2d4610;
-  --wz-btn-primary-ink: #ffffff;
-  --wz-btn-primary-disabled-bg: #e2e8f0;
-  --wz-btn-primary-disabled-ink: #475569;
-  --wz-btn-sec-bg: #ffffff;
-  --wz-btn-sec-border: #cbd5e1;
-  --wz-btn-sec-ink: #0f172a;
-  --wz-progress-track: rgba(15, 23, 42, 0.16);
-  --wz-scrim: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.22) 0%,
-    rgba(255, 255, 255, 0.58) 52%,
-    rgba(255, 255, 255, 0.86) 100%
-  );
+  --win-bg: #FFFFFF;
+  --win-border: rgba(15, 23, 42, 0.12);
+  --win-shadow: 0 24px 60px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.08);
+
+  --ink: #0F172A;
+  --ink-muted: #334155;
+  --ink-subtle: #475569;
+
+  --surface-elevated: rgba(255, 255, 255, 0.92);
+  --surface-hover: rgba(15, 23, 42, 0.07);
+  --line: rgba(15, 23, 42, 0.12);
+  --line-strong: rgba(15, 23, 42, 0.24);
+
+  --input-bg: #FFFFFF;
+  --input-border: #CBD5E1;
+  --input-focus: rgba(70, 114, 12, 0.45);
+
+  --seg-track: #E9EFF4;
+  --seg-active: #FFFFFF;
+  --seg-active-border: rgba(15, 23, 42, 0.12);
+  --seg-active-ink: #0F172A;
+
+  --accent-soft: rgba(101, 163, 13, 0.14);
+  --accent-border: rgba(77, 124, 15, 0.42);
+  --ok-bg: #F7FEE7;
+  --ok-border: #A3E635;
+  --ok-ink: #365314;
+
+  --danger-bg: #FEF2F2;
+  --danger-border: #FCA5A5;
+  --danger-ink: #991B1B;
+
+  --warn-bg: #FFFBEB;
+  --warn-border: #FCD34D;
+  --warn-ink: #92400E;
+
+  --btn-primary-bg: linear-gradient(180deg, #46720C 0%, #365314 100%);
+  --btn-primary-border: #2D4610;
+  --btn-primary-ink: #FFFFFF;
+  --btn-primary-shadow: 0 4px 12px rgba(54, 83, 20, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  --btn-primary-disabled-bg: #E2E8F0;
+  --btn-primary-disabled-border: #CBD5E1;
+  --btn-primary-disabled-ink: #475569;
+
+  --btn-sec-bg: #FFFFFF;
+  --btn-sec-border: #CBD5E1;
+  --btn-sec-ink: #0F172A;
+  --btn-sec-hover-bg: #F8FAFC;
+  --btn-sec-hover-border: #94A3B8;
+
+  --btn-subtle-bg: rgba(241, 245, 249, 0.92);
+  --btn-subtle-border: #CBD5E1;
+  --btn-subtle-ink: #334155;
+
+  --progress-track: rgba(15, 23, 42, 0.16);
 }
 
-.wizard-root {
-  display: flex;
-  width: 100%;
-  height: 100%;
-  align-items: flex-start;
-  justify-content: flex-start;
-  background: transparent;
+/* =====================================================================
+   FLOATING SETUP WIZARD WINDOW (Calm, Spacious, Genuine PNG Backdrop)
+   ===================================================================== */
+.wizard-win,
+.wizard-win * {
+  box-sizing: border-box;
 }
 
-/* ---------- Window ---------- */
 .wizard-win {
   position: relative;
   width: 460px;
   max-width: 100%;
-  max-height: 92vh;
   min-height: 392px;
+  max-height: 560px;
   border-radius: 16px;
-  padding: 20px 22px 18px;
+  padding: 18px 20px 16px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  color: var(--wz-ink);
-  font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background-color: var(--wz-win-bg);
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background-color: var(--win-bg);
   background-size: cover;
   background-position: 0 42%;
   background-repeat: no-repeat;
-  box-shadow: var(--wz-win-shadow);
+  box-shadow: var(--win-shadow);
+  overflow: hidden;
   transition: width 0.2s ease;
 }
 
 .wizard-win.is-expanded {
   width: 540px;
+  max-height: 620px;
+  padding: 14px 18px 12px;
 }
 
 .wizard-win::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--wz-scrim);
+  background: linear-gradient(
+    180deg,
+    rgba(11, 14, 9, 0.22) 0%,
+    rgba(11, 14, 9, 0.56) 52%,
+    rgba(11, 14, 9, 0.78) 100%
+  );
   pointer-events: none;
   z-index: 0;
+}
+
+.wizard-win[data-theme="light"]::before {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.18) 0%,
+    rgba(255, 255, 255, 0.52) 52%,
+    rgba(255, 255, 255, 0.82) 100%
+  );
+}
+
+.wizard-win > * {
+  position: relative;
+  z-index: 1;
 }
 
 .wizard-win::after {
@@ -136,331 +222,1008 @@
   inset: 0;
   border-radius: 16px;
   pointer-events: none;
-  box-shadow: inset 0 0 0 1px var(--wz-win-border);
+  box-shadow: inset 0 0 0 1px var(--win-border);
   z-index: 2;
 }
 
-.wizard-win > * {
-  position: relative;
-  z-index: 1;
-}
-
-.wizard-win button,
-.wizard-win input,
-.wizard-win select {
-  font-family: inherit;
-}
-
-/* ---------- Header / progress ---------- */
-.wiz-header {
+/* =====================================================================
+   HEADER & 5-SEGMENT PROGRESS BAR
+   ===================================================================== */
+.wizard-win .wiz-header,
+.wizard-win .wiz-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
-  cursor: grab;
-  user-select: none;
 }
 
-.wiz-logo {
+.wizard-win.is-expanded .wiz-header,
+.wizard-win.is-expanded .wiz-head {
+  margin-bottom: 6px;
+}
+
+.wizard-win .wiz-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wizard-win .wiz-logo {
   display: block;
   height: 25px;
   width: auto;
 }
 
-.wiz-header-right {
+.wizard-win .wiz-header-right,
+.wizard-win .wiz-header-actions,
+.wizard-win .wiz-head-right {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.wiz-step-count {
+.wizard-win .wiz-step-pill,
+.wizard-win .wiz-step-count {
   font-size: 11px;
   font-weight: 600;
-  color: var(--wz-ink-muted);
+  color: var(--ink-muted);
+  white-space: nowrap;
 }
 
-.wiz-icon-btn {
+.wizard-win .wiz-sub-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ink);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  white-space: nowrap;
+}
+
+.wizard-win .wiz-icon-btn,
+.wizard-win .wiz-close {
   width: 28px;
   height: 28px;
   border-radius: 999px;
-  border: 1px solid var(--wz-line);
-  background: var(--wz-surface);
-  color: var(--wz-ink-muted);
+  border: 1px solid var(--btn-subtle-border);
+  background: var(--btn-subtle-bg);
+  color: var(--ink-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  font-size: 15px;
-  line-height: 1;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-.wiz-icon-btn:hover {
-  background: var(--wz-surface-hover);
-  color: var(--wz-ink);
+.wizard-win .wiz-icon-btn:hover,
+.wizard-win .wiz-close:hover {
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
+  color: var(--ink);
 }
 
-.wiz-step-rail {
-  display: flex;
-  gap: 5px;
+.wizard-win .wiz-step-rail,
+.wizard-win .wiz-progress {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
   margin-bottom: 14px;
 }
 
-.wiz-step-rail .wiz-rail-seg {
-  flex: 1;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--wz-progress-track);
-}
-
-.wiz-step-rail .wiz-rail-seg.is-done {
-  background: var(--wz-accent-border);
-}
-
-.wiz-step-rail .wiz-rail-seg.is-active {
-  background: var(--wz-accent);
-}
-
-.wizard-win.is-error .wiz-rail-seg.is-active {
-  background: #ef4444;
-}
-
-.wiz-sub-badge {
-  align-self: flex-start;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--wz-accent-soft);
-  border: 1px solid var(--wz-accent-border);
-  color: var(--wz-ink);
+.wizard-win.is-expanded .wiz-step-rail,
+.wizard-win.is-expanded .wiz-progress {
   margin-bottom: 8px;
 }
 
-.wiz-toast {
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  font-size: 12px;
+.wizard-win .wiz-rail-seg {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--progress-track);
+  border: 0;
+  padding: 0;
+  transition: background-color 0.2s ease;
+}
+
+.wizard-win .wiz-rail-seg.is-done {
+  background: rgba(123, 197, 4, 0.58);
+}
+
+.wizard-win .wiz-rail-seg.is-active {
+  background: var(--accent);
+}
+
+.wizard-win.is-error .wiz-rail-seg.is-active {
+  background: var(--danger);
+}
+
+/* Floating Toast notification inside WizardShell (never shifts window height) */
+.wizard-win .wiz-toast {
+  position: absolute;
+  top: 39px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 40px);
+  z-index: 25;
+  margin: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11px;
   font-weight: 600;
-  border: 1px solid var(--wz-line-strong);
-  background: var(--wz-surface);
-  color: var(--wz-ink);
+  line-height: 1.3;
+  text-align: center;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
 }
 
-.wiz-toast.is-error {
-  background: var(--wz-danger-bg);
-  border-color: var(--wz-danger-border);
-  color: var(--wz-danger-ink);
+.wizard-win.is-expanded .wiz-toast {
+  top: 39px;
+  padding: 3px 11px;
 }
 
-.wiz-toast.is-success {
-  background: var(--wz-ok-bg);
-  border-color: var(--wz-ok-border);
-  color: var(--wz-ok-ink);
+.wizard-win[data-theme="light"] .wiz-toast {
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
 }
 
-.wiz-body {
+.wizard-win .wiz-toast.is-warning {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn-ink);
+}
+
+.wizard-win .wiz-toast.is-error {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-ink);
+}
+
+.wizard-win .wiz-toast.is-success {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok-ink);
+}
+
+/* =====================================================================
+   CONTENT BODY & STEP CONTAINERS (Open Canvas over Artwork — No Box Wrapper)
+   ===================================================================== */
+.wizard-win .wiz-body {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-right: 2px;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 
-/* ---------- Typography ---------- */
-.wiz-step {
+.wizard-win .wiz-card,
+.wizard-win .wiz-step {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.wiz-step-title {
+  gap: 10px;
+  background: transparent;
+  border: 0;
+  padding: 0;
   margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--wz-ink);
+  min-height: 0;
 }
 
-.wiz-step-sub {
-  margin: 4px 0 0;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--wz-ink-muted);
+.wizard-win .wiz-card:has(.wiz-ssh-edit) {
+  gap: 8px;
 }
 
-.wiz-hint {
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--wz-ink-muted);
-  margin: 0;
-}
-
-.wiz-mono {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-}
-
-/* ---------- Fields ---------- */
-.wiz-field,
-.wiz-form-grid,
-.wiz-route-fields {
-  display: flex;
-  flex-direction: column;
+.wizard-win.is-expanded .wiz-card,
+.wizard-win.is-expanded .wiz-step {
   gap: 6px;
 }
 
-.wiz-form-grid,
-.wiz-ssh-grid {
+/* Title & Subtitle Header */
+.wizard-win .wiz-title-wrap,
+.wizard-win .wiz-card-header,
+.wizard-win .wiz-step-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.wiz-field-pair,
-.wiz-input-row,
-.wiz-switch-pair {
-  display: flex;
-  gap: 8px;
-  align-items: center;
+.wizard-win .wiz-step-header {
+  flex-direction: column;
+  gap: 3px;
 }
 
-.wiz-field-pair > * {
-  flex: 1;
-}
-
-.wiz-field-port {
-  flex: 0 0 90px !important;
-}
-
-.wiz-label,
-.wiz-field-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--wz-ink-muted);
-}
-
-.wiz-input-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  flex: 1;
-}
-
-.wiz-input,
-.wiz-select {
+.wizard-win .wiz-sub-card-head {
   width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid var(--wz-input-border);
-  background: var(--wz-input-bg);
-  color: var(--wz-ink);
-  font-size: 13px;
-  outline: none;
-}
-
-.wiz-input::placeholder {
-  color: var(--wz-ink-subtle);
-}
-
-.wiz-input:focus,
-.wiz-select:focus {
-  border-color: var(--wz-input-focus);
-  box-shadow: 0 0 0 3px var(--wz-accent-soft);
-}
-
-.wiz-eye-btn {
-  position: absolute;
-  right: 6px;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  background: transparent;
-  color: var(--wz-ink-muted);
-  cursor: pointer;
-  border-radius: 6px;
-}
-
-.wiz-seg {
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  border-radius: 10px;
-  background: var(--wz-seg-track);
-  border: 1px solid var(--wz-line);
-}
-
-.wiz-seg-btn {
-  flex: 1;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--wz-ink-muted);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.wiz-seg-btn:hover:not(.is-active) {
-  background: var(--wz-surface-hover);
-}
-
-.wiz-seg-btn.is-active {
-  background: var(--wz-seg-active);
-  border-color: var(--wz-seg-active-border);
-  color: var(--wz-ink);
-}
-
-.wiz-chip-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.wiz-chip-toggle {
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--wz-line-strong);
-  background: transparent;
-  color: var(--wz-ink-muted);
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.wiz-chip-toggle.is-on {
-  background: var(--wz-accent-soft);
-  border-color: var(--wz-accent-border);
-  color: var(--wz-ink);
-}
-
-/* ---------- Switch ---------- */
-.wiz-switch-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
-.wiz-switch-label {
+.wizard-win .wiz-title-wrap h2,
+.wizard-win .wiz-step-title {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+.wizard-win.is-expanded .wiz-step-title {
+  font-size: 15.5px;
+  margin-bottom: 1px;
+}
+
+.wizard-win .wiz-title-wrap p,
+.wizard-win .wiz-step-sub {
+  margin: 0;
   font-size: 12.5px;
-  color: var(--wz-ink);
+  line-height: 1.46;
+  color: var(--ink-muted);
 }
 
-.wiz-switch {
+.wizard-win.is-expanded .wiz-step-sub {
+  font-size: 11.5px;
+  line-height: 1.38;
+}
+
+.wizard-win .wiz-req-badge,
+.wizard-win .wiz-opt-badge,
+.wizard-win .wiz-badge,
+.wizard-win .action-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--seg-track);
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.wizard-win .wiz-badge.is-done,
+.wizard-win .action-pill.is-done,
+.wizard-win .auto-tag {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok-ink);
+}
+
+/* =====================================================================
+   SEGMENTED CONTROLS (.wiz-segment, .wiz-seg, .wiz-chip-group)
+   ===================================================================== */
+.wizard-win .wiz-segment,
+.wizard-win .wiz-seg,
+.wizard-win .wiz-chip-group[role="tablist"],
+.wizard-win .wiz-chip-group[role="radiogroup"] {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--seg-track);
+  border: 1px solid var(--line);
+}
+
+.wizard-win.is-expanded .wiz-chip-group[role="tablist"],
+.wizard-win.is-expanded .wiz-chip-group[role="radiogroup"] {
+  padding: 3px;
+  border-radius: 9px;
+}
+
+.wizard-win .wiz-seg-btn,
+.wizard-win .wiz-chip-group[role="tablist"] .wiz-chip-toggle,
+.wizard-win .wiz-chip-group[role="radiogroup"] .wiz-chip-toggle {
+  border: 1px solid transparent;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.15s ease;
+}
+
+.wizard-win.is-expanded .wiz-chip-group[role="tablist"] .wiz-chip-toggle,
+.wizard-win.is-expanded .wiz-chip-group[role="radiogroup"] .wiz-chip-toggle {
+  height: 27px;
+  font-size: 11.5px;
+}
+
+.wizard-win .wiz-seg-btn svg {
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.wizard-win .wiz-seg-btn:hover:not(.is-active):not(:disabled),
+.wizard-win .wiz-chip-group[role="tablist"] .wiz-chip-toggle:hover:not(.is-active):not(:disabled),
+.wizard-win .wiz-chip-group[role="radiogroup"] .wiz-chip-toggle:hover:not(.is-active):not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.wizard-win .wiz-seg-btn.is-active,
+.wizard-win .wiz-chip-group[role="tablist"] .wiz-chip-toggle.is-active,
+.wizard-win .wiz-chip-group[role="radiogroup"] .wiz-chip-toggle.is-active {
+  background: var(--seg-active);
+  border-color: var(--seg-active-border);
+  color: var(--seg-active-ink);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.wizard-win[data-theme="light"] .wiz-seg-btn.is-active,
+.wizard-win[data-theme="light"] .wiz-chip-group[role="tablist"] .wiz-chip-toggle.is-active,
+.wizard-win[data-theme="light"] .wiz-chip-group[role="radiogroup"] .wiz-chip-toggle.is-active {
+  background: #FFFFFF;
+  border-color: var(--seg-active-border);
+  color: #0F172A;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12), inset 0 1px 0 #FFFFFF;
+}
+
+/* =====================================================================
+   FORM FIELDS & INPUTS
+   ===================================================================== */
+.wizard-win .field-stack,
+.wizard-win .wiz-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wizard-win.is-expanded .field-stack,
+.wizard-win.is-expanded .wiz-form-grid {
+  gap: 6px;
+}
+
+.wizard-win .field,
+.wizard-win .wiz-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.wizard-win.is-expanded .field,
+.wizard-win.is-expanded .wiz-field {
+  gap: 3px;
+}
+
+.wizard-win .field label,
+.wizard-win .wiz-field > label,
+.wizard-win .wiz-label,
+.wizard-win .wiz-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.wizard-win.is-expanded .field label,
+.wizard-win.is-expanded .wiz-field > label,
+.wizard-win.is-expanded .wiz-label,
+.wizard-win.is-expanded .wiz-field-label {
+  font-size: 11.5px;
+}
+
+.wizard-win .field-opt {
+  font-size: 11px;
+  color: var(--ink-subtle);
+  font-weight: 500;
+}
+
+.wizard-win .wiz-input-wrap,
+.wizard-win .wiz-input-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.wizard-win .wiz-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wizard-win.is-expanded .wiz-input,
+.wizard-win .wiz-input.is-sm,
+.wizard-win .wiz-select {
+  height: 29px;
+  font-size: 12px;
+  padding: 0 9px;
+  border-radius: 8px;
+}
+
+.wizard-win .wiz-input.is-mono,
+.wizard-win .wiz-mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.wizard-win .wiz-input:focus,
+.wizard-win .wiz-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--input-focus);
+}
+
+.wizard-win .wiz-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.wizard-win .wiz-input::placeholder {
+  color: var(--ink-subtle);
+}
+
+.wizard-win .wiz-input-wrap .wiz-eye-btn,
+.wizard-win .wiz-input-wrap .input-toggle {
+  position: absolute;
+  right: 6px;
+  border: 1px solid var(--btn-sec-border);
+  background: var(--btn-sec-bg);
+  color: var(--ink-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 7px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.wizard-win .wiz-input-wrap .wiz-input {
+  padding-right: 40px;
+}
+
+.wizard-win.is-expanded .wiz-input-wrap .wiz-input {
+  padding-right: 34px;
+}
+
+.wizard-win.is-expanded .wiz-input-wrap .wiz-eye-btn {
+  right: 4px;
+  padding: 3px 5px;
+}
+
+.wizard-win .wiz-input-wrap .wiz-eye-btn:hover:not(:disabled),
+.wizard-win .wiz-input-wrap .input-toggle:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--btn-sec-hover-bg);
+  border-color: var(--btn-sec-hover-border);
+}
+
+.wizard-win .wiz-select {
+  width: 100%;
+  padding: 0 30px 0 10px;
+  border-radius: 9px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wizard-win .grid-2,
+.wizard-win .wiz-ssh-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wizard-win .grid-syncthing-keys {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: end;
+}
+
+.wizard-win .grid-vm-ssh {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: end;
+}
+
+.wizard-win .grid-vm-web {
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  gap: 8px;
+  align-items: end;
+}
+
+.wizard-win.is-expanded .grid-2 {
+  gap: 8px;
+}
+
+.wizard-win .input-action-row,
+.wizard-win .wiz-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wizard-win .input-action-row .wiz-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* =====================================================================
+   INLINE STATUS / BANNERS & TRUST NOTES
+   ===================================================================== */
+.wizard-win .status-line,
+.wizard-win .wiz-banner,
+.wizard-win .wiz-probe-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.42;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  backdrop-filter: blur(6px);
+}
+
+.wizard-win .status-line svg,
+.wizard-win .wiz-banner svg {
+  flex-shrink: 0;
+}
+
+.wizard-win .status-line.is-ok,
+.wizard-win .wiz-banner-success,
+.wizard-win .wiz-probe-success {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok-ink);
+}
+
+.wizard-win .status-line.is-err,
+.wizard-win .wiz-banner-error,
+.wizard-win .wiz-probe-error {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-ink);
+}
+
+.wizard-win .s-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--ink-subtle);
+}
+
+.wizard-win .status-line.is-ok .s-dot {
+  background: var(--accent);
+}
+
+.wizard-win .status-line.is-err .s-dot {
+  background: var(--danger);
+}
+
+.wizard-win .trust-note,
+.wizard-win .wiz-trust-note,
+.wizard-win .wiz-uac-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.42;
+  color: var(--ink-muted);
+}
+
+.wizard-win .trust-note svg,
+.wizard-win .wiz-trust-note svg,
+.wizard-win .wiz-uac-note svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+/* =====================================================================
+   STEP 4: KEY-VALUE SUMMARY, INLINE SSH OVERRIDE & STAGES
+   ===================================================================== */
+.wizard-win .kv-list,
+.wizard-win .wiz-kv-list {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+
+.wizard-win .kv-row,
+.wizard-win .wiz-kv-item,
+.wizard-win .wiz-status-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.wizard-win .wiz-card:has(.wiz-ssh-edit) .kv-row {
+  padding: 5px 12px;
+}
+
+.wizard-win .kv-row + .kv-row,
+.wizard-win .wiz-kv-item + .wiz-kv-item {
+  border-top: 1px solid var(--line);
+}
+
+.wizard-win .wiz-status-card {
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+}
+
+.wizard-win .kv-key,
+.wizard-win .wiz-kv-key {
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
+.wizard-win .kv-val,
+.wizard-win .wiz-kv-val {
+  color: var(--ink);
+  font-weight: 600;
+  text-align: right;
+}
+
+.wizard-win .kv-val-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wizard-win .link-quiet {
+  border: 1px solid var(--btn-sec-border);
+  background: var(--btn-sec-bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.wizard-win .link-quiet:hover:not(:disabled) {
+  background: var(--btn-sec-hover-bg);
+  border-color: var(--btn-sec-hover-border);
+}
+
+.wizard-win .wiz-ssh-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+}
+
+.wizard-win .wiz-ssh-edit .wiz-ssh-grid {
+  gap: 8px;
+}
+
+.wizard-win .wiz-ssh-edit .wiz-field {
+  gap: 3px;
+}
+
+.wizard-win .wiz-ssh-edit .wiz-field > label {
+  font-size: 11px;
+}
+
+.wizard-win .wiz-ssh-edit .wiz-input {
+  height: 31px;
+  font-size: 12px;
+}
+
+.wizard-win .wiz-stages {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+}
+
+.wizard-win .wiz-stage-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--ink-subtle);
+}
+
+.wizard-win .wiz-stage-item.is-active {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.wizard-win .wiz-stage-item.is-done {
+  color: var(--ok-ink);
+}
+
+/* =====================================================================
+   STEP 5: QUICK TOOL ACTION CARDS
+   ===================================================================== */
+.wizard-win .action-cards,
+.wizard-win .wiz-hub-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wizard-win .action-card,
+.wizard-win .wiz-hub-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 12px;
+  border-radius: 11px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.wizard-win .action-card:hover:not(:disabled),
+.wizard-win .wiz-hub-card:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--accent-border);
+  transform: translateY(-1px);
+}
+
+.wizard-win .action-card.is-done,
+.wizard-win .wiz-hub-card.is-done {
+  border-color: var(--ok-border);
+}
+
+.wizard-win .action-card-top,
+.wizard-win .wiz-card-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.wizard-win .action-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: #BEF264;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.wizard-win[data-theme="light"] .action-icon {
+  color: #3F6212;
+}
+
+.wizard-win .action-card strong,
+.wizard-win .wiz-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  display: block;
+}
+
+.wizard-win .action-card span,
+.wizard-win .wiz-card-desc {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+
+.wizard-win .wiz-card-cta {
+  margin-top: auto;
+  padding-top: 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.wizard-win[data-theme="light"] .wiz-card-cta {
+  color: #3F6212;
+}
+
+/* =====================================================================
+   SUB-STEPS 5a & 5b: SUB-CARDS, ROUTE ROWS, SWITCHES & CHIPS
+   ===================================================================== */
+.wizard-win .sub-card,
+.wizard-win .wiz-sub-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 10px;
+  border-radius: 11px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+}
+
+.wizard-win .wiz-route-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wizard-win .wiz-route-fields .wiz-field {
+  gap: 2px;
+}
+
+.wizard-win .wiz-route-fields .wiz-label {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.wizard-win .wiz-field-pair,
+.wizard-win .grid-host-port {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  gap: 7px;
+  align-items: end;
+}
+
+.wizard-win .wiz-route-fields .wiz-field-pair {
+  grid-template-columns: minmax(0, 1fr) 70px 106px;
+  gap: 6px;
+}
+
+.wizard-win .chip-toggle,
+.wizard-win .wiz-chip-toggle {
+  height: 29px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid var(--btn-sec-border);
+  background: var(--btn-subtle-bg);
+  color: var(--ink-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.wizard-win .chip-toggle:hover:not(:disabled),
+.wizard-win .wiz-chip-toggle:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--btn-sec-hover-border);
+}
+
+.wizard-win .chip-toggle.is-on,
+.wizard-win .chip-toggle.is-active,
+.wizard-win .wiz-chip-toggle.is-on,
+.wizard-win .wiz-chip-toggle.is-active {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok-ink);
+}
+
+.wizard-win .wiz-switch-pair,
+.wizard-win .switch-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.wizard-win .wiz-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 9px;
+  background: var(--seg-track);
+  border: 1px solid var(--line);
+}
+
+.wizard-win .wiz-switch-label,
+.wizard-win .wiz-switch-copy strong {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.wizard-win .wiz-switch {
   position: relative;
   width: 38px;
   height: 22px;
+  flex-shrink: 0;
   border-radius: 999px;
-  border: 1px solid var(--wz-line-strong);
-  background: var(--wz-progress-track);
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.14);
   cursor: pointer;
-  flex: none;
+  padding: 0;
+  font-size: 0;
+  color: transparent;
+  overflow: hidden;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
 }
 
-.wiz-switch::after {
+.wizard-win .wiz-switch::after {
   content: "";
   position: absolute;
   top: 2px;
@@ -468,253 +1231,194 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
-  transition: transform 0.15s ease;
+  background: #F8FAFC;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.18s ease, background-color 0.18s ease;
 }
 
-.wiz-switch.is-on {
-  background: var(--wz-accent-strong, #65a30d);
-  border-color: var(--wz-accent-border);
+.wizard-win .wiz-switch.is-on {
+  background: #7BC504;
+  border-color: rgba(217, 249, 157, 0.55);
 }
 
-.wiz-switch.is-on::after {
+.wizard-win .wiz-switch.is-on::after {
   transform: translateX(16px);
+  background: #081202;
 }
 
-/* ---------- Cards / lists ---------- */
-.wiz-card,
-.wiz-sub-card,
-.wiz-status-card,
-.wiz-kv-list,
-.wiz-trust-note {
-  border-radius: 12px;
-  border: 1px solid var(--wz-line);
-  background: var(--wz-surface);
-  padding: 10px 12px;
+.wizard-win[data-theme="light"] .wiz-switch {
+  background: #CBD5E1;
+  border-color: #94A3B8;
 }
 
-.wiz-card-head,
-.wiz-card-header,
-.wiz-sub-card-head {
+.wizard-win[data-theme="light"] .wiz-switch::after {
+  background: #FFFFFF;
+}
+
+.wizard-win[data-theme="light"] .wiz-switch.is-on {
+  background: #46720C;
+  border-color: #2D4610;
+}
+
+.wizard-win[data-theme="light"] .wiz-switch.is-on::after {
+  background: #FFFFFF;
+}
+
+/* =====================================================================
+   FOOTER & HIGH-CONTRAST DESKTOP BUTTONS
+   ===================================================================== */
+.wizard-win .wiz-footer,
+.wizard-win .wiz-actions {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.wiz-card-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--wz-ink);
+.wizard-win.is-expanded .wiz-footer,
+.wizard-win.is-expanded .wiz-actions {
+  padding-top: 7px;
 }
 
-.wiz-card-desc {
-  margin: 4px 0 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--wz-ink-muted);
-}
-
-.wiz-kv-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.wiz-kv-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12.5px;
-}
-
-.wiz-kv-key {
-  color: var(--wz-ink-muted);
-}
-
-.wiz-kv-val {
-  color: var(--wz-ink);
-  font-weight: 600;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-
-.wiz-trust-note {
-  font-size: 11.5px;
-  color: var(--wz-ink-muted);
-}
-
-.wiz-hub-cards {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-}
-
-.wiz-hub-card {
-  text-align: left;
-  width: 100%;
-  border-radius: 12px;
-  border: 1px solid var(--wz-line);
-  background: var(--wz-surface);
-  color: var(--wz-ink);
-  padding: 12px;
-  cursor: pointer;
-}
-
-.wiz-hub-card:hover {
-  border-color: var(--wz-accent-border);
-  background: var(--wz-surface-hover);
-}
-
-.wiz-hub-card.is-done {
-  border-color: var(--wz-ok-border);
-}
-
-.wiz-badge,
-.wiz-opt-badge,
-.wiz-req-badge {
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--wz-line-strong);
-  color: var(--wz-ink-muted);
-}
-
-.wiz-badge.is-done {
-  background: var(--wz-ok-bg);
-  border-color: var(--wz-ok-border);
-  color: var(--wz-ok-ink);
-}
-
-.wiz-banner {
-  padding: 8px 12px;
-  border-radius: 10px;
-  font-size: 12px;
-  border: 1px solid var(--wz-line-strong);
-  background: var(--wz-surface);
-  color: var(--wz-ink);
-}
-
-.wiz-banner-error {
-  background: var(--wz-danger-bg);
-  border-color: var(--wz-danger-border);
-  color: var(--wz-danger-ink);
-}
-
-.wiz-probe-bar,
-.wiz-stages {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.wiz-stage-item {
-  font-size: 12px;
-  color: var(--wz-ink-muted);
-}
-
-.wiz-spin {
-  animation: wiz-spin 0.9s linear infinite;
-}
-
-@keyframes wiz-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ---------- Buttons / footer ---------- */
-.wiz-footer,
-.wiz-actions,
-.wiz-action-row {
+.wizard-win .wiz-footer-left,
+.wizard-win .wiz-footer-right {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.wiz-footer {
-  justify-content: space-between;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--wz-line);
-}
-
-.wiz-footer-left,
-.wiz-footer-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.wiz-btn {
-  height: 34px;
+/* Base geometry applied to all button variants (with or without .wiz-btn) */
+.wizard-win .wiz-btn,
+.wizard-win .wiz-btn-primary,
+.wizard-win .wiz-btn-secondary,
+.wizard-win .wiz-btn-ghost,
+.wizard-win .btn-primary,
+.wizard-win .btn-secondary,
+.wizard-win .btn-subtle,
+.wizard-win .btn-link,
+.wizard-win .btn-inline {
+  height: 36px;
   padding: 0 14px;
-  border-radius: 10px;
-  border: 1px solid var(--wz-btn-sec-border);
-  background: var(--wz-btn-sec-bg);
-  color: var(--wz-btn-sec-ink);
+  border-radius: 9px;
+  border: 1px solid var(--btn-sec-border);
+  background: var(--btn-sec-bg);
+  color: var(--btn-sec-ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+  font-family: var(--font-sans);
   font-size: 12.5px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, filter 0.15s ease, transform 0.1s ease;
 }
 
-.wiz-btn-sm {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 11.5px;
+.wizard-win .wiz-btn svg,
+.wizard-win .wiz-btn-primary svg,
+.wizard-win .wiz-btn-secondary svg,
+.wizard-win .wiz-btn-ghost svg,
+.wizard-win .btn-primary svg,
+.wizard-win .btn-secondary svg,
+.wizard-win .btn-inline svg {
+  flex-shrink: 0;
+  display: inline-block;
 }
 
-.wiz-btn-secondary:hover:not(:disabled) {
-  background: var(--wz-surface-hover);
+.wizard-win .wiz-btn-sm,
+.wizard-win .btn-inline,
+.wizard-win.is-expanded .wiz-btn,
+.wizard-win.is-expanded .wiz-btn-primary,
+.wizard-win.is-expanded .wiz-btn-secondary,
+.wizard-win.is-expanded .wiz-btn-ghost {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
 }
 
-.wiz-btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--wz-ink-muted);
+.wizard-win .wiz-btn-ghost,
+.wizard-win .btn-subtle {
+  background: var(--btn-subtle-bg);
+  border-color: var(--btn-subtle-border);
+  color: var(--btn-subtle-ink);
+  box-shadow: none;
 }
 
-.wiz-btn-ghost:hover:not(:disabled) {
-  background: var(--wz-surface-hover);
-  color: var(--wz-ink);
+.wizard-win .wiz-btn-secondary:hover:not(:disabled),
+.wizard-win .wiz-btn-ghost:hover:not(:disabled),
+.wizard-win .btn-secondary:hover:not(:disabled),
+.wizard-win .btn-subtle:hover:not(:disabled),
+.wizard-win .btn-inline:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--btn-sec-hover-bg);
+  border-color: var(--btn-sec-hover-border);
 }
 
-.wiz-btn-primary {
-  background: var(--wz-btn-primary-bg);
-  border-color: var(--wz-btn-primary-border);
-  color: var(--wz-btn-primary-ink);
+.wizard-win .wiz-btn-primary,
+.wizard-win .btn-primary {
+  padding: 0 18px;
+  border: 1px solid var(--btn-primary-border);
+  background: var(--btn-primary-bg);
+  box-shadow: var(--btn-primary-shadow);
+  color: var(--btn-primary-ink);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
-.wiz-btn-primary:hover:not(:disabled) {
+.wizard-win .wiz-btn-primary:hover:not(:disabled),
+.wizard-win .btn-primary:hover:not(:disabled) {
   filter: brightness(1.06);
+  transform: translateY(-0.5px);
 }
 
-.wiz-btn:disabled {
+.wizard-win .wiz-btn-primary:active:not(:disabled),
+.wizard-win .btn-primary:active:not(:disabled),
+.wizard-win .wiz-btn-secondary:active:not(:disabled),
+.wizard-win .wiz-btn-ghost:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.wizard-win .wiz-btn:disabled,
+.wizard-win .wiz-btn-secondary:disabled,
+.wizard-win .wiz-btn-ghost:disabled,
+.wizard-win .btn-secondary:disabled,
+.wizard-win .btn-subtle:disabled,
+.wizard-win .btn-inline:disabled {
+  opacity: 0.48;
   cursor: not-allowed;
-  opacity: 0.7;
 }
 
-.wiz-btn-primary:disabled {
-  background: var(--wz-btn-primary-disabled-bg);
-  color: var(--wz-btn-primary-disabled-ink);
-  border-color: var(--wz-line);
+.wizard-win .wiz-btn-primary:disabled,
+.wizard-win .btn-primary:disabled {
+  background: var(--btn-primary-disabled-bg);
+  border-color: var(--btn-primary-disabled-border);
+  color: var(--btn-primary-disabled-ink);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+  cursor: not-allowed;
 }
 
+/* Focus rings */
 .wizard-win button:focus-visible,
 .wizard-win input:focus-visible,
 .wizard-win select:focus-visible {
-  outline: 2px solid var(--wz-input-focus);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-/* ---------- Boot loading backdrop ---------- */
-.wizard-boot-loading {
-  width: 100%;
-  height: 100%;
-  background: transparent;
+/* Spinner utility */
+@keyframes wiz-spin-anim {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.wizard-win .wiz-spin {
+  animation: wiz-spin-anim 0.85s linear infinite;
 }

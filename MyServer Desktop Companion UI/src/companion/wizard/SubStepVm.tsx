@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react"
+import { Eye, EyeOff } from "lucide-react"
 import { getCompanionApi } from "../api"
 import { getTranslation, type Language } from "../i18n"
 import type { VirtualMachine, WizardDraft } from "../types"
@@ -59,9 +60,10 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
   const [name, setName] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [showApiKey, setShowApiKey] = useState(false)
-  const [sshHost, setSshHost] = useState("ssh.instabox.sh")
-  const [sshPort, setSshPort] = useState("2222")
-  const [sshUser, setSshUser] = useState("root")
+  const [sshHost, setSshHost] = useState("")
+  const [sshPort, setSshPort] = useState("22")
+  const [sshUser, setSshUser] = useState("")
+  const [tokenExpiry, setTokenExpiry] = useState("")
   const [webPort, setWebPort] = useState("")
   const [screenUrl, setScreenUrl] = useState("")
   const [screenOpenTarget, setScreenOpenTarget] = useState<'ask' | 'window' | 'browser'>('ask')
@@ -84,64 +86,103 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
   const handleSelectProvider = (nextProvider: 'instabox' | 'manual') => {
     if (saving || nextProvider === provider) return
     setProvider(nextProvider)
-    if (nextProvider === 'manual') {
-      if (!sshHost.trim() || sshHost.trim() === "ssh.instabox.sh") {
-        setSshHost(defaultManualHost)
-      }
-      if (!sshPort.trim() || sshPort.trim() === "2222") {
-        setSshPort("22")
-      }
-    } else {
-      if (!sshHost.trim() || sshHost.trim() === defaultManualHost || sshHost.trim() === "127.0.0.1") {
-        setSshHost("ssh.instabox.sh")
-      }
-      if (!sshPort.trim() || sshPort.trim() === "22") {
-        setSshPort("2222")
-      }
-    }
+    setErrorMsg(null)
+    onErrorChange?.(false)
   }
 
   const handleSave = async () => {
     if (savingRef.current) return
-    savingRef.current = true
-    setSaving(true)
     setErrorMsg(null)
     onErrorChange?.(false)
+
+    const cleanName = name.trim()
+    const cleanApiKey = apiKey.trim()
+    let cleanHost = sshHost.trim()
+    let cleanUser = sshUser.trim()
+
+    if (provider === 'manual') {
+      if (!cleanName) {
+        const msg = t("wiz_vm_err_name", "Nama VM wajib diisi untuk Manual SSH.")
+        setErrorMsg(msg)
+        onErrorChange?.(true)
+        onNotify?.(msg, "error")
+        return
+      }
+      if (cleanHost.includes("@")) {
+        const atIdx = cleanHost.indexOf("@")
+        if (!cleanUser) {
+          cleanUser = cleanHost.slice(0, atIdx).trim()
+        }
+        cleanHost = cleanHost.slice(atIdx + 1).trim()
+      }
+      if (cleanUser.includes("@")) {
+        const parts = cleanUser.split("@")
+        cleanUser = parts[0].trim()
+        if (!cleanHost && parts[1]) {
+          cleanHost = parts.slice(1).join("@").trim()
+        }
+      }
+      if (!cleanHost) {
+        const msg = t("wiz_vm_err_host", "Host Gateway / IP wajib diisi untuk Manual SSH.")
+        setErrorMsg(msg)
+        onErrorChange?.(true)
+        onNotify?.(msg, "error")
+        return
+      }
+    } else {
+      if (cleanUser.includes("@")) {
+        cleanUser = cleanUser.split("@")[0].trim()
+      }
+      if (!cleanApiKey && !screenUrl.trim()) {
+        const msg = t("wiz_vm_err_key", "Masukkan InstaBox API Key (ibk_...) terlebih dahulu.")
+        setErrorMsg(msg)
+        onErrorChange?.(true)
+        onNotify?.(msg, "error")
+        return
+      }
+    }
+
+    savingRef.current = true
+    setSaving(true)
 
     try {
       const parsedSshPort = Number.parseInt(sshPort.trim(), 10)
       const validSshPort =
         Number.isFinite(parsedSshPort) && parsedSshPort > 0 && parsedSshPort <= 65535
           ? parsedSshPort
-          : provider === 'instabox'
-            ? 2222
-            : 22
+          : 22
 
       const parsedWebPort = Number.parseInt(webPort.trim(), 10)
       const validWebPort =
-        Number.isFinite(parsedWebPort) && parsedWebPort > 0 && parsedWebPort <= 65535
+        provider === 'manual' &&
+        Number.isFinite(parsedWebPort) &&
+        parsedWebPort > 0 &&
+        parsedWebPort <= 65535
           ? parsedWebPort
           : undefined
 
-      const finalName =
-        name.trim() || (provider === 'instabox' ? "InstaBox-MicroVM" : "Linux-VPS")
+      const finalName = cleanName || "InstaBox-MicroVM"
       const vmId = vmIdRef.current
+      const targetServerId = scope === 'server' ? draft.serverId || undefined : undefined
 
       const newVm: VirtualMachine = {
         id: vmId,
         name: finalName,
         provider,
-        status: "stopped",
+        status: "sleeping",
         scope,
-        serverId: scope === 'server' ? draft.serverId || undefined : undefined,
+        serverId: targetServerId,
         serverName: scope === 'server' ? draft.serverName || undefined : undefined,
-        sshHost: sshHost.trim() || undefined,
-        sshUser: sshUser.trim() || undefined,
-        sshPort: validSshPort,
+        sshHost: provider === 'instabox' ? "ssh.instabox.sh" : cleanHost,
+        sshUser: cleanUser || undefined,
+        sshPort: provider === 'instabox' ? 2222 : validSshPort,
+        tokenExpiry: provider === 'manual' ? tokenExpiry.trim() || undefined : undefined,
         webPort: validWebPort,
         screenUrl: screenUrl.trim() || undefined,
         screenOpenTarget,
-        apiKey: provider === 'instabox' && apiKey.trim() ? apiKey.trim() : undefined,
+        apiKey: provider === 'instabox' && cleanApiKey ? cleanApiKey : undefined,
+        maxRuntimeMinutes: provider === 'instabox' ? 480 : undefined,
+        idleTimeoutMinutes: provider === 'instabox' ? 30 : undefined,
       }
 
       const existing = (await api.loadVms?.()) ?? []
@@ -153,14 +194,60 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
 
       await api.saveVms?.(nextList)
 
-      if (provider === 'instabox' && apiKey.trim()) {
-        await api.syncInstaBoxVm({
-          apiKey: apiKey.trim(),
+      if (provider === 'instabox' && cleanApiKey) {
+        const syncRes = await api.syncInstaBoxVm({
+          apiKey: cleanApiKey,
           vmName: finalName,
           vmId,
           scope,
-          serverId: scope === 'server' ? draft.serverId || undefined : undefined,
+          serverId: targetServerId,
         })
+        if (syncRes && syncRes.success && api.updateVm) {
+          const stateStr = String(syncRes.state || "").toLowerCase()
+          const isRunning =
+            stateStr === "running" ||
+            stateStr === "active" ||
+            stateStr === "starting" ||
+            stateStr === "resuming"
+          const syncPatch: Partial<VirtualMachine> = {
+            status: isRunning ? "running" : "sleeping",
+          }
+          let hasMetadata = isRunning
+          if (syncRes.machineId) {
+            syncPatch.machineId = syncRes.machineId
+            hasMetadata = true
+          }
+          if (syncRes.screenUrl && !screenUrl.trim()) {
+            syncPatch.screenUrl = syncRes.screenUrl
+            hasMetadata = true
+          }
+          if (syncRes.sshHost) {
+            syncPatch.sshHost = syncRes.sshHost
+            hasMetadata = true
+          }
+          const resolvedUser = cleanUser || syncRes.sshUser || syncRes.machineId
+          if (resolvedUser && resolvedUser !== newVm.sshUser) {
+            syncPatch.sshUser = resolvedUser
+            hasMetadata = true
+          }
+          if (syncRes.sshPort) {
+            syncPatch.sshPort = syncRes.sshPort
+            hasMetadata = true
+          }
+          if (typeof syncRes.runtimeMinutes === "number") {
+            syncPatch.runtimeMinutes = syncRes.runtimeMinutes
+            hasMetadata = true
+          }
+          if (syncRes.maxRuntimeMinutes != null) {
+            syncPatch.maxRuntimeMinutes = syncRes.maxRuntimeMinutes
+          }
+          if (syncRes.idleTimeoutMinutes != null) {
+            syncPatch.idleTimeoutMinutes = syncRes.idleTimeoutMinutes
+          }
+          if (hasMetadata) {
+            await api.updateVm(vmId, syncPatch, targetServerId).catch(() => {})
+          }
+        }
       }
 
       onErrorChange?.(false)
@@ -210,7 +297,7 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
             onClick={() => handleSelectProvider('instabox')}
             disabled={saving}
           >
-            {t("wiz_5b_provider_instabox", "InstaBox")}
+            {t("wiz_5b_provider_instabox", "InstaBox Cloud")}
           </button>
           <button
             type="button"
@@ -221,7 +308,7 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
             onClick={() => handleSelectProvider('manual')}
             disabled={saving}
           >
-            {t("wiz_5b_provider_manual", "URL Manual")}
+            {t("wiz_5b_provider_manual", "Manual SSH")}
           </button>
         </div>
 
@@ -251,130 +338,205 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
         </div>
 
         <div className="wiz-form-grid">
-          <div className="wiz-field">
-            <label className="wiz-label" htmlFor="vm-name">
-              {t("wiz_5b_name", "Nama VM")}
-            </label>
-            <input
-              id="vm-name"
-              className="wiz-input"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={provider === 'instabox' ? "InstaBox-MicroVM" : "Linux-VPS"}
-              disabled={saving}
-            />
-          </div>
+          {provider === 'instabox' ? (
+            <>
+              <div className="grid-2">
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-api-key">
+                    {t("wiz_5b_instabox_key", "API Key InstaBox (ibk_...)")}
+                  </label>
+                  <div className="wiz-input-wrap">
+                    <input
+                      id="vm-api-key"
+                      className="wiz-input is-mono"
+                      type={showApiKey ? "text" : "password"}
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="e.g. ibk_examplekey..."
+                      disabled={saving}
+                    />
+                    <button
+                      type="button"
+                      className="wiz-eye-btn"
+                      aria-pressed={showApiKey}
+                      onClick={() => setShowApiKey((v) => !v)}
+                      aria-label={
+                        showApiKey
+                          ? t("wiz_hide_password", "Sembunyikan")
+                          : t("wiz_show_password", "Tampilkan")
+                      }
+                    >
+                      {showApiKey ? (
+                        <EyeOff size={15} aria-hidden="true" />
+                      ) : (
+                        <Eye size={15} aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
+                </div>
 
-          {provider === 'instabox' && (
-            <div className="wiz-field">
-              <label className="wiz-label" htmlFor="vm-api-key">
-                {t("wiz_5b_instabox_key", "API Key InstaBox")}
-              </label>
-              <div className="wiz-input-row">
-                <input
-                  id="vm-api-key"
-                  className="wiz-input"
-                  type={showApiKey ? "text" : "password"}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="ibx_..."
-                  disabled={saving}
-                />
-                <button
-                  type="button"
-                  className="wiz-chip-toggle"
-                  onClick={() => setShowApiKey((v) => !v)}
-                  aria-label={
-                    showApiKey
-                      ? t("wiz_hide_password", "Sembunyikan")
-                      : t("wiz_show_password", "Tampilkan")
-                  }
-                >
-                  {showApiKey
-                    ? t("wiz_hide_password", "Sembunyikan")
-                    : t("wiz_show_password", "Tampilkan")}
-                </button>
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-name">
+                    {t("wiz_5b_name_optional", "Nama VM (Opsional)")}
+                  </label>
+                  <input
+                    id="vm-name"
+                    className="wiz-input"
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. Linux-Dev-Server"
+                    disabled={saving}
+                  />
+                </div>
               </div>
-            </div>
+
+              <div className="grid-2">
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-ssh-user">
+                    {t("wiz_5b_temp_ssh_token", "Token SSH Sementara (Opsional)")}
+                  </label>
+                  <input
+                    id="vm-ssh-user"
+                    className="wiz-input is-mono"
+                    type="text"
+                    value={sshUser}
+                    onChange={(e) => setSshUser(e.target.value)}
+                    placeholder="e.g. ibssh_exampletoken..."
+                    disabled={saving}
+                  />
+                </div>
+
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-screen-url">
+                    {t("wiz_5b_url", "URL Layar Virtual (Opsional)")}
+                  </label>
+                  <input
+                    id="vm-screen-url"
+                    className="wiz-input is-mono"
+                    type="text"
+                    value={screenUrl}
+                    onChange={(e) => setScreenUrl(e.target.value)}
+                    placeholder="https://instabox.sh/app/..."
+                    disabled={saving}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid-2">
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-name">
+                    {t("wiz_5b_name", "Nama VM")}
+                  </label>
+                  <input
+                    id="vm-name"
+                    className="wiz-input"
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. Ubuntu Server"
+                    disabled={saving}
+                  />
+                </div>
+
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-ssh-host">
+                    {t("wiz_5b_ssh_host", "Host Gateway / IP")}
+                  </label>
+                  <input
+                    id="vm-ssh-host"
+                    className="wiz-input is-mono"
+                    type="text"
+                    value={sshHost}
+                    onChange={(e) => setSshHost(e.target.value)}
+                    placeholder={defaultManualHost || "192.168.1.100"}
+                    disabled={saving}
+                  />
+                </div>
+              </div>
+
+              <div className="grid-vm-ssh">
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-ssh-port">
+                    {t("wiz_5b_ssh_port", "Port SSH")}
+                  </label>
+                  <input
+                    id="vm-ssh-port"
+                    className="wiz-input is-mono"
+                    type="text"
+                    value={sshPort}
+                    onChange={(e) => setSshPort(e.target.value)}
+                    placeholder="22"
+                    disabled={saving}
+                  />
+                </div>
+
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-token-expiry">
+                    {t("wiz_5b_token_expiry", "Masa Berlaku (Opsional)")}
+                  </label>
+                  <input
+                    id="vm-token-expiry"
+                    className="wiz-input"
+                    type="text"
+                    value={tokenExpiry}
+                    onChange={(e) => setTokenExpiry(e.target.value)}
+                    placeholder={language === "id" ? "e.g. 24 jam" : "e.g. 24 hours"}
+                    disabled={saving}
+                  />
+                </div>
+
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-ssh-user">
+                    {t("wiz_5b_ssh_user", "User SSH (Opsional)")}
+                  </label>
+                  <input
+                    id="vm-ssh-user"
+                    className="wiz-input is-mono"
+                    type="text"
+                    value={sshUser}
+                    onChange={(e) => setSshUser(e.target.value)}
+                    placeholder="e.g. root / ubuntu"
+                    disabled={saving}
+                  />
+                </div>
+              </div>
+
+              <div className="grid-2">
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-web-port">
+                    {t("wiz_5b_web_port", "Port Web Layanan (Opsional)")}
+                  </label>
+                  <input
+                    id="vm-web-port"
+                    className="wiz-input is-mono"
+                    type="text"
+                    value={webPort}
+                    onChange={(e) => setWebPort(e.target.value)}
+                    placeholder="6080"
+                    disabled={saving}
+                  />
+                </div>
+
+                <div className="wiz-field">
+                  <label className="wiz-label" htmlFor="vm-screen-url">
+                    {t("wiz_5b_url", "URL Layar Virtual (Opsional)")}
+                  </label>
+                  <input
+                    id="vm-screen-url"
+                    className="wiz-input is-mono"
+                    type="text"
+                    value={screenUrl}
+                    onChange={(e) => setScreenUrl(e.target.value)}
+                    placeholder="https://vnc.local:6080"
+                    disabled={saving}
+                  />
+                </div>
+              </div>
+            </>
           )}
-
-          <div className="wiz-field-pair">
-            <div className="wiz-field">
-              <label className="wiz-label" htmlFor="vm-ssh-host">
-                SSH Host
-              </label>
-              <input
-                id="vm-ssh-host"
-                className="wiz-input"
-                type="text"
-                value={sshHost}
-                onChange={(e) => setSshHost(e.target.value)}
-                placeholder={provider === 'instabox' ? "ssh.instabox.sh" : defaultManualHost}
-                disabled={saving}
-              />
-            </div>
-            <div className="wiz-field wiz-field-port">
-              <label className="wiz-label" htmlFor="vm-ssh-port">
-                SSH Port
-              </label>
-              <input
-                id="vm-ssh-port"
-                className="wiz-input"
-                type="text"
-                value={sshPort}
-                onChange={(e) => setSshPort(e.target.value)}
-                placeholder={provider === 'instabox' ? "2222" : "22"}
-                disabled={saving}
-              />
-            </div>
-          </div>
-
-          <div className="wiz-field-pair">
-            <div className="wiz-field">
-              <label className="wiz-label" htmlFor="vm-ssh-user">
-                Username SSH
-              </label>
-              <input
-                id="vm-ssh-user"
-                className="wiz-input"
-                type="text"
-                value={sshUser}
-                onChange={(e) => setSshUser(e.target.value)}
-                placeholder="root"
-                disabled={saving}
-              />
-            </div>
-            <div className="wiz-field wiz-field-port">
-              <label className="wiz-label" htmlFor="vm-web-port">
-                Web Port
-              </label>
-              <input
-                id="vm-web-port"
-                className="wiz-input"
-                type="text"
-                value={webPort}
-                onChange={(e) => setWebPort(e.target.value)}
-                placeholder="6080"
-                disabled={saving}
-              />
-            </div>
-          </div>
-
-          <div className="wiz-field">
-            <label className="wiz-label" htmlFor="vm-screen-url">
-              {t("wiz_5b_url", "URL VM Web")}
-            </label>
-            <input
-              id="vm-screen-url"
-              className="wiz-input"
-              type="text"
-              value={screenUrl}
-              onChange={(e) => setScreenUrl(e.target.value)}
-              placeholder="https://..."
-              disabled={saving}
-            />
-          </div>
 
           <div className="wiz-field">
             <label className="wiz-label" htmlFor="vm-screen-target">
@@ -410,22 +572,24 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
       )}
 
       <div className="wiz-actions">
-        <button
-          type="button"
-          className="wiz-btn wiz-btn-secondary"
-          onClick={onBack}
-          disabled={saving}
-        >
-          {t("wiz_back", "Kembali")}
-        </button>
-        <button
-          type="button"
-          className="wiz-btn wiz-btn-ghost"
-          onClick={onSkip ?? onBack}
-          disabled={saving}
-        >
-          {t("wiz_skip", "Lewati")}
-        </button>
+        <div className="wiz-footer-left">
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-secondary"
+            onClick={onBack}
+            disabled={saving}
+          >
+            {t("wiz_back", "Kembali")}
+          </button>
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-ghost"
+            onClick={onSkip ?? onBack}
+            disabled={saving}
+          >
+            {t("wiz_skip", "Lewati")}
+          </button>
+        </div>
         <button
           type="button"
           className="wiz-btn wiz-btn-primary"

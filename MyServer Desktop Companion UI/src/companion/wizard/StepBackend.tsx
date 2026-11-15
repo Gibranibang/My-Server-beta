@@ -290,6 +290,10 @@ export function StepBackend({
             </button>
           </span>
         </div>
+        <div className="kv-row" role="status">
+          <span className="kv-key">{t("wiz_kv_status")}</span>
+          <span className="kv-val">{statusText}</span>
+        </div>
       </div>
 
       {showSshEdit && (
@@ -411,11 +415,6 @@ export function StepBackend({
         </div>
       </div>
 
-      <div className="wiz-status-card" role="status">
-        <span className="kv-key">{t("wiz_kv_status")}</span>
-        <span className="kv-val">{statusText}</span>
-      </div>
-
       {deploying && (
         <div className="wiz-stages" aria-live="polite">
           {DEPLOY_STAGE_KEYS.map((stageKey, idx) => (
@@ -456,7 +455,7 @@ export function StepBackend({
         <div className="wiz-footer-left">
           <button
             type="button"
-            className="wiz-btn-ghost"
+            className="wiz-btn wiz-btn-secondary"
             onClick={onBack}
             disabled={deploying}
           >
@@ -464,7 +463,7 @@ export function StepBackend({
           </button>
           <button
             type="button"
-            className="wiz-btn-ghost"
+            className="wiz-btn wiz-btn-ghost"
             onClick={onNext}
             disabled={deploying}
           >
@@ -477,7 +476,7 @@ export function StepBackend({
             <>
               <button
                 type="button"
-                className="wiz-btn-ghost"
+                className="wiz-btn wiz-btn-secondary"
                 disabled={deploying || Boolean(sshValidationError)}
                 onClick={() => void handleDeploy("install")}
               >
@@ -486,7 +485,7 @@ export function StepBackend({
               </button>
               <button
                 type="button"
-                className="wiz-btn-primary"
+                className="wiz-btn wiz-btn-primary"
                 disabled={deploying}
                 onClick={onNext}
               >
@@ -496,7 +495,7 @@ export function StepBackend({
           ) : (
             <button
               type="button"
-              className="wiz-btn-primary"
+              className="wiz-btn wiz-btn-primary"
               disabled={
                 deploying ||
                 installState === "checking" ||

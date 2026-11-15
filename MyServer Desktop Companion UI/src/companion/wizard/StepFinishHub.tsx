@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react"
+import { Monitor, RefreshCw } from "lucide-react"
 import { getTranslation, type Language } from "../i18n"
 import type { WizardDraft } from "../types"
 
@@ -124,16 +125,19 @@ export const StepFinishHub: React.FC<StepFinishHubProps> = ({
           onClick={() => onOpenSubStep("5a")}
           disabled={completing}
         >
-          <div className="wiz-card-head">
-            <span className="wiz-card-title">
-              {t("wiz_card_syncthing_title", "Konfigurasi Syncthing")}
+          <div className="wiz-card-head action-card-top">
+            <span className="action-icon" aria-hidden="true">
+              <RefreshCw size={16} />
             </span>
-            <span className={`wiz-badge${draft.syncthingDone ? " is-done" : ""}`}>
+            <span className={`wiz-badge action-pill${draft.syncthingDone ? " is-done" : ""}`}>
               {draft.syncthingDone
                 ? t("wiz_configured_badge", "Selesai")
                 : t("wiz_optional_badge", "Opsional")}
             </span>
           </div>
+          <span className="wiz-card-title">
+            {t("wiz_card_syncthing_title", "Konfigurasi Syncthing")}
+          </span>
           <p className="wiz-card-desc">
             {t(
               "wiz_card_syncthing_desc",
@@ -152,16 +156,19 @@ export const StepFinishHub: React.FC<StepFinishHubProps> = ({
           onClick={() => onOpenSubStep("5b")}
           disabled={completing}
         >
-          <div className="wiz-card-head">
-            <span className="wiz-card-title">
-              {t("wiz_card_vm_title", "Tambah Virtual Machine")}
+          <div className="wiz-card-head action-card-top">
+            <span className="action-icon" aria-hidden="true">
+              <Monitor size={16} />
             </span>
-            <span className={`wiz-badge${draft.vmDone ? " is-done" : ""}`}>
+            <span className={`wiz-badge action-pill${draft.vmDone ? " is-done" : ""}`}>
               {draft.vmDone
                 ? t("wiz_configured_badge", "Selesai")
                 : t("wiz_optional_badge", "Opsional")}
             </span>
           </div>
+          <span className="wiz-card-title">
+            {t("wiz_card_vm_title", "Tambah Virtual Machine")}
+          </span>
           <p className="wiz-card-desc">
             {t(
               "wiz_card_vm_desc",

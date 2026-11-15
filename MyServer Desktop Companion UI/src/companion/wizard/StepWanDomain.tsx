@@ -111,33 +111,32 @@ export function StepWanDomain({
 
       <div className="wiz-field">
         <label htmlFor="wiz-wan-url">{t("wiz_wan_label")}</label>
-        <input
-          id="wiz-wan-url"
-          type="url"
-          className="wiz-input"
-          placeholder={t("wiz_wan_placeholder")}
-          value={draft.wanUrl}
-          onChange={e => handleChange(e.target.value)}
-          aria-invalid={Boolean(validationError)}
-        />
-      </div>
-
-      <div className="wiz-action-row">
-        <button
-          type="button"
-          className="wiz-btn-ghost"
-          disabled={!canTest}
-          onClick={() => void handleTestDomain()}
-        >
-          {testing ? (
-            <>
-              <LoaderCircle size={14} className="wiz-spin" aria-hidden="true" />
-              <span>{t("wiz_testing_conn")}</span>
-            </>
-          ) : (
-            <span>{t("wiz_test_domain")}</span>
-          )}
-        </button>
+        <div className="input-action-row">
+          <input
+            id="wiz-wan-url"
+            type="url"
+            className="wiz-input is-mono"
+            placeholder={t("wiz_wan_placeholder")}
+            value={draft.wanUrl}
+            onChange={e => handleChange(e.target.value)}
+            aria-invalid={Boolean(validationError)}
+          />
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-secondary"
+            disabled={!canTest}
+            onClick={() => void handleTestDomain()}
+          >
+            {testing ? (
+              <>
+                <LoaderCircle size={14} className="wiz-spin" aria-hidden="true" />
+                <span>{t("wiz_testing_conn")}</span>
+              </>
+            ) : (
+              <span>{t("wiz_test_domain")}</span>
+            )}
+          </button>
+        </div>
       </div>
 
       {validationError && (
@@ -165,7 +164,7 @@ export function StepWanDomain({
         <div className="wiz-footer-left">
           <button
             type="button"
-            className="wiz-btn-ghost"
+            className="wiz-btn wiz-btn-secondary"
             onClick={onBack}
             disabled={testing}
           >
@@ -173,7 +172,7 @@ export function StepWanDomain({
           </button>
           <button
             type="button"
-            className="wiz-btn-ghost"
+            className="wiz-btn wiz-btn-ghost"
             onClick={handleSkip}
             disabled={testing}
           >
@@ -182,7 +181,7 @@ export function StepWanDomain({
         </div>
         <button
           type="submit"
-          className="wiz-btn-primary"
+          className="wiz-btn wiz-btn-primary"
           disabled={testing || Boolean(validationError)}
         >
           {t("wiz_next")}

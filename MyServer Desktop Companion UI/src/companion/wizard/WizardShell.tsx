@@ -64,6 +64,7 @@ export function WizardShell({
           draggable={false}
         />
         <div className="wiz-header-right">
+          {subStepLabel ? <span className="wiz-sub-badge">{subStepLabel}</span> : null}
           <span className="wiz-step-count">
             {t("wiz_step_pill", "Step")} {stepNumber}/5
           </span>
@@ -95,11 +96,9 @@ export function WizardShell({
         ))}
       </div>
 
-      {subStepLabel ? <span className="wiz-sub-badge">{subStepLabel}</span> : null}
-
       {toast ? (
         <div
-          className={`wiz-toast${toast.tone === "error" ? " is-error" : toast.tone === "success" ? " is-success" : ""}`}
+          className={`wiz-toast${toast.tone === "error" ? " is-error" : toast.tone === "success" ? " is-success" : toast.tone === "warning" ? " is-warning" : ""}`}
           role="status"
         >
           {toast.text}

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react"
+import { Eye, EyeOff } from "lucide-react"
 import { getCompanionApi } from "../api"
 import { getTranslation, type Language } from "../i18n"
 import type { WizardDraft } from "../types"
@@ -407,14 +408,14 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
       )}
 
       <div className="wiz-sub-card">
-        <div className="wiz-form-grid">
+        <div className="grid-syncthing-keys">
           <div className="wiz-field">
             <label className="wiz-label" htmlFor="st-local-port">
-              {t("wiz_5a_local_port", "Port Syncthing Lokal")}
+              {t("wiz_5a_local_port", "Port Lokal")}
             </label>
             <input
               id="st-local-port"
-              className="wiz-input"
+              className="wiz-input is-mono"
               type="text"
               value={localPort}
               onChange={(e) => setLocalPort(e.target.value)}
@@ -427,10 +428,10 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
             <label className="wiz-label" htmlFor="st-local-key">
               {t("wiz_5a_local_key", "API Key Lokal")}
             </label>
-            <div className="wiz-input-row">
+            <div className="wiz-input-wrap">
               <input
                 id="st-local-key"
-                className="wiz-input"
+                className="wiz-input is-mono"
                 type={showLocalKey ? "text" : "password"}
                 value={localApiKey}
                 onChange={(e) => setLocalApiKey(e.target.value)}
@@ -439,7 +440,8 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
               />
               <button
                 type="button"
-                className="wiz-chip-toggle"
+                className="wiz-eye-btn"
+                aria-pressed={showLocalKey}
                 onClick={() => setShowLocalKey((v) => !v)}
                 aria-label={
                   showLocalKey
@@ -447,9 +449,11 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
                     : t("wiz_show_password", "Tampilkan")
                 }
               >
-                {showLocalKey
-                  ? t("wiz_hide_password", "Sembunyikan")
-                  : t("wiz_show_password", "Tampilkan")}
+                {showLocalKey ? (
+                  <EyeOff size={15} aria-hidden="true" />
+                ) : (
+                  <Eye size={15} aria-hidden="true" />
+                )}
               </button>
             </div>
           </div>
@@ -458,10 +462,10 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
             <label className="wiz-label" htmlFor="st-server-key">
               {t("wiz_5a_server_key", "API Key Server")}
             </label>
-            <div className="wiz-input-row">
+            <div className="wiz-input-wrap">
               <input
                 id="st-server-key"
-                className="wiz-input"
+                className="wiz-input is-mono"
                 type={showServerKey ? "text" : "password"}
                 value={serverApiKey}
                 onChange={(e) => setServerApiKey(e.target.value)}
@@ -470,7 +474,8 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
               />
               <button
                 type="button"
-                className="wiz-chip-toggle"
+                className="wiz-eye-btn"
+                aria-pressed={showServerKey}
                 onClick={() => setShowServerKey((v) => !v)}
                 aria-label={
                   showServerKey
@@ -478,9 +483,11 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
                     : t("wiz_show_password", "Tampilkan")
                 }
               >
-                {showServerKey
-                  ? t("wiz_hide_password", "Sembunyikan")
-                  : t("wiz_show_password", "Tampilkan")}
+                {showServerKey ? (
+                  <EyeOff size={15} aria-hidden="true" />
+                ) : (
+                  <Eye size={15} aria-hidden="true" />
+                )}
               </button>
             </div>
           </div>
@@ -500,9 +507,7 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
             className={`wiz-switch${autoSwitch ? " is-on" : ""}`}
             onClick={() => setAutoSwitch((v) => !v)}
             disabled={saving}
-          >
-            {autoSwitch ? "ON" : "OFF"}
-          </button>
+          />
         </div>
 
         {!autoSwitch && (
@@ -666,9 +671,7 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
             className={`wiz-switch${autoStart ? " is-on" : ""}`}
             onClick={() => setAutoStart((v) => !v)}
             disabled={saving}
-          >
-            {autoStart ? "ON" : "OFF"}
-          </button>
+          />
         </div>
 
         <div className="wiz-switch-row">
@@ -683,9 +686,7 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
             className={`wiz-switch${autoPair ? " is-on" : ""}`}
             onClick={() => setAutoPair((v) => !v)}
             disabled={saving}
-          >
-            {autoPair ? "ON" : "OFF"}
-          </button>
+          />
         </div>
       </div>
 
@@ -705,38 +706,42 @@ export const SubStepSyncthing: React.FC<SubStepSyncthingProps> = ({
       )}
 
       <div className="wiz-actions">
-        <button
-          type="button"
-          className="wiz-btn wiz-btn-secondary"
-          onClick={onBack}
-          disabled={saving}
-        >
-          {t("wiz_back", "Kembali")}
-        </button>
-        <button
-          type="button"
-          className="wiz-btn wiz-btn-ghost"
-          onClick={onSkip ?? onBack}
-          disabled={saving}
-        >
-          {t("wiz_skip", "Lewati")}
-        </button>
-        <button
-          type="button"
-          className="wiz-btn wiz-btn-secondary"
-          onClick={handleTestConnection}
-          disabled={testing || saving}
-        >
-          {testing ? "..." : t("wiz_5a_test_conn", "Test Koneksi")}
-        </button>
-        <button
-          type="button"
-          className="wiz-btn wiz-btn-primary"
-          onClick={handleSaveAndActivate}
-          disabled={saving}
-        >
-          {saving ? "..." : t("wiz_5a_save_activate", "Simpan & Aktifkan")}
-        </button>
+        <div className="wiz-footer-left">
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-secondary"
+            onClick={onBack}
+            disabled={saving}
+          >
+            {t("wiz_back", "Kembali")}
+          </button>
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-ghost"
+            onClick={onSkip ?? onBack}
+            disabled={saving}
+          >
+            {t("wiz_skip", "Lewati")}
+          </button>
+        </div>
+        <div className="wiz-footer-right">
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-secondary"
+            onClick={handleTestConnection}
+            disabled={testing || saving}
+          >
+            {testing ? "..." : t("wiz_5a_test_conn", "Test Koneksi")}
+          </button>
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-primary"
+            onClick={handleSaveAndActivate}
+            disabled={saving}
+          >
+            {saving ? "..." : t("wiz_5a_save_activate", "Simpan & Aktifkan")}
+          </button>
+        </div>
       </div>
     </div>
   )

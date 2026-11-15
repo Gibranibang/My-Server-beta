@@ -130,36 +130,38 @@ export function StepZimaLogin({
         <span className="wiz-req-badge">{t("wiz_required_badge")}</span>
       </div>
 
-      <div className="wiz-field">
-        <label htmlFor="wiz-server-name">{t("wiz_server_name_label")}</label>
-        <input
-          id="wiz-server-name"
-          type="text"
-          className="wiz-input"
-          placeholder={t("wiz_server_name_default")}
-          value={draft.serverName}
-          disabled={submitting}
-          onChange={e => {
-            setAuthError("")
-            onPatchDraft({ serverName: e.target.value })
-          }}
-        />
-      </div>
+      <div className="grid-2">
+        <div className="wiz-field">
+          <label htmlFor="wiz-server-name">{t("wiz_server_name_label")}</label>
+          <input
+            id="wiz-server-name"
+            type="text"
+            className="wiz-input"
+            placeholder={t("wiz_server_name_default")}
+            value={draft.serverName}
+            disabled={submitting}
+            onChange={e => {
+              setAuthError("")
+              onPatchDraft({ serverName: e.target.value })
+            }}
+          />
+        </div>
 
-      <div className="wiz-field">
-        <label htmlFor="wiz-username">{t("wiz_username_label")}</label>
-        <input
-          id="wiz-username"
-          type="text"
-          autoComplete="username"
-          className="wiz-input"
-          value={draft.username}
-          disabled={submitting}
-          onChange={e => {
-            setAuthError("")
-            onPatchDraft({ username: e.target.value })
-          }}
-        />
+        <div className="wiz-field">
+          <label htmlFor="wiz-username">{t("wiz_username_label")}</label>
+          <input
+            id="wiz-username"
+            type="text"
+            autoComplete="username"
+            className="wiz-input"
+            value={draft.username}
+            disabled={submitting}
+            onChange={e => {
+              setAuthError("")
+              onPatchDraft({ username: e.target.value })
+            }}
+          />
+        </div>
       </div>
 
       <div className="wiz-field">
@@ -216,7 +218,7 @@ export function StepZimaLogin({
       <div className="wiz-footer">
         <button
           type="button"
-          className="wiz-btn-ghost"
+          className="wiz-btn wiz-btn-secondary"
           onClick={onBack}
           disabled={submitting}
         >
@@ -224,7 +226,7 @@ export function StepZimaLogin({
         </button>
         <button
           type="submit"
-          className="wiz-btn-primary"
+          className="wiz-btn wiz-btn-primary"
           disabled={!canSubmit}
         >
           {submitting ? (

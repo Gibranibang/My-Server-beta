@@ -219,7 +219,7 @@ export function StepConnection({
           <input
             id="wiz-lan-url"
             type="text"
-            className="wiz-input"
+            className="wiz-input is-mono"
             placeholder={t("wiz_lan_placeholder")}
             value={draft.lanUrl}
             onChange={e => handleLanChange(e.target.value)}
@@ -238,33 +238,17 @@ export function StepConnection({
             id="wiz-remote-id"
             type="text"
             maxLength={16}
-            className="wiz-input wiz-mono"
+            className="wiz-input is-mono wiz-mono"
             placeholder={t("wiz_remote_placeholder")}
             value={draft.remoteId}
             onChange={e => handleRemoteChange(e.target.value)}
             aria-invalid={Boolean(validationError)}
           />
-          <p className="wiz-hint">{t("wiz_uac_notice")}</p>
+          <div className="trust-note wiz-uac-note">
+            <span>{t("wiz_uac_notice")}</span>
+          </div>
         </div>
       )}
-
-      <div className="wiz-action-row">
-        <button
-          type="button"
-          className="wiz-btn-ghost"
-          disabled={testing || !canTest}
-          onClick={() => void handleTestConnection()}
-        >
-          {testing ? (
-            <>
-              <LoaderCircle size={14} className="wiz-spin" aria-hidden="true" />
-              <span>{t("wiz_testing_conn")}</span>
-            </>
-          ) : (
-            <span>{t("wiz_test_conn")}</span>
-          )}
-        </button>
-      </div>
 
       {(validationError || probeError) && (
         <div className="status-line is-err" role="alert">
@@ -281,10 +265,26 @@ export function StepConnection({
       )}
 
       <div className="wiz-footer">
-        <span />
+        <div className="wiz-footer-left">
+          <button
+            type="button"
+            className="wiz-btn wiz-btn-secondary"
+            disabled={testing || !canTest}
+            onClick={() => void handleTestConnection()}
+          >
+            {testing ? (
+              <>
+                <LoaderCircle size={14} className="wiz-spin" aria-hidden="true" />
+                <span>{t("wiz_testing_conn")}</span>
+              </>
+            ) : (
+              <span>{t("wiz_test_conn")}</span>
+            )}
+          </button>
+        </div>
         <button
           type="submit"
-          className="wiz-btn-primary"
+          className="wiz-btn wiz-btn-primary"
           disabled={!canAdvance}
         >
           {t("wiz_next")}

@@ -260,10 +260,12 @@ describe("Wizard Step 5 Hub and Sub-steps 5a / 5b", () => {
     fireEvent.click(screen.getByTestId("vm-scope-local"))
 
     fireEvent.change(screen.getByLabelText(/Nama VM/i), { target: { value: "Dev-Node" } })
-    fireEvent.change(screen.getByLabelText(/SSH Host/i), { target: { value: "192.168.1.90" } })
-    fireEvent.change(screen.getByLabelText(/SSH Port/i), { target: { value: "22" } })
-    fireEvent.change(screen.getByLabelText(/Username SSH/i), { target: { value: "ubuntu" } })
-    fireEvent.change(screen.getByLabelText(/URL VM Web/i), { target: { value: "https://vnc.local:6080" } })
+    fireEvent.change(screen.getByLabelText(/Host Gateway \/ IP/i), { target: { value: "192.168.1.90" } })
+    fireEvent.change(screen.getByLabelText(/Port SSH/i), { target: { value: "22" } })
+    fireEvent.change(screen.getByLabelText(/Masa Berlaku/i), { target: { value: "24 jam" } })
+    fireEvent.change(screen.getByLabelText(/User SSH/i), { target: { value: "ubuntu" } })
+    fireEvent.change(screen.getByLabelText(/Port Web Layanan/i), { target: { value: "6080" } })
+    fireEvent.change(screen.getByLabelText(/URL Layar Virtual/i), { target: { value: "https://vnc.local:6080" } })
     fireEvent.change(screen.getByLabelText(/Mode Buka Layar Virtual/i), { target: { value: "window" } })
 
     fireEvent.click(screen.getByRole("button", { name: /Simpan VM/i }))
@@ -278,10 +280,13 @@ describe("Wizard Step 5 Hub and Sub-steps 5a / 5b", () => {
       expect.objectContaining({
         name: "Dev-Node",
         provider: "manual",
+        status: "sleeping",
         scope: "local",
         sshHost: "192.168.1.90",
         sshPort: 22,
         sshUser: "ubuntu",
+        tokenExpiry: "24 jam",
+        webPort: 6080,
         screenUrl: "https://vnc.local:6080",
         screenOpenTarget: "window",
       })
@@ -291,23 +296,30 @@ describe("Wizard Step 5 Hub and Sub-steps 5a / 5b", () => {
     expect(onDoneSubStep).toHaveBeenCalledTimes(1)
   })
 
-  it("SubStepVm prevents duplicate VMs on rapid double-click and invokes syncInstaBoxVm for instabox", async () => {
+  it("SubStepVm matches VmManagerView InstaBox Cloud fields (no SSH Host/Port/Username box or 'root' default) and patches sync metadata", async () => {
     const baseApi = createMockApi()
     const loadVms = vi.fn().mockResolvedValue([])
     let resolveSave!: () => void
     const saveVms = vi.fn(
-      () =>
+      (_vms: VirtualMachine[]) =>
         new Promise<{ success: boolean }>((resolve) => {
           resolveSave = () => resolve({ success: true })
         })
     )
-    const syncInstaBoxVm = vi.fn().mockResolvedValue({ success: true })
+    const syncInstaBoxVm = vi.fn().mockResolvedValue({
+      success: true,
+      machineId: "mach-ib-01",
+      state: "running",
+      screenUrl: "https://instabox.sh/app/mach-ib-01",
+    })
+    const updateVm = vi.fn().mockResolvedValue({ success: true })
 
     setCompanionApi({
       ...baseApi,
       loadVms,
       saveVms,
       syncInstaBoxVm,
+      updateVm,
     })
 
     const onPatchDraft = vi.fn()
@@ -323,9 +335,16 @@ describe("Wizard Step 5 Hub and Sub-steps 5a / 5b", () => {
       />
     )
 
+    // Default tab is InstaBox Cloud: must NOT expose SSH Host, SSH Port, Username SSH, or Web Port boxes
+    expect(screen.queryByLabelText(/Host Gateway|SSH Host/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Port SSH|SSH Port/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/User(?:name)? SSH/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Port Web|Web Port/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/Token SSH Sementara/i)).toHaveValue("")
+
     fireEvent.click(screen.getByTestId("vm-scope-server"))
     fireEvent.change(screen.getByLabelText(/Nama VM/i), { target: { value: "AI-Runner" } })
-    fireEvent.change(screen.getByLabelText(/API Key InstaBox/i), { target: { value: "ibx_live_key_123" } })
+    fireEvent.change(screen.getByLabelText(/API Key InstaBox/i), { target: { value: "ibk_live_key_123" } })
     fireEvent.change(screen.getByLabelText(/Mode Buka Layar Virtual/i), { target: { value: "browser" } })
 
     const saveBtn = screen.getByRole("button", { name: /Simpan VM/i })
@@ -336,18 +355,33 @@ describe("Wizard Step 5 Hub and Sub-steps 5a / 5b", () => {
       expect(saveVms).toHaveBeenCalledTimes(1)
     })
 
+    const savedPayload = saveVms.mock.calls[0][0] as VirtualMachine[]
+    expect(savedPayload[0].sshUser).toBeUndefined()
+    expect(savedPayload[0].sshHost).toBe("ssh.instabox.sh")
+    expect(savedPayload[0].sshPort).toBe(2222)
+    expect(savedPayload[0].status).toBe("sleeping")
+
     resolveSave()
 
     await waitFor(() => {
       expect(syncInstaBoxVm).toHaveBeenCalledTimes(1)
       expect(syncInstaBoxVm).toHaveBeenCalledWith(
         expect.objectContaining({
-          apiKey: "ibx_live_key_123",
+          apiKey: "ibk_live_key_123",
           vmName: "AI-Runner",
           vmId: expect.any(String),
           scope: "server",
           serverId: "srv-zima-1",
         })
+      )
+      expect(updateVm).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          machineId: "mach-ib-01",
+          status: "running",
+          screenUrl: "https://instabox.sh/app/mach-ib-01",
+        }),
+        "srv-zima-1"
       )
       expect(onPatchDraft).toHaveBeenCalledWith({ vmDone: true })
       expect(onDoneSubStep).toHaveBeenCalledTimes(1)

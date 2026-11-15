@@ -214,7 +214,9 @@ class EasyTierManager:
                 "--network-name", self._network_name,
                 "--network-secret", self._network_secret,
                 "-r", f"127.0.0.1:{self._rpc_port}",
-                "--listeners", "wss://0.0.0.0:0", "tcp://0.0.0.0:0", "udp://0.0.0.0:0",
+                "-l", "wss://0.0.0.0:0",
+                "-l", "tcp://0.0.0.0:0",
+                "-l", "udp://0.0.0.0:0",
                 "--lazy-p2p",
             ]
 
@@ -223,15 +225,19 @@ class EasyTierManager:
             if external_node:
                 cmd.extend(["--external-node", str(external_node).strip()])
 
-            # Konfigurasi IP: Jika ipv4 spesifik ditentukan dan bukan 'dhcp', gunakan -i.
-            # Jika tidak ditentukan atau 'dhcp', gunakan DHCP native (-d) untuk mencegah konflik IP.
+            # Konfigurasi IP Virtual EasyTier:
+            # Sesuai standar Zima Client v2.3.5 dan topologi ZimaOS:
+            # - Host ZimaOS berjalan di 10.126.126.1
+            # - Klien desktop diberi IP awal 10.126.126.2/24 dengan flag -d untuk DHCP dynamic fallback.
+            # JANGAN PERNAH gunakan -d sendirian tanpa -i, karena EasyTier DHCP akan mengalokasikan .1
+            # ke klien lokal pertama, yang menyebabkan tabrakan IP dengan server ZimaOS.
             clean_ipv4 = str(ipv4 or "").strip()
             if clean_ipv4 and clean_ipv4.lower() != "dhcp":
                 self._ipv4 = clean_ipv4
                 cmd.extend(["-i", self._ipv4])
             else:
-                self._ipv4 = None
-                cmd.append("-d")
+                self._ipv4 = "10.126.126.2/24"
+                cmd.extend(["-i", self._ipv4, "-d"])
 
             # Gabungkan relay peers standar IceWhale + public relays
             relay_list = list(peers) if peers else DEFAULT_RELAY_PEERS
@@ -377,7 +383,7 @@ class EasyTierManager:
             return None, "RPC portal tidak aktif."
 
         cli_path = self._binaries["cli_path"]
-        cmd = [cli_path, "-p", f"127.0.0.1:{self._rpc_port}", "-o", "json"] + args
+        cmd = [cli_path, "--rpc-portal", f"127.0.0.1:{self._rpc_port}", "--output", "json"] + args
 
         try:
             res = subprocess.run(
@@ -477,13 +483,25 @@ class EasyTierManager:
             return None
         node_info = self.get_node_info()
         local_ip = str(node_info.get("virtual_ipv4") or self._ipv4 or "").split("/")[0].strip()
+
+        # Kumpulkan IP lokal mesin agar tidak pernah keliru mendeteksi adapter sendiri sebagai remote server
+        local_ips = {"127.0.0.1", "0.0.0.0"}
+        if local_ip:
+            local_ips.add(local_ip)
+        try:
+            h_name = socket.gethostname()
+            for ip_cand in socket.gethostbyname_ex(h_name)[2]:
+                local_ips.add(ip_cand)
+        except Exception:
+            pass
+
         routes = self.get_routes()
         for r in routes:
             if isinstance(r, dict):
                 ipv4 = r.get("ipv4_addr") or r.get("ipv4") or r.get("ip") or r.get("peer_ipv4")
                 if ipv4:
                     clean = str(ipv4).split("/")[0].strip()
-                    if clean and clean != local_ip and not clean.startswith("127.") and clean != "0.0.0.0":
+                    if clean and clean not in local_ips and not clean.startswith("127."):
                         return clean
         peers = self.get_peers()
         for p in peers:
@@ -491,24 +509,30 @@ class EasyTierManager:
                 ipv4 = p.get("ipv4_addr") or p.get("ipv4") or p.get("ip") or p.get("peer_ipv4")
                 if ipv4:
                     clean = str(ipv4).split("/")[0].strip()
-                    if clean and clean != local_ip and not clean.startswith("127.") and clean != "0.0.0.0":
+                    if clean and clean not in local_ips and not clean.startswith("127."):
                         return clean
         return None
 
-    def is_peer_reachable(self, target_ip=None, timeout=0.25):
-        """Memeriksa apakah peer server EasyTier benar-benar merespons jaringan."""
+    def is_peer_reachable(self, target_ip=None, timeout=0.3):
+        """Memeriksa apakah peer server EasyTier benar-benar merespons web server (port 80)."""
         if not self.is_running():
             return False
         peer_ip = target_ip or self.get_peer_ip()
         if not peer_ip:
-            # Uji apakah 10.126.126.1 merespons jika peer_ip belum terisi
-            peer_ip = "10.126.126.1"
-        for port in (80, 445):
-            try:
-                with socket.create_connection((peer_ip, port), timeout=timeout):
-                    return True
-            except Exception:
-                continue
+            return False
+
+        # Jangan pernah menguji adapter sendiri atau loopback
+        node_info = self.get_node_info()
+        local_ip = str(node_info.get("virtual_ipv4") or self._ipv4 or "").split("/")[0].strip()
+        if peer_ip == local_ip or peer_ip.startswith("127."):
+            return False
+
+        # Uji koneksi TCP nyata ke port HTTP (80)
+        try:
+            with socket.create_connection((peer_ip, 80), timeout=timeout):
+                return True
+        except Exception:
+            pass
         return False
 
     def get_summary(self):

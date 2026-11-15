@@ -864,17 +864,19 @@ def check_server_ping(url, timeout=1.5):
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
 
         # Lapis 1: TCP Port Probing cepat
+        # Untuk URL Web (http/https), port web utama (80/443 atau custom port) WAJIB merespons.
+        # JANGAN PERNAH gunakan port 445 (SMB) sebagai indikator rute web http:// aktif,
+        # karena port 445 pada Windows lokal selalu terbuka (lanmanserver), yang menyebabkan
+        # URL http:// ke IP lokal yang mati dilaporkan aktif palsu.
         tcp_ok = False
         t0 = time.time()
-        for p in (port, 445):
-            try:
-                with socket.create_connection((host, int(p)), timeout=min(eff_timeout, 2.5)):
-                    tcp_ok = True
-                    break
-            except Exception:
-                continue
+        try:
+            with socket.create_connection((host, int(port)), timeout=min(eff_timeout, 2.5)):
+                tcp_ok = True
+        except Exception:
+            tcp_ok = False
 
-        # Jika TCP ke port web dan SMB sama sekali tidak tersambung, rute dipastikan mati
+        # Jika TCP ke port web sama sekali tidak tersambung, rute dipastikan mati
         if not tcp_ok:
             return False, 0
 
@@ -1093,6 +1095,11 @@ def get_dynamic_remote_info(server, config=None):
         et_running = mgr.is_running()
         if et_running:
             et_peer_ip = mgr.get_peer_ip()
+            # Jika belum terdeteksi dari tabel rute, uji apakah IP gateway standar ZimaOS 10.126.126.1
+            # merespons secara nyata di port 80 (bukan adapter lokal milik sendiri)
+            if not et_peer_ip and not srv_et_vip:
+                if mgr.is_peer_reachable("10.126.126.1", timeout=0.3):
+                    et_peer_ip = "10.126.126.1"
     except Exception:
         pass
 
@@ -1100,14 +1107,24 @@ def get_dynamic_remote_info(server, config=None):
 
     # 1. Jika mode paksa easytier
     if r_mode == "easytier":
-        final_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
-        return {
-            "engine": "easytier",
-            "name": "EasyTier Remote (P2P)",
-            "ip": final_ip,
-            "url": f"http://{final_ip}",
-            "badge": "P2P"
-        }
+        final_ip = chosen_et_ip or srv_et_vip
+        if final_ip:
+            return {
+                "engine": "easytier",
+                "name": "EasyTier Remote (P2P)",
+                "ip": final_ip,
+                "url": f"http://{final_ip}",
+                "badge": "P2P"
+            }
+        elif et_running:
+            return {
+                "engine": "easytier",
+                "name": "EasyTier Remote (P2P)",
+                "ip": "",
+                "url": "",
+                "badge": "Connecting"
+            }
+        return None
 
     # 2. Jika mode paksa zerotier
     if r_mode == "zerotier":
@@ -1124,22 +1141,20 @@ def get_dynamic_remote_info(server, config=None):
     # 3. Mode AUTO FAILOVER (Default: EasyTier Utama -> ZeroTier Cadangan)
     # EasyTier hanya dipromosikan jika daemon aktif DAN server peer terhubung / dapat dijangkau
     et_healthy = False
-    if et_running:
+    if et_running and chosen_et_ip:
         try:
             import easytier_manager
             mgr = easytier_manager.get_easytier_manager()
-            target_check_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
-            et_healthy = mgr.is_peer_reachable(target_check_ip, timeout=0.25)
+            et_healthy = mgr.is_peer_reachable(chosen_et_ip, timeout=0.3)
         except Exception:
             et_healthy = False
 
-    if et_running and et_healthy:
-        final_et_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
+    if et_running and et_healthy and chosen_et_ip:
         return {
             "engine": "easytier",
             "name": "EasyTier Remote (P2P)",
-            "ip": final_et_ip,
-            "url": f"http://{final_et_ip}",
+            "ip": chosen_et_ip,
+            "url": f"http://{chosen_et_ip}",
             "badge": "P2P"
         }
 
@@ -1153,14 +1168,13 @@ def get_dynamic_remote_info(server, config=None):
             "badge": "Fallback" if et_running else "P2P"
         }
 
-    # Jika ZeroTier juga tidak ada, tetap kembalikan EasyTier jika daemon aktif
-    if et_running:
-        final_et_ip = chosen_et_ip or srv_et_vip or "10.126.126.1"
+    # Jika ZeroTier juga tidak ada, kembalikan EasyTier HANYA jika peer IP nyata sudah ditemukan
+    if et_running and chosen_et_ip:
         return {
             "engine": "easytier",
             "name": "EasyTier Remote (P2P)",
-            "ip": final_et_ip,
-            "url": f"http://{final_et_ip}",
+            "ip": chosen_et_ip,
+            "url": f"http://{chosen_et_ip}",
             "badge": "P2P"
         }
 

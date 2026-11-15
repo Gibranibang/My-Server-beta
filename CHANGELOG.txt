@@ -1,11 +1,12 @@
 ===================================================
 [v4.5.12 - Beta] - 2026-11-15
 Catatan:
-1. Dukungan Penuh Mode Tanpa TUN & Fallback Otomatis: Parameter use_no_tun dan external_node kini diteruskan dengan benar ke daemon easytier-core.exe (--no-tun dan --external-node), memungkinkan operasi sub-node proxy tanpa memerlukan hak Administrator atau driver Wintun saat UAC ditolak.
-2. Pencegahan Konflik IP dengan Native DHCP: Mengganti hardcoded IP static 10.126.126.2/24 dengan flag native EasyTier DHCP (-d) saat IP kustom tidak ditentukan, mencegah tabrakan IP otomatis antar-klien.
-3. Sinkronisasi Skema Telemetri CLI EasyTier v2.6.4: Memperbarui fungsi get_node_info() untuk membaca field virtual_ipv4 secara langsung dari struct MyNodeInfo, dan memperluas parsing get_peers()/get_routes() agar mendukung wrapper payload items.
-4. Pembersihan Rute Shadowed & Duplikat Endpoint: Memperbaiki endpoint /api/easytier/status dan /api/easytier_status agar mengembalikan format gabungan (success, data, dan top-level overview), serta menghapus 52 baris duplikasi kode mati di myserver_core_service.py.
-5. Penyelarasan Verifikasi Koneksi Wizard UI: Memperbarui StepConnection.tsx untuk mendeteksi IP peer server yang aktif (server_peer_ip) dan memberikan umpan balik visual yang akurat kepada pengguna.
+1. Perbaikan Komprehensif CLI Flags EasyTier v2.6.4: Mengganti parameter -p dan -o json pada pemanggilan easytier-cli.exe menjadi flag resmi Clap --rpc-portal dan --output json. Flag -o sebelumnya ditolak oleh Clap parser EasyTier sehingga seluruh perintah telemetri rute dan peer gagal diam-diam.
+2. Eliminasi Tabrakan IP & Isolasi Alamat Virtual Klien: Menugaskan alamat virtual klien desktop ke 10.126.126.2/24 (dengan flag -d untuk resolusi konflik dinamis), mencegah EasyTier DHCP murni yang secara keliru mengambil IP .1 milik host ZimaOS sehingga Chrome tidak lagi diarahkan ke localhost Windows sendiri (ERR_CONNECTION_REFUSED).
+3. Eliminasi Fallback Palsu 10.126.126.1 & Sanitasi Probing: Menghapus fallback hardcoded 10.126.126.1 di config_manager.py, easytier_manager.py, dan myserver_core_service.py. Menghapus port 445 (SMB) dari evaluasi aktif rute HTTP web di check_server_ping(), memastikan status rute kartu EasyTier hanya ditandai aktif jika web server HTTP di port 80 benar-benar merespons.
+4. Penyesuaian Format Parameter Listeners Daemon: Mengubah parameter --listeners multi-nilai menjadi pemanggilan flag berulang -l wss://0.0.0.0:0 -l tcp://0.0.0.0:0 -l udp://0.0.0.0:0 yang sesuai dengan standar CLI easytier-core.exe.
+5. Dukungan Penuh Mode Tanpa TUN & Fallback Otomatis: Parameter use_no_tun dan external_node kini diteruskan dengan benar ke daemon easytier-core.exe (--no-tun dan --external-node), memungkinkan operasi sub-node proxy tanpa memerlukan hak Administrator atau driver Wintun saat UAC ditolak.
+6. Pembersihan Rute Shadowed & Duplikat Endpoint: Memperbaiki endpoint /api/easytier/status dan /api/easytier_status agar mengembalikan format gabungan (success, data, dan top-level overview), serta menghapus 52 baris duplikasi kode mati di myserver_core_service.py.
 ===================================================
 
 ===================================================

@@ -10,7 +10,7 @@ def get_active_remote_ip(srv, cfg=None):
         logger_manager.log_debug(f"[get_active_remote_ip] Error: {e}")
     r_mode = (srv.get("remote_mode") or (cfg.get("remote_mode") if cfg else "auto") or "auto").lower()
     if r_mode == "easytier":
-        return (srv.get("easytier_virtual_ip") or "10.126.126.1").strip()
+        return (srv.get("easytier_virtual_ip") or "").strip()
     return (srv.get("zerotier_virtual_ip") or "").strip()
 
 

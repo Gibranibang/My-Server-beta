@@ -380,6 +380,7 @@ export const I18N = {
     backend_smb_error_hint: "Check your Backend username/password or verify the MyServer Backend container is running on port 8080.",
     backend_files_tile_title: "Backend Files",
     opening_backend_fm_notice: "Opening Backend Storage Explorer...",
+    backend_explorer_unreachable: "Backend is unreachable.",
 
     // BackupView Actions & Captions
     atomic_backup_title: "Atomic Backup & Maintenance",
@@ -1263,6 +1264,7 @@ export const I18N = {
     backend_smb_error_hint: "Periksa kembali username/kata sandi akun Backend atau pastikan container MyServer Backend sedang berjalan di port 8080.",
     backend_files_tile_title: "Backend Files",
     opening_backend_fm_notice: "Membuka Storage Explorer Backend...",
+    backend_explorer_unreachable: "Backend tidak dapat dijangkau.",
 
     // BackupView Actions & Captions
     atomic_backup_title: "Pencadangan Atomik & Pemeliharaan",

@@ -313,11 +313,19 @@ export default function FilesView() {
           notify(t("backend_smb_connected_notice", "Sumber SMB Backend aktif"), "success")
         } else {
           if (res) {
-            setSourceStatus((prev) => ({
-              ...(prev ?? { source: "backend" }),
-              ...res,
-              source: "backend",
-            }))
+            setSourceStatus((prev) =>
+              editingBackendAuth
+                ? {
+                    ...(prev ?? { source: "backend" }),
+                    source: "backend",
+                    error: res.error,
+                  }
+                : {
+                    ...(prev ?? { source: "backend" }),
+                    ...res,
+                    source: "backend",
+                  },
+            )
           }
           notify(formatBackendError(res?.error), "danger")
           backendPassInputRef.current?.focus()
@@ -334,6 +342,7 @@ export default function FilesView() {
       api,
       backendPass,
       backendUser,
+      editingBackendAuth,
       formatBackendError,
       isSubmittingAuth,
       isSwitchingSource,
@@ -518,7 +527,7 @@ export default function FilesView() {
                     {sourceStatus?.username}
                   </Mono>
                   <Chip size="sm" tone="info" className="shrink-0">
-                    {(sourceStatus?.role || "").toLowerCase() === "admin"
+                    {["admin", "root"].includes((sourceStatus?.role || "").toLowerCase())
                       ? "Admin"
                       : `Staff · ${(sourceStatus?.allowedDisks || []).length} Disk`}
                   </Chip>
@@ -549,13 +558,30 @@ export default function FilesView() {
               }
               caption={t("open_web_files_caption", "Open Web File Manager")}
               disabled={!isOnline}
-              onClick={() => {
+              onClick={async () => {
                 if (smbSource === "backend") {
-                  void Promise.resolve(api.openBackendFileManager?.()).catch(() => {})
-                  notify(
-                    t("opening_backend_fm_notice", "Membuka Storage Explorer Backend..."),
-                    "info",
-                  )
+                  try {
+                    const res = await api.openBackendFileManager?.()
+                    if (res && res.success === true) {
+                      notify(
+                        t("opening_backend_fm_notice", "Membuka Storage Explorer Backend..."),
+                        "info",
+                      )
+                    } else {
+                      notify(
+                        res?.error ||
+                          t("backend_explorer_unreachable", "Backend tidak dapat dijangkau."),
+                        "danger",
+                      )
+                    }
+                  } catch (err) {
+                    notify(
+                      err instanceof Error && err.message
+                        ? err.message
+                        : t("backend_explorer_unreachable", "Backend tidak dapat dijangkau."),
+                      "danger",
+                    )
+                  }
                 } else {
                   api.openZimaFileManager()
                   notify(t("opening_zima_fm_notice", "Opening ZimaOS File Manager..."), "info")

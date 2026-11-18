@@ -900,6 +900,7 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
     def test_06_live_drives_backend_mode_route_norm_open_web_and_call_core_api(self):
         # 1. /api/open_backend_file_manager + /api/call_core_api routing
         with patch.object(core, "_get_active_server_backend_url", return_value="http://10.126.126.2:8080"), \
+             patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0"}, 200)), \
              patch.object(core, "spawn_app_window", return_value=(True, "ok")) as mock_spawn:
             st_open, res_open = self._req("POST", "/api/open_backend_file_manager", {})
             self.assertEqual(st_open, 200)
@@ -1049,6 +1050,376 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             self.assertIs(res_d.get("success"), True)
             self.assertIs(res_d.get("rebuildRecommended"), True)
             self.assertEqual(len(ssh_rec_d["connect_calls"]), 0)
+
+    def test_08_cr07_backend_mode_empty_shares_never_falls_back_to_net_view(self):
+        smb_mount_manager.clear_smb_share_cache()
+        with patch.object(smb_mount_manager, "fetch_shares_from_backend_api", return_value=[]) as mock_be, \
+             patch.object(smb_mount_manager.subprocess, "run", side_effect=AssertionError("net.exe view must NOT run in backend mode")):
+            shares_first = smb_mount_manager.get_remote_smb_shares(
+                host="10.126.126.2",
+                username="staff_zero",
+                password="secret",
+                smb_source="backend",
+                backend_url="http://10.126.126.2:8080",
+            )
+            self.assertEqual(shares_first, [])
+            self.assertEqual(mock_be.call_count, 1)
+
+            # Empty list should also be cached without calling net.exe view or re-querying API immediately
+            shares_cached = smb_mount_manager.get_remote_smb_shares(
+                host="10.126.126.2",
+                username="staff_zero",
+                password="secret",
+                smb_source="backend",
+                backend_url="http://10.126.126.2:8080",
+            )
+            self.assertEqual(shares_cached, [])
+            self.assertEqual(mock_be.call_count, 1)
+
+        # Verify ZimaOS mode still falls back to net.exe view when API returns []
+        smb_mount_manager.clear_smb_share_cache()
+        fake_net_view = types.SimpleNamespace(
+            returncode=0,
+            stdout="Share name   Type\n----\nZimaShare    Disk\nThe command completed successfully.\n",
+            stderr="",
+        )
+        with patch.object(smb_mount_manager, "fetch_shares_from_zimaos_api", return_value=[]), \
+             patch.object(smb_mount_manager.subprocess, "run", return_value=fake_net_view) as mock_sub:
+            z_shares = smb_mount_manager.get_remote_smb_shares(
+                host="192.168.55.50",
+                username="zima_admin",
+                password="pw",
+                auth_token="tok",
+                base_url="http://192.168.55.50:80",
+                smb_source="zimaos",
+            )
+            self.assertEqual(z_shares, ["ZimaShare"])
+            self.assertGreaterEqual(mock_sub.call_count, 1)
+
+    def test_09_wr01_401_refresh_preserves_admin_allowed_disks(self):
+        for admin_role in ("admin", "root"):
+            cfg = config_manager.load_or_create_config()
+            config_manager.save_server_smb_source_config(
+                cfg,
+                "srv_1",
+                "backend",
+                username="admin_ops",
+                password="AdminOps!99",
+                role=admin_role,
+                allowed_disks=["DATA", "Media"],
+                access_token="expired.admin.jwt",
+            )
+
+            ok = core._persist_refreshed_backend_token(
+                "srv_1",
+                "fresh.admin.jwt",
+                {"role": admin_role, "allowed_disks": []},
+            )
+            self.assertTrue(ok)
+
+            refreshed = config_manager.get_server_smb_source_config(
+                config_manager.load_or_create_config()["servers"][0]
+            )
+            self.assertEqual(refreshed["access_token"], "fresh.admin.jwt")
+            self.assertEqual(refreshed["role"], admin_role)
+            self.assertEqual(refreshed["allowed_disks"], ["DATA", "Media"])
+
+        # Staff user empty allowed_disks still updates normally
+        config_manager.save_server_smb_source_config(
+            config_manager.load_or_create_config(),
+            "srv_1",
+            "backend",
+            username="staff_budi",
+            password="StaffSecret!9",
+            role="staff",
+            allowed_disks=["Media"],
+            access_token="expired.staff.jwt",
+        )
+        core._persist_refreshed_backend_token(
+            "srv_1",
+            "fresh.staff.jwt",
+            {"role": "staff", "allowed_disks": []},
+        )
+        staff_refreshed = config_manager.get_server_smb_source_config(
+            config_manager.load_or_create_config()["servers"][0]
+        )
+        self.assertEqual(staff_refreshed["allowed_disks"], [])
+
+    def test_10_wr02_scan_live_drives_now_recognizes_easytier_virtual_ip(self):
+        cfg = config_manager.load_or_create_config()
+        cfg["servers"].append(
+            {
+                "id": "srv_2",
+                "name": "OtherNAS",
+                "easytier_virtual_ip": "10.126.126.99",
+                "connections": [{"id": "c_other", "name": "LAN", "url": "http://192.168.88.99:80"}],
+            }
+        )
+        config_manager.save_config(cfg)
+
+        drive_map = {
+            "Z:": r"\\10.126.126.2\Media",
+            "Y:": r"\\10.126.126.99\OtherShare",
+        }
+
+        class _FakeKernel32:
+            def GetDriveTypeW(self, path_w):
+                drv = path_w.rstrip("\\")
+                return 4 if drv in drive_map else 1
+
+        class _FakeMpr:
+            def WNetGetConnectionW(self, drv, buf, _size_ref):
+                unc = drive_map.get(drv)
+                if unc:
+                    buf.value = unc
+                    return 0
+                return 1201
+
+        fake_windll = types.SimpleNamespace(kernel32=_FakeKernel32(), mpr=_FakeMpr())
+        with core._state_lock:
+            core._cached_state["is_online"] = True
+            core._cached_state["storage_partitions"] = [
+                {"name": "Media", "raw_name": "Media", "total_bytes": 1000, "used_bytes": 250}
+            ]
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core.ctypes, "windll", fake_windll, create=True), \
+             patch.object(core, "get_active_resolved_route", return_value=("https://nas.example.com", "WAN")), \
+             patch.object(core.zerotier_manager, "is_zerotier_ip", return_value=False):
+            drives = core._scan_live_drives_now()
+
+        names = [d["name"] for d in drives]
+        self.assertIn("Media", names)
+        self.assertNotIn("OtherShare", names)
+
+    def test_11_wr03_dpapi_fallback_logs_warning_without_secret_leak(self):
+        secret_val = "UltraSecretDPAPI!99"
+        with patch.object(config_manager.sys, "platform", "win32"), \
+             patch.object(config_manager, "_dpapi_protect", side_effect=OSError("CryptProtectData failed")), \
+             patch.object(config_manager, "_dpapi_unprotect", side_effect=OSError("CryptUnprotectData failed")):
+            enc = config_manager.encrypt_credential(secret_val)
+            self.assertTrue(enc.startswith("enc:"))
+            dec_bad = config_manager.decrypt_credential("dpapi:ZmFrZQ==")
+            self.assertEqual(dec_bad, "dpapi:ZmFrZQ==")
+
+        all_logs = "\n".join(self.log_handler.messages)
+        self.assertIn("DPAPI_FALLBACK", all_logs)
+        self.assertNotIn(secret_val, all_logs)
+
+    def test_12_wr05_open_backend_file_manager_503_and_wr08_strict_health(self):
+        # WR-05: /api/open_backend_file_manager probes /health and returns 503 when unreachable or unhealthy
+        for bad_probe in ((False, {}, 502), (True, {"status": "degraded"}, 200), (False, {"detail": "not found"}, 404)):
+            with patch.object(core, "_get_active_server_backend_url", return_value="http://10.126.126.2:8080"), \
+                 patch.object(core, "_backend_http_request", return_value=bad_probe), \
+                 patch.object(core, "spawn_app_window") as mock_spawn:
+                st, res = self._req("POST", "/api/open_backend_file_manager", {})
+            self.assertEqual(st, 503)
+            self.assertIs(res.get("success"), False)
+            self.assertIn("Backend tidak dapat dijangkau", res.get("error", ""))
+            mock_spawn.assert_not_called()
+
+        # WR-08: _handle_smb_source_request treats 404/500/503 or non-ok /health strictly as backendOnline=False
+        for bad_health in ((False, {"detail": "Not Found"}, 404), (False, {"error": "Internal"}, 500), (True, {"status": "error"}, 200)):
+            with patch.object(core, "_get_active_server_backend_url", return_value="http://10.126.126.2:8080"), \
+                 patch.object(core, "_backend_http_request", return_value=bad_health):
+                st_g, res_g = self._req("GET", "/api/smb/source")
+            self.assertEqual(st_g, 200)
+            self.assertIs(res_g.get("backendOnline"), False)
+
+    def test_13_wr07_post_ota_ssh_failure_sets_ota_applied_and_uses_dynamic_candidates(self):
+        with tempfile.TemporaryDirectory() as pkg_tmp:
+            zip_path = os.path.join(pkg_tmp, "MyServer-Backend-ZimaOS.zip")
+            tar_path = os.path.join(pkg_tmp, "MyServer-Backend-ZimaOS.tar.gz")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.4.0"\n')
+            with tarfile.open(tar_path, "w:gz") as tf:
+                info = tarfile.TarInfo("app/config.py")
+                data = b'SERVER_VERSION = "1.4.0"\n'
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+
+            # Part A: HTTP OTA succeeds, auto-chains SSH rebuild, SSH auth fails -> otaApplied & rebuildPendingSshAuth
+            ssh_rec = {"connect_calls": [], "sftp_puts": [], "exec_cmds": []}
+            fake_paramiko = _build_fake_paramiko(ssh_rec)
+
+            def _raise_ssh_auth(*_a, **_kw):
+                raise fake_paramiko.AuthenticationException("SSH auth failed")
+
+            fake_paramiko.SSHClient.connect = _raise_ssh_auth
+
+            with patch.dict(sys.modules, {"paramiko": fake_paramiko}), \
+                 patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]), \
+                 patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"), \
+                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.0"), \
+                 patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, tar_path)), \
+                 patch("urllib.request.urlopen", return_value=_FakeHttpResponse({"status": "success", "boot_id": "boot-old", "rebuild_required": True})), \
+                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0", "boot_id": "boot-new"}, 200)), \
+                 patch("time.sleep", return_value=None):
+                res_fail = core.handle_remote_backend_action({"action": "update", "serverId": "srv_1"})
+
+            self.assertIs(res_fail.get("success"), False)
+            self.assertIs(res_fail.get("authFailed"), True)
+            self.assertIs(res_fail.get("otaApplied"), True)
+            self.assertIs(res_fail.get("rebuildPendingSshAuth"), True)
+            self.assertIn("HTTP OTA sudah diterapkan", res_fail.get("message", ""))
+            self.assertIn("HTTP OTA sudah diterapkan", res_fail.get("error", ""))
+
+            # Part B: After SSH install_zimaos.sh, health check uses _get_backend_url_candidates (e.g. EasyTier IP)
+            ssh_rec_ok = {"connect_calls": [], "sftp_puts": [], "exec_cmds": []}
+            fake_paramiko_ok = _build_fake_paramiko(ssh_rec_ok)
+            probed_urls = []
+
+            def _health_side_effect(url, **_kwargs):
+                probed_urls.append(url)
+                if url.startswith("http://10.126.126.2:8080"):
+                    return True, {"status": "ok", "version": "1.4.0"}, 200
+                return False, {}, 0
+
+            with patch.dict(sys.modules, {"paramiko": fake_paramiko_ok}), \
+                 patch.object(core, "_get_backend_url_candidates", return_value=["http://10.126.126.2:8080", "http://192.168.55.50:8080"]), \
+                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.0"), \
+                 patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, tar_path)), \
+                 patch.object(core, "_backend_http_request", side_effect=_health_side_effect), \
+                 patch("time.sleep", return_value=None):
+                res_ssh_ok = core.handle_remote_backend_action(
+                    {"action": "install", "source": "bundle", "serverId": "srv_1", "sshHost": "nas.example.com"}
+                )
+
+            self.assertIs(res_ssh_ok.get("success"), True)
+            self.assertEqual(res_ssh_ok["backend"]["url"], "http://10.126.126.2:8080")
+            self.assertIn("http://nas.example.com:8080/health", probed_urls)
+            self.assertIn("http://10.126.126.2:8080/health", probed_urls)
+
+    def test_14_cr03_desktop_ota_sends_bearer_jwt_form_creds_and_zimaos_token(self):
+        with tempfile.TemporaryDirectory() as pkg_tmp:
+            zip_path = os.path.join(pkg_tmp, "MyServer-Backend-ZimaOS.zip")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.4.0"\n')
+
+            # Case A: Admin JWT in backend_smb_auth + ZimaMetricsClient zimaos_token
+            config_manager.save_server_smb_source_config(
+                config_manager.load_or_create_config(),
+                "srv_1",
+                "backend",
+                username="admin_ops",
+                password="AdminOps!99",
+                role="admin",
+                allowed_disks=["DATA"],
+                access_token="admin.jwt.token.A",
+            )
+            captured_reqs = []
+
+            def _fake_urlopen(req, timeout=20):
+                captured_reqs.append(
+                    {
+                        "url": req.full_url,
+                        "headers": {k.lower(): v for k, v in req.header_items()},
+                        "data": req.data,
+                    }
+                )
+                if req.full_url.endswith("/api/v1/auth/verify"):
+                    return _FakeHttpResponse({"access_token": "refreshed.admin.jwt", "role": "admin"})
+                return _FakeHttpResponse({"status": "success", "boot_id": "boot-new"})
+
+            fake_mc = types.SimpleNamespace(token="zima_live_tok_99")
+            with patch.object(core, "_active_metrics_client", fake_mc), \
+                 patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]), \
+                 patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"), \
+                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.0"), \
+                 patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)), \
+                 patch("urllib.request.urlopen", side_effect=_fake_urlopen), \
+                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0", "boot_id": "boot-2"}, 200)), \
+                 patch("time.sleep", return_value=None):
+                res_a = core.handle_remote_backend_action({"action": "update", "serverId": "srv_1"})
+
+            self.assertIs(res_a.get("success"), True)
+            self.assertEqual(len(captured_reqs), 1)
+            req_a = captured_reqs[0]
+            self.assertTrue(req_a["url"].endswith("/api/v1/system/update"))
+            self.assertEqual(req_a["headers"].get("authorization"), "Bearer admin.jwt.token.A")
+            self.assertIn(b'name="username"\r\n\r\nadmin_ops\r\n', req_a["data"])
+            self.assertIn(b'name="password"\r\n\r\nAdminOps!99\r\n', req_a["data"])
+            self.assertIn(b'name="zimaos_token"\r\n\r\nzima_live_tok_99\r\n', req_a["data"])
+
+            # Case B: Staff token in backend_smb_auth must NOT be sent as OTA Bearer; uses ZimaOS creds & token
+            config_manager.save_server_smb_source_config(
+                config_manager.load_or_create_config(),
+                "srv_1",
+                "backend",
+                username="staff_budi",
+                password="StaffSecret!9",
+                role="staff",
+                allowed_disks=["Media"],
+                access_token="staff.jwt.must.not.send",
+            )
+            captured_reqs.clear()
+
+            def _fake_urlopen_staff(req, timeout=20):
+                captured_reqs.append(
+                    {
+                        "url": req.full_url,
+                        "headers": {k.lower(): v for k, v in req.header_items()},
+                        "data": req.data,
+                    }
+                )
+                if req.full_url.endswith("/api/v1/auth/verify"):
+                    return _FakeHttpResponse({"access_token": "zima.admin.jwt.B", "role": "admin"})
+                return _FakeHttpResponse({"status": "success", "boot_id": "boot-new"})
+
+            with patch.object(core, "_active_metrics_client", fake_mc), \
+                 patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]), \
+                 patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"), \
+                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.0"), \
+                 patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)), \
+                 patch("urllib.request.urlopen", side_effect=_fake_urlopen_staff), \
+                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0", "boot_id": "boot-3"}, 200)), \
+                 patch("time.sleep", return_value=None):
+                res_b = core.handle_remote_backend_action({"action": "update", "serverId": "srv_1"})
+
+            self.assertIs(res_b.get("success"), True)
+            upd_req = [r for r in captured_reqs if r["url"].endswith("/api/v1/system/update")][0]
+            self.assertNotEqual(upd_req["headers"].get("authorization"), "Bearer staff.jwt.must.not.send")
+            self.assertEqual(upd_req["headers"].get("authorization"), "Bearer zima.admin.jwt.B")
+            self.assertIn(b'name="username"\r\n\r\nzima_admin\r\n', upd_req["data"])
+            self.assertIn(b'name="password"\r\n\r\nZimaAdminPass!9\r\n', upd_req["data"])
+            self.assertIn(b'name="zimaos_token"\r\n\r\nzima_live_tok_99\r\n', upd_req["data"])
+
+            # Case C: Expired admin JWT triggers 401 -> refreshes via /api/v1/auth/verify and retries upload
+            config_manager.save_server_smb_source_config(
+                config_manager.load_or_create_config(),
+                "srv_1",
+                "backend",
+                username="admin_ops",
+                password="AdminOps!99",
+                role="admin",
+                allowed_disks=["DATA"],
+                access_token="expired.admin.jwt",
+            )
+            captured_reqs.clear()
+
+            def _fake_urlopen_401(req, timeout=20):
+                hdrs = {k.lower(): v for k, v in req.header_items()}
+                captured_reqs.append({"url": req.full_url, "headers": hdrs})
+                if req.full_url.endswith("/api/v1/auth/verify"):
+                    return _FakeHttpResponse({"access_token": "refreshed.admin.jwt.C", "role": "admin"})
+                if hdrs.get("authorization") == "Bearer expired.admin.jwt":
+                    raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
+                return _FakeHttpResponse({"status": "success", "boot_id": "boot-new"})
+
+            with patch.object(core, "_active_metrics_client", fake_mc), \
+                 patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]), \
+                 patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"), \
+                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.0"), \
+                 patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)), \
+                 patch("urllib.request.urlopen", side_effect=_fake_urlopen_401), \
+                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0", "boot_id": "boot-4"}, 200)), \
+                 patch("time.sleep", return_value=None):
+                res_c = core.handle_remote_backend_action({"action": "update", "serverId": "srv_1"})
+
+            self.assertIs(res_c.get("success"), True)
+            self.assertEqual(
+                [r["headers"].get("authorization") for r in captured_reqs if r["url"].endswith("/api/v1/system/update")],
+                ["Bearer expired.admin.jwt", "Bearer refreshed.admin.jwt.C"],
+            )
 
 
 if __name__ == "__main__":

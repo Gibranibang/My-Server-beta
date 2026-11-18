@@ -1329,19 +1329,25 @@ export function createRealApi(): CompanionApi {
 
     async openBackendFileManager() {
       try {
-        await callCoreApi("open_backend_file_manager", {})
-        return
-      } catch (err) {
-        try {
-          const api = await getPyApi()
-          if (api && api.open_backend_file_manager) {
-            await api.open_backend_file_manager()
-            return
+        const res = await callCoreApi("open_backend_file_manager", {})
+        if (res && typeof res === "object") {
+          const ok = res.success !== undefined ? Boolean(res.success) : res.status === "ok"
+          return {
+            success: ok,
+            url: typeof res.url === "string" ? res.url : undefined,
+            error:
+              typeof res.error === "string"
+                ? res.error
+                : typeof res.message === "string"
+                  ? res.message
+                  : undefined,
           }
-        } catch (pyErr) {
-          console.error("[RealApi] Open Backend File Manager error:", pyErr)
         }
-        console.error("[RealApi] Open Backend File Manager error:", err)
+        return { success: false, error: "Respons Core API tidak valid." }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        console.error("[RealApi] Open Backend File Manager error:", errMsg)
+        return { success: false, error: errMsg }
       }
     },
 

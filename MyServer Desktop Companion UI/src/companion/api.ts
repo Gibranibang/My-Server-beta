@@ -179,7 +179,7 @@ export interface CompanionApi {
 
   openZimaFileManager(): Promise<void>
 
-  openBackendFileManager?(): Promise<void>
+  openBackendFileManager?(): Promise<{ success: boolean; url?: string; error?: string } | void>
 
   getFileManagerSource?(): Promise<FileManagerSourceStatus>
 
@@ -895,7 +895,9 @@ export function createMockApi(): CompanionApi {
 
     async openZimaFileManager() {},
 
-    async openBackendFileManager() {},
+    async openBackendFileManager() {
+      return { success: true, url: "http://127.0.0.1:8080/" }
+    },
 
     async getFileManagerSource() {
       return {

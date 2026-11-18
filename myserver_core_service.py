@@ -5135,6 +5135,32 @@ def handle_remote_backend_action(body):
             _ACTIVE_BACKEND_DEPLOYS.add(srv_id)
             lock_acquired = True
 
+        ota_applied = False
+        ota_backend_state = None
+
+        def _with_ota_state(res_payload):
+            if ota_applied and isinstance(res_payload, dict) and not res_payload.get("success"):
+                res_payload["otaApplied"] = True
+                res_payload["rebuildPendingSshAuth"] = True
+                if ota_backend_state and "backend" not in res_payload:
+                    res_payload["backend"] = ota_backend_state
+                if res_payload.get("authFailed"):
+                    msg = (
+                        "HTTP OTA sudah diterapkan pada backend, namun rebuild container via SSH "
+                        "memerlukan autentikasi SSH."
+                    )
+                else:
+                    orig_msg = (res_payload.get("message") or res_payload.get("error") or "").strip()
+                    msg = (
+                        "HTTP OTA sudah diterapkan pada backend, namun rebuild container via SSH "
+                        f"gagal/memerlukan autentikasi SSH ({orig_msg})."
+                        if orig_msg
+                        else "HTTP OTA sudah diterapkan pada backend, namun rebuild container via SSH memerlukan autentikasi SSH."
+                    )
+                res_payload["message"] = msg
+                res_payload["error"] = msg
+            return res_payload
+
         target_ver = _get_bundled_backend_version(cfg=cfg)
         local_zip, local_bundle = _get_bundled_backend_packages()
 
@@ -5165,38 +5191,141 @@ def handle_remote_backend_action(body):
             for cu in candidates:
                 if cu not in ota_urls:
                     ota_urls.append(cu)
+            ota_secret_masks = []
             try:
                 logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {ota_urls[0]}/api/v1/system/update (paket: {local_zip})...")
                 boundary = f"----WebKitFormBoundary{int(time.time()*1000)}"
                 with open(local_zip, "rb") as zf:
                     zip_bytes = zf.read()
-                parts = []
-                parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"username\"\r\n\r\nadmin\r\n".encode("utf-8"))
-                parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"update.zip\"\r\nContent-Type: application/zip\r\n\r\n".encode("utf-8"))
-                parts.append(zip_bytes)
-                parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
-                body_bytes = b"".join(parts)
+
+                smb_cfg = (
+                    config_manager.get_server_smb_source_config(srv)
+                    if (config_manager and hasattr(config_manager, "get_server_smb_source_config"))
+                    else {}
+                )
+                smb_role = str(smb_cfg.get("role") or "").strip().lower()
+                smb_is_admin = smb_role in ("admin", "root")
+                smb_token = str(smb_cfg.get("access_token") or "").strip() if smb_is_admin else ""
+                smb_user = str(smb_cfg.get("username") or "").strip() if smb_is_admin else ""
+                smb_pwd = str(smb_cfg.get("password") or "") if smb_is_admin else ""
+
+                zima_user, zima_pwd = _resolve_ssh_admin_credentials(srv)
+                zimaos_token = ""
+                try:
+                    mc = _active_metrics_client
+                    if mc is None and cfg and (cfg.get("active_server_id") == srv_id or not srv_id):
+                        au, _ = get_active_resolved_route(cfg)
+                        if au:
+                            mc = get_cached_metrics_client(srv, au)
+                    if mc is not None:
+                        zimaos_token = str(getattr(mc, "token", "") or "").strip()
+                except Exception:
+                    zimaos_token = ""
+
+                ota_username = (smb_user if (smb_is_admin and smb_user and (smb_pwd or smb_token)) else zima_user) or "admin"
+                ota_password = smb_pwd if (smb_is_admin and smb_user and smb_pwd) else zima_pwd
+                ota_secret_masks = [s for s in (smb_token, smb_pwd, zima_pwd, zimaos_token, ota_password) if s]
+
+                def _build_ota_body(uname_val, pwd_val, ztok_val):
+                    parts = [
+                        f"--{boundary}\r\nContent-Disposition: form-data; name=\"username\"\r\n\r\n{uname_val}\r\n".encode("utf-8")
+                    ]
+                    if pwd_val:
+                        parts.append(
+                            f"--{boundary}\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\n{pwd_val}\r\n".encode("utf-8")
+                        )
+                    if ztok_val:
+                        parts.append(
+                            f"--{boundary}\r\nContent-Disposition: form-data; name=\"zimaos_token\"\r\n\r\n{ztok_val}\r\n".encode("utf-8")
+                        )
+                    parts.append(
+                        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"update.zip\"\r\nContent-Type: application/zip\r\n\r\n".encode("utf-8")
+                    )
+                    parts.append(zip_bytes)
+                    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+                    return b"".join(parts)
+
+                def _verify_ota_jwt(cand_base, uname_val, pwd_val, ztok_val=""):
+                    if not uname_val or not (pwd_val or ztok_val):
+                        return "", None
+                    v_payload = {"username": uname_val}
+                    if pwd_val:
+                        v_payload["password"] = pwd_val
+                    elif ztok_val:
+                        v_payload["zimaos_token"] = ztok_val
+                    v_bytes = json.dumps(v_payload).encode("utf-8")
+                    v_req = urllib.request.Request(
+                        f"{cand_base}/api/v1/auth/verify",
+                        data=v_bytes,
+                        headers={"Content-Type": "application/json", "Connection": "close"},
+                        method="POST",
+                    )
+                    try:
+                        with urllib.request.urlopen(v_req, timeout=4) as v_resp:
+                            v_data = json.loads(v_resp.read().decode("utf-8"))
+                            if isinstance(v_data, dict):
+                                tok = str(v_data.get("access_token") or "").strip()
+                                v_role = str(v_data.get("role") or "").strip().lower()
+                                if tok and v_role in ("admin", "root"):
+                                    return tok, v_data
+                    except Exception:
+                        pass
+                    return "", None
+
+                body_bytes = _build_ota_body(ota_username, ota_password, zimaos_token)
 
                 ota_succeeded_url = None
                 ota_resp_data = {}
                 last_ota_err = None
                 for cand_ota_url in ota_urls:
                     try:
-                        req = urllib.request.Request(
-                            f"{cand_ota_url}/api/v1/system/update",
-                            data=body_bytes,
-                            headers={
+                        bearer_token = smb_token
+                        if not bearer_token and (ota_password or zimaos_token):
+                            fetched_tok, _ = _verify_ota_jwt(cand_ota_url, ota_username, ota_password, zimaos_token)
+                            if fetched_tok:
+                                bearer_token = fetched_tok
+
+                        def _send_ota_upload(use_bearer, upload_bytes):
+                            hdrs = {
                                 "Content-Type": f"multipart/form-data; boundary={boundary}",
-                                "Connection": "close"
-                            },
-                            method="POST"
-                        )
-                        with urllib.request.urlopen(req, timeout=20) as resp:
-                            resp_data = json.loads(resp.read().decode("utf-8"))
-                            if resp_data.get("status") == "success":
-                                ota_succeeded_url = cand_ota_url
-                                ota_resp_data = resp_data if isinstance(resp_data, dict) else {}
-                                break
+                                "Connection": "close",
+                            }
+                            if use_bearer:
+                                hdrs["Authorization"] = f"Bearer {use_bearer}"
+                            req = urllib.request.Request(
+                                f"{cand_ota_url}/api/v1/system/update",
+                                data=upload_bytes,
+                                headers=hdrs,
+                                method="POST",
+                            )
+                            with urllib.request.urlopen(req, timeout=20) as resp:
+                                return json.loads(resp.read().decode("utf-8"))
+
+                        try:
+                            resp_data = _send_ota_upload(bearer_token, body_bytes)
+                        except urllib.error.HTTPError as he:
+                            if he.code == 401 and bearer_token:
+                                fresh_tok, v_data = _verify_ota_jwt(cand_ota_url, ota_username, ota_password, zimaos_token)
+                                if not fresh_tok and zima_user and (zima_pwd or zimaos_token) and (
+                                    ota_username != zima_user or ota_password != zima_pwd
+                                ):
+                                    fresh_tok, v_data = _verify_ota_jwt(cand_ota_url, zima_user, zima_pwd, zimaos_token)
+                                if fresh_tok:
+                                    if smb_is_admin:
+                                        _persist_refreshed_backend_token(srv_id, fresh_tok, v_data)
+                                    resp_data = _send_ota_upload(fresh_tok, body_bytes)
+                                elif ota_password or zimaos_token or zima_pwd:
+                                    fb_bytes = _build_ota_body(zima_user or ota_username, zima_pwd or ota_password, zimaos_token)
+                                    resp_data = _send_ota_upload("", fb_bytes)
+                                else:
+                                    raise
+                            else:
+                                raise
+
+                        if isinstance(resp_data, dict) and resp_data.get("status") == "success":
+                            ota_succeeded_url = cand_ota_url
+                            ota_resp_data = resp_data
+                            break
                     except Exception as cand_err:
                         last_ota_err = cand_err
                 if ota_succeeded_url:
@@ -5252,6 +5381,8 @@ def handle_remote_backend_action(body):
                         active_target_ver = target_ver or ver
                         backend_state = _set_backend_health_cache(srv_id, True, ver, active_target_ver, ota_succeeded_url)
                         if rebuild_required and has_ssh_creds:
+                            ota_applied = True
+                            ota_backend_state = backend_state
                             logger_manager.log_info(
                                 "[handle_remote_backend_action] Perubahan Dockerfile/docker-compose.yml terdeteksi (rebuild_required=True); melanjutkan auto-chain rebuild via SSH..."
                             )
@@ -5301,7 +5432,10 @@ def handle_remote_backend_action(body):
                 elif last_ota_err:
                     raise last_ota_err
             except Exception as ota_err:
-                logger_manager.log_info(f"[handle_remote_backend_action] HTTP OTA dilewati / gagal ({ota_err}), melanjutkan ke alur SSH...")
+                safe_ota_err = str(ota_err)
+                for s_val in ota_secret_masks:
+                    safe_ota_err = _mask_secret(safe_ota_err, s_val)
+                logger_manager.log_info(f"[handle_remote_backend_action] HTTP OTA dilewati / gagal ({safe_ota_err}), melanjutkan ke alur SSH...")
 
         # 1. Kumpulkan kandidat host SSH (utamakan sshHost override jika diberikan, lalu Remote P2P IP)
         ssh_host_override = str(body.get("sshHost") or body.get("ssh_host") or "").strip()
@@ -5330,7 +5464,7 @@ def handle_remote_backend_action(body):
                         candidates.append(ch)
 
         if not candidates:
-            return {"success": False, "status": "error", "message": "Tidak ada alamat host IP yang dapat dihubungi."}
+            return _with_ota_state({"success": False, "status": "error", "message": "Tidak ada alamat host IP yang dapat dihubungi."})
 
         # 2. Ambil kredensial admin (prioritaskan override wizard lalu 'Admin' untuk izin sudo)
         user, pwd = _resolve_ssh_admin_credentials(srv)
@@ -5348,7 +5482,7 @@ def handle_remote_backend_action(body):
             import paramiko
         except ImportError as ie:
             logger_manager.log_error(f"[handle_remote_backend_action] Modul paramiko belum terpasang: {ie}")
-            return {"success": False, "status": "error", "message": f"Modul SSH (paramiko) belum terpasang: {ie}"}
+            return _with_ota_state({"success": False, "status": "error", "message": f"Modul SSH (paramiko) belum terpasang: {ie}"})
 
         auth_exc_cls = getattr(paramiko, "AuthenticationException", None)
         for host_ip in candidates:
@@ -5377,18 +5511,18 @@ def handle_remote_backend_action(body):
 
         if not ssh_client or not connected_host:
             if auth_failed_error is not None:
-                return {
+                return _with_ota_state({
                     "success": False,
                     "status": "error",
                     "authFailed": True,
                     "stage": "ssh_auth",
                     "message": "Autentikasi SSH gagal. Periksa kembali username dan password SSH Anda.",
-                }
-            return {
+                })
+            return _with_ota_state({
                 "success": False,
                 "status": "error",
                 "message": f"Gagal menghubungkan sesi SSH ke server: {_mask_secret(connect_error, pwd)}",
-            }
+            })
 
         try:
             # 4. Unggah paket lokal via SFTP atau unduh dari GitHub Release sesuai mode source
@@ -5408,30 +5542,30 @@ def handle_remote_backend_action(body):
                 except Exception as sftp_err:
                     if source == "bundle":
                         logger_manager.log_warning(f"[handle_remote_backend_action] Gagal upload SFTP dalam mode bundle: {sftp_err}")
-                        return {
+                        return _with_ota_state({
                             "success": False,
                             "status": "error",
                             "message": f"Gagal mengunggah paket lokal via SFTP: {_mask_secret(sftp_err, pwd)}",
-                        }
+                        })
                     logger_manager.log_warning(f"[handle_remote_backend_action] Gagal upload SFTP ({sftp_err}), mencoba unduh dari GitHub...")
 
             if not uploaded_local:
                 if source == "bundle":
-                    return {
+                    return _with_ota_state({
                         "success": False,
                         "status": "error",
                         "validationError": True,
                         "stage": "validation",
                         "message": "Paket bundle backend lokal tidak tersedia untuk unggah SFTP.",
-                    }
+                    })
                 if not repo_slug:
-                    return {
+                    return _with_ota_state({
                         "success": False,
                         "status": "error",
                         "validationError": True,
                         "stage": "validation",
                         "message": f"Format github_repo tidak valid (harus owner/repo): {raw_repo_slug}",
-                    }
+                    })
                 github_url = f"https://github.com/{repo_slug}/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
                 curl_cmd = f"cd {shlex.quote(deploy_dir)} && curl -sSL -f {shlex.quote(github_url)} -o backend.tar.gz"
                 _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
@@ -5441,11 +5575,11 @@ def handle_remote_backend_action(body):
                 downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
 
                 if exit_status != 0 or downloaded_bytes < 1000:
-                    return {
+                    return _with_ota_state({
                         "success": False,
                         "status": "error",
                         "message": "Paket installer backend tidak dapat diunggah via SFTP maupun diunduh dari GitHub."
-                    }
+                    })
 
             # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo (timeout 180s untuk docker build)
             logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
@@ -5461,25 +5595,42 @@ def handle_remote_backend_action(body):
                 tok in err_lower
                 for tok in ("incorrect password", "sorry, try again", "authentication failure", "permission denied", "a password is required")
             ):
-                return {
+                return _with_ota_state({
                     "success": False,
                     "status": "error",
                     "authFailed": True,
                     "stage": "ssh_auth",
                     "message": "Autentikasi sudo/SSH ditolak oleh server. Periksa username dan password SSH.",
-                }
+                })
 
-            # 6. Polling endpoint /health di port 8080 selama maksimal 30 detik
-            backend_url = f"http://{connected_host}:8080"
+            # 6. Polling endpoint /health di port 8080 selama maksimal 30 detik (pakai kandidat dinamis)
+            health_candidates = []
+            conn_burl = _format_backend_url(connected_host, 8080) if connected_host else ""
+            dynamic_burls = _get_backend_url_candidates(cfg, target_server_id=srv.get("id"), srv=srv) or []
+            if ssh_host_override and conn_burl:
+                health_candidates.append(conn_burl)
+            for cu in dynamic_burls:
+                if cu and cu not in health_candidates:
+                    health_candidates.append(cu)
+            if conn_burl and conn_burl not in health_candidates:
+                health_candidates.append(conn_burl)
+            if not health_candidates and connected_host:
+                health_candidates.append(f"http://{connected_host}:8080")
+
+            backend_url = health_candidates[0] if health_candidates else f"http://{connected_host}:8080"
             poll_ok = False
             health_data = {}
-            logger_manager.log_info(f"[handle_remote_backend_action] Memulai verifikasi healthcheck ke {backend_url}/health...")
+            logger_manager.log_info(f"[handle_remote_backend_action] Memulai verifikasi healthcheck ke kandidat {health_candidates}...")
             for _ in range(15):
                 time.sleep(2.0)
-                h_ok, h_data, h_code = _backend_http_request(f"{backend_url}/health", method="GET", timeout=2.0, retries=0)
-                if h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok":
-                    poll_ok = True
-                    health_data = h_data
+                for cand_hurl in health_candidates:
+                    h_ok, h_data, h_code = _backend_http_request(f"{cand_hurl}/health", method="GET", timeout=2.0, retries=0)
+                    if h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok":
+                        poll_ok = True
+                        health_data = h_data
+                        backend_url = cand_hurl
+                        break
+                if poll_ok:
                     break
 
             if poll_ok:
@@ -5488,12 +5639,12 @@ def handle_remote_backend_action(body):
                 backend_state = _set_backend_health_cache(srv_id, True, ver, active_target_ver, backend_url)
                 if target_ver and ver and _compare_backend_versions(ver, target_ver) < 0:
                     logger_manager.log_error(f"[handle_remote_backend_action] Versi aktif ({ver}) lebih rendah dari target ({target_ver}).")
-                    return {
+                    return _with_ota_state({
                         "success": False,
                         "status": "error",
                         "message": f"Instalasi backend selesai, namun versi server tetap v{ver} (seharusnya v{target_ver}).",
                         "backend": backend_state
-                    }
+                    })
                 msg = f"Backend server berhasil diperbarui ke v{ver or active_target_ver}!" if action == "update" else f"Backend server v{ver or active_target_ver} berhasil dipasang!"
                 logger_manager.log_info(f"[handle_remote_backend_action] Sukses! Versi aktif: {ver}")
                 return {
@@ -5508,12 +5659,12 @@ def handle_remote_backend_action(body):
                 if exec_exit != 0:
                     tail = (exec_err_text or exec_out_text).strip()[-240:]
                     err_detail = f" (install exit={exec_exit}: {tail})" if tail else f" (install exit={exec_exit})"
-                return {
+                return _with_ota_state({
                     "success": False,
                     "status": "error",
                     "message": f"Instalasi selesai namun healthcheck port 8080 tidak merespons dalam 30 detik.{err_detail}",
                     "backend": offline_backend
-                }
+                })
 
         finally:
             try:
@@ -5523,11 +5674,11 @@ def handle_remote_backend_action(body):
     except Exception as ex:
         safe_ex = _mask_secret(ex, pwd)
         logger_manager.log_error(f"[handle_remote_backend_action] Exception unhandled: {safe_ex}")
-        return {
+        return _with_ota_state({
             "success": False,
             "status": "error",
             "message": f"Terjadi kesalahan saat memproses backend: {safe_ex}"
-        }
+        })
     finally:
         if lock_acquired and srv_id is not None:
             with _BACKEND_DEPLOY_GUARD:
@@ -13333,6 +13484,14 @@ def _scan_live_drives_now():
 
 
 
+                if srv.get("easytier_virtual_ip"):
+
+
+
+                    active_server_identities.add(str(srv["easytier_virtual_ip"]).strip().lower())
+
+
+
                 for c in srv.get("connections", []):
 
 
@@ -13410,6 +13569,14 @@ def _scan_live_drives_now():
 
 
                             other_server_identities.add(str(other_srv["zerotier_virtual_ip"]).strip().lower())
+
+
+
+                        if other_srv.get("easytier_virtual_ip"):
+
+
+
+                            other_server_identities.add(str(other_srv["easytier_virtual_ip"]).strip().lower())
 
 
 
@@ -15557,7 +15724,16 @@ def _persist_refreshed_backend_token(server_id, new_token, auth_data=None):
     smb_cfg = config_manager.get_server_smb_source_config(srv)
     auth_dict = auth_data if isinstance(auth_data, dict) else {}
     new_role = auth_dict.get("role") if auth_dict.get("role") is not None else None
-    new_disks = auth_dict.get("allowed_disks") if isinstance(auth_dict.get("allowed_disks"), list) else None
+    raw_disks = auth_dict.get("allowed_disks")
+    eff_role = str(new_role if new_role is not None else smb_cfg.get("role", "staff")).strip().lower()
+    existing_role = str(smb_cfg.get("role", "staff")).strip().lower()
+    if isinstance(raw_disks, list):
+        if len(raw_disks) == 0 and eff_role in ("admin", "root") and existing_role in ("admin", "root"):
+            new_disks = None
+        else:
+            new_disks = raw_disks
+    else:
+        new_disks = None
     return config_manager.save_server_smb_source_config(
         cfg,
         actual_srv_id,
@@ -15722,10 +15898,7 @@ def _handle_smb_source_request(body=None):
             h_ok, h_data, h_code = _backend_http_request(
                 f"{backend_url.rstrip('/')}/health", method="GET", timeout=2.0, retries=0
             )
-            backend_online = bool(
-                (h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok")
-                or (h_code and h_code not in (0, 502))
-            )
+            backend_online = bool(h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok")
             if backend_online and (smb_cfg.get("access_token") or smb_cfg.get("hasCredentials")):
                 st_code, st_data, _ = _backend_authenticated_request(
                     backend_url, "/api/v1/smb/status", smb_cfg, srv_id, method="GET"
@@ -30491,8 +30664,18 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 cfg, target_server_id=(srv.get("id") if srv else None)
             )
             if backend_url:
+                clean_burl = backend_url.rstrip("/")
+                h_ok, h_data, _ = _backend_http_request(
+                    f"{clean_burl}/health", method="GET", timeout=2.0, retries=0
+                )
+                if not (h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok"):
+                    self._send_json(
+                        {"success": False, "error": "Backend tidak dapat dijangkau atau belum aktif."},
+                        status=503,
+                    )
+                    return
                 srv_name = srv.get("name", "MyServer") if srv else "MyServer"
-                fm_url = backend_url.rstrip("/") + "/"
+                fm_url = clean_burl + "/"
                 spawn_app_window(fm_url, f"{srv_name} Backend Files")
                 self._send_json({"success": True, "url": fm_url})
             else:

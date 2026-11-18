@@ -56,7 +56,7 @@ function setupFilesView(opts: SetupOptions = {}) {
     opts.initialDrives !== undefined ? opts.initialDrives : await baseListDrives(),
   )
   api.openZimaFileManager = vi.fn(async () => {})
-  api.openBackendFileManager = vi.fn(async () => {})
+  api.openBackendFileManager = vi.fn(async () => ({ success: true, url: "http://127.0.0.1:8080/" }))
   api.openFileExplorer = vi.fn(async () => {})
 
   const initialSource: FileManagerSourceStatus = opts.initialSource ?? {
@@ -325,10 +325,140 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
       },
     })
 
-    await realApi.openBackendFileManager!()
+    const openRes = await realApi.openBackendFileManager!()
     expect(invoke).toHaveBeenCalledWith("call_core_api", {
       endpoint: "open_backend_file_manager",
       payload: {},
     })
+    expect(openRes).toMatchObject({ success: true })
+  })
+
+  it("displays Admin Chip when Backend role is root (WR-04)", async () => {
+    setupFilesView({
+      language: "id",
+      initialSource: {
+        success: true,
+        source: "backend",
+        username: "root",
+        role: "root",
+        allowedDisks: [],
+        hasCredentials: true,
+        needsAuth: false,
+        backendOnline: true,
+      },
+    })
+
+    const rootMono = await screen.findByText("root")
+    expect(rootMono).toHaveAttribute("title", "root")
+    expect(screen.getByText("Admin")).toBeInTheDocument()
+    expect(screen.queryByText(/Staff ·/i)).not.toBeInTheDocument()
+  })
+
+  it("keeps Batal Ganti Akun visible when Ganti Akun Backend submission fails (WR-05)", async () => {
+    setupFilesView({
+      language: "id",
+      initialSource: {
+        success: true,
+        source: "backend",
+        username: "staff_budi",
+        role: "staff",
+        allowedDisks: ["DATA"],
+        hasCredentials: true,
+        needsAuth: false,
+        backendOnline: true,
+      },
+      configureImpl: async () => ({
+        success: false,
+        source: "zimaos",
+        hasCredentials: false,
+        needsAuth: true,
+        error: "Password salah",
+      }),
+    })
+
+    const switchBtn = await screen.findByRole("button", { name: "Ganti Akun Backend" })
+    fireEvent.click(switchBtn)
+
+    const userInput = await screen.findByLabelText("Username Akun Backend")
+    const passInput = screen.getByLabelText("Kata Sandi Akun Backend")
+    fireEvent.change(userInput, { target: { value: "other_user" } })
+    fireEvent.change(passInput, { target: { value: "wrong_pw" } })
+    fireEvent.click(screen.getByRole("button", { name: "Hubungkan Akun Backend" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("notice-spy")).toHaveTextContent("danger:")
+      expect(screen.getByTestId("notice-spy")).toHaveTextContent("Password salah")
+    })
+
+    const cancelBtn = screen.getByRole("button", { name: "Batal Ganti Akun" })
+    expect(cancelBtn).toBeInTheDocument()
+
+    fireEvent.click(cancelBtn)
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Kata Sandi Akun Backend")).not.toBeInTheDocument()
+    })
+    expect(screen.getByText("staff_budi")).toBeInTheDocument()
+    expect(screen.getByText("Staff · 1 Disk")).toBeInTheDocument()
+  })
+
+  it("shows danger toast on openBackendFileManager failure and removes redundant pywebview catch fallback (WR-05, WR-09)", async () => {
+    const { api } = setupFilesView({
+      language: "id",
+      initialSource: {
+        success: true,
+        source: "backend",
+        username: "admin",
+        role: "admin",
+        allowedDisks: ["DATA"],
+        hasCredentials: true,
+        needsAuth: false,
+        backendOnline: true,
+      },
+    })
+
+    api.openBackendFileManager = vi.fn(async () => ({
+      success: false,
+      error: "Backend tidak dapat dijangkau atau belum aktif.",
+    }))
+
+    const backendFilesTile = (await screen.findByText("Backend Files")).closest("button")
+    expect(backendFilesTile).not.toBeNull()
+    fireEvent.click(backendFilesTile!)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("notice-spy")).toHaveTextContent(
+        "danger:Backend tidak dapat dijangkau atau belum aktif.",
+      )
+    })
+    expect(screen.getByTestId("notice-spy")).not.toHaveTextContent("Membuka Storage Explorer Backend")
+
+    // Also verify realApi propagates Core HTTP 503 error & rejects without falling back to pywebview.api.open_backend_file_manager
+    const pyOpenSpy = vi.fn(async () => {})
+    ;(window as any).pywebview = { api: { open_backend_file_manager: pyOpenSpy } }
+    try {
+      const invokeErr = vi.fn(async () => {
+        throw new Error("Core service offline")
+      })
+      ;(window as any).__TAURI_INTERNALS__ = { invoke: invokeErr }
+      const realApi = createRealApi()
+      const errRes = await realApi.openBackendFileManager!()
+      expect(errRes).toEqual({ success: false, error: "Core service offline" })
+      expect(pyOpenSpy).not.toHaveBeenCalled()
+
+      const invoke503 = vi.fn(async () => ({
+        success: false,
+        error: "Backend tidak dapat dijangkau atau belum aktif.",
+      }))
+      ;(window as any).__TAURI_INTERNALS__ = { invoke: invoke503 }
+      const res503 = await realApi.openBackendFileManager!()
+      expect(res503).toEqual({
+        success: false,
+        url: undefined,
+        error: "Backend tidak dapat dijangkau atau belum aktif.",
+      })
+      expect(pyOpenSpy).not.toHaveBeenCalled()
+    } finally {
+      delete (window as any).pywebview
+    }
   })
 })

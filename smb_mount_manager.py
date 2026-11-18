@@ -788,18 +788,18 @@ def get_remote_smb_shares(
     # 1. Coba kueri API resmi sesuai sumber (Backend vs ZimaOS)
     if src_mode == "backend":
         target_backend_url = (backend_url or base_url or "").strip()
-        if target_backend_url or clean_h:
-            api_shares = fetch_shares_from_backend_api(
-                target_backend_url,
-                username=username,
-                password=password,
-                auth_token=auth_token,
-                fallback_host=clean_h,
-                on_token_refreshed=on_token_refreshed,
-            )
-            if api_shares:
-                _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": api_shares, "ts": now}
-                return api_shares
+        if not (target_backend_url or clean_h):
+            return []
+        api_shares = fetch_shares_from_backend_api(
+            target_backend_url,
+            username=username,
+            password=password,
+            auth_token=auth_token,
+            fallback_host=clean_h,
+            on_token_refreshed=on_token_refreshed,
+        )
+        _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": api_shares, "ts": now}
+        return api_shares
     else:
         if base_url and auth_token:
             api_shares = fetch_shares_from_zimaos_api(base_url, auth_token, current_user=username)

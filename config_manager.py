@@ -264,6 +264,22 @@ def sanitize_name(name):
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 
+def _log_dpapi_warning(operation, exc):
+    msg = (
+        f"[ConfigManager] [DPAPI_FALLBACK] Windows DPAPI {operation} gagal "
+        f"({type(exc).__name__}: {exc}); beralih ke mode kompatibilitas."
+    )
+    try:
+        import logger_manager
+        logger_manager.log_warning(msg, module="ConfigManager")
+    except Exception:
+        try:
+            import logging
+            logging.getLogger("MyServer.ConfigManager").warning(msg)
+        except Exception:
+            pass
+
+
 def encrypt_credential(raw_str):
     if not raw_str:
         return ""
@@ -277,7 +293,9 @@ def encrypt_credential(raw_str):
         else:
             xor_b = bytes([b ^ SALT_KEY[i % len(SALT_KEY)] for i, b in enumerate(raw_b)])
             return "enc:" + base64.b64encode(xor_b).decode("ascii")
-    except Exception:
+    except Exception as exc:
+        if sys.platform == "win32" or isinstance(exc, OSError):
+            _log_dpapi_warning("encrypt", exc)
         try:
             raw_b = raw_str.encode("utf-8")
             xor_b = bytes([b ^ SALT_KEY[i % len(SALT_KEY)] for i, b in enumerate(raw_b)])
@@ -301,7 +319,8 @@ def decrypt_credential(stored_str):
                 if not unwrapped or unwrapped == curr:
                     break
                 curr = unwrapped
-            except Exception:
+            except Exception as exc:
+                _log_dpapi_warning("decrypt", exc)
                 break
         elif curr.startswith("enc:"):
             try:

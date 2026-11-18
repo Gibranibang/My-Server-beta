@@ -104,7 +104,7 @@ class TestBackendDetection(unittest.TestCase):
         core._remote_backend_manifest_cache["version"] = ""
 
     def test_real_workspace_resources_bundled_and_git_tracked(self):
-        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.3.0")
+        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.4.0")
         zip_pkg, tar_pkg = core._get_bundled_backend_packages()
         self.assertIsNotNone(zip_pkg)
         self.assertIsNotNone(tar_pkg)
@@ -112,6 +112,27 @@ class TestBackendDetection(unittest.TestCase):
         self.assertTrue(os.path.isfile(tar_pkg))
         self.assertEqual(os.path.basename(zip_pkg), "MyServer-Backend-ZimaOS.zip")
         self.assertEqual(os.path.basename(tar_pkg), "MyServer-Backend-ZimaOS.tar.gz")
+
+        with zipfile.ZipFile(zip_pkg, "r") as zf:
+            zip_entries = sorted(zf.namelist())
+            zip_sh_mode = (zf.getinfo("install_zimaos.sh").external_attr >> 16) & 0o777
+        with tarfile.open(tar_pkg, "r:gz") as tf:
+            tar_entries = sorted(m.name for m in tf.getmembers() if m.isfile())
+            tar_sh_mode = tf.getmember("install_zimaos.sh").mode & 0o777
+
+        self.assertEqual(len(zip_entries), 24)
+        self.assertEqual(zip_entries, tar_entries)
+        self.assertIn("app/services/smb_manager.py", zip_entries)
+        self.assertIn("app/routers/smb.py", zip_entries)
+        self.assertEqual(zip_sh_mode, 0o755)
+        self.assertEqual(tar_sh_mode, 0o755)
+        for entry in zip_entries:
+            self.assertFalse(entry.startswith("tests/"), f"Unexpected test entry: {entry}")
+            self.assertNotEqual(entry, "dev_server.py")
+            self.assertNotIn("__pycache__", entry)
+            self.assertFalse(entry.endswith(".pyc"), f"Unexpected .pyc entry: {entry}")
+            self.assertNotIn("sync-conflict", entry)
+            self.assertFalse(entry.startswith(("data/", "storage/", "backup/", ".git/")))
 
         proc = subprocess.run(
             [

@@ -6,7 +6,10 @@ import unittest
 import xml.etree.ElementTree as ET
 from unittest import mock
 
-import test_backend_detection
+try:
+    import test_backend_detection
+except ImportError:
+    from tests import test_backend_detection
 
 BETA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

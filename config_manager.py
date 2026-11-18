@@ -1566,3 +1566,134 @@ def save_server_wol_config(server_id, mac_address, broadcast_ip="255.255.255.255
     return modified
 
 
+def get_server_smb_source_config(server):
+    """
+    Mengambil konfigurasi sumber SMB ('zimaos' atau 'backend') serta kredensial
+    dan token JWT Backend yang terenkripsi DPAPI, terisolasi penuh dari srv['credentials'].
+    """
+    if not server or not isinstance(server, dict):
+        return {
+            "source": "zimaos",
+            "username": "",
+            "password": "",
+            "access_token": "",
+            "role": "staff",
+            "allowed_disks": [],
+            "hasCredentials": False,
+        }
+    source = str(server.get("smb_source", "zimaos") or "zimaos").strip().lower()
+    if source not in ("zimaos", "backend"):
+        source = "zimaos"
+    auth = server.get("backend_smb_auth")
+    if not isinstance(auth, dict):
+        auth = {}
+    uname = str(auth.get("username", "") or "").strip()
+    pw_enc = auth.get("password", "")
+    pw_dec = decrypt_credential(pw_enc) if pw_enc else ""
+    tok_enc = auth.get("access_token", "")
+    tok_dec = decrypt_credential(tok_enc) if tok_enc else ""
+    role = str(auth.get("role", "staff") or "staff").strip() or "staff"
+    disks = auth.get("allowed_disks") if isinstance(auth.get("allowed_disks"), list) else []
+    allowed_disks = [str(d).strip() for d in disks if str(d).strip()]
+    return {
+        "source": source,
+        "username": uname,
+        "password": pw_dec,
+        "access_token": tok_dec,
+        "role": role,
+        "allowed_disks": allowed_disks,
+        "hasCredentials": bool(uname and pw_dec),
+    }
+
+
+def save_server_smb_source_config(
+    config,
+    server_id,
+    source,
+    username=None,
+    password=None,
+    role=None,
+    allowed_disks=None,
+    access_token=None,
+):
+    """
+    Menyimpan sumber SMB ('zimaos' | 'backend') dan backend_smb_auth terenkripsi DPAPI
+    untuk server target tanpa menyentuh srv['credentials'] atau srv['active_profile'].
+    """
+    if not config or not isinstance(config, dict):
+        return False
+
+    norm_source = str(source or "zimaos").strip().lower()
+    if norm_source not in ("zimaos", "backend"):
+        norm_source = "zimaos"
+
+    has_auth_update = any(
+        val is not None for val in (username, password, role, allowed_disks, access_token)
+    )
+
+    for s in config.get("servers", []):
+        if not isinstance(s, dict):
+            continue
+        if server_id and s.get("id") != server_id:
+            continue
+        if not server_id and config.get("active_server_id") and s.get("id") != config.get("active_server_id"):
+            continue
+
+        s["smb_source"] = norm_source
+
+        if has_auth_update:
+            existing = s.get("backend_smb_auth")
+            if not isinstance(existing, dict):
+                existing = {}
+
+            old_uname = str(existing.get("username", "") or "").strip()
+            new_uname = old_uname if username is None else str(username).strip()
+            username_changed = username is not None and new_uname != old_uname
+
+            if password is None:
+                new_pw_enc = existing.get("password", "")
+            elif str(password):
+                new_pw_enc = encrypt_credential(str(password))
+            elif username is not None and new_uname == "":
+                new_pw_enc = ""
+            elif new_uname == old_uname:
+                new_pw_enc = existing.get("password", "")
+            else:
+                new_pw_enc = ""
+
+            if access_token is None:
+                if username_changed or (password == "" and username is not None and new_uname == ""):
+                    new_tok_enc = ""
+                else:
+                    new_tok_enc = existing.get("access_token", "")
+            elif str(access_token):
+                new_tok_enc = encrypt_credential(str(access_token))
+            else:
+                new_tok_enc = ""
+
+            if role is not None:
+                new_role = str(role).strip() or "staff"
+            else:
+                new_role = str(existing.get("role", "staff") or "staff").strip() or "staff"
+
+            if allowed_disks is not None:
+                new_disks = [str(d).strip() for d in allowed_disks if str(d).strip()]
+            else:
+                old_disks = existing.get("allowed_disks")
+                new_disks = [str(d).strip() for d in old_disks if str(d).strip()] if isinstance(old_disks, list) else []
+
+            s["backend_smb_auth"] = {
+                "username": new_uname,
+                "password": new_pw_enc,
+                "access_token": new_tok_enc,
+                "role": new_role,
+                "allowed_disks": new_disks,
+            }
+
+        save_config(config)
+        return True
+
+    return False
+
+
+

@@ -20,11 +20,19 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 _cached_resolved_smb_host = {"target": "", "resolved": "", "ts": 0.0}
-_cached_smb_shares = {"host": "", "shares": [], "ts": 0.0}
+_cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
 _cached_1219_alias = {}
+
+
+def clear_smb_share_cache():
+    """Menghapus cache daftar share SMB agar peralihan sumber atau host selalu membaca ulang."""
+    global _cached_smb_shares
+    _cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
 
 
 def _get_dynamic_host_aliases(clean_host, zerotier_ip=None):
@@ -553,10 +561,213 @@ def fetch_shares_from_zimaos_api(base_url, auth_token, current_user=""):
     return shares
 
 
-def get_remote_smb_shares(host, username="", password="", auth_token="", base_url="", max_age_seconds=30, force_refresh=False):
+def _normalize_backend_api_url(raw_url, fallback_host=""):
+    """
+    Menormalisasi URL rute active_u (LAN / Remote IP P2P / Domain WAN) ke URL REST API
+    MyServer Backend (port default 8080) dengan tetap mempertahankan port kustom eksplisit.
+    """
+    def _extract_fb_host(fb_str):
+        cleaned = sanitize_input(fb_str or "").strip()
+        if not cleaned:
+            return ""
+        stripped_br = cleaned.strip("[]")
+        try:
+            ipaddress.ip_address(stripped_br)
+            return stripped_br
+        except ValueError:
+            pass
+        fb_to_parse = cleaned if "://" in cleaned else f"http://{cleaned}"
+        try:
+            return (urllib.parse.urlparse(fb_to_parse).hostname or "").strip()
+        except Exception:
+            return ""
+
+    raw = str(raw_url or "").strip()
+    fb_h = _extract_fb_host(fallback_host)
+
+    if not raw:
+        if not fb_h:
+            return ""
+        host_fmt = f"[{fb_h}]" if ":" in fb_h and not fb_h.startswith("[") else fb_h
+        return f"http://{host_fmt}:8080"
+
+    to_parse = raw if "://" in raw else f"http://{raw}"
+    try:
+        parsed = urllib.parse.urlparse(to_parse)
+    except Exception:
+        if not fb_h:
+            return ""
+        host_fmt = f"[{fb_h}]" if ":" in fb_h and not fb_h.startswith("[") else fb_h
+        return f"http://{host_fmt}:8080"
+
+    scheme = (parsed.scheme or "http").lower()
+    if scheme not in ("http", "https"):
+        scheme = "http"
+
+    host = (parsed.hostname or "").strip()
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+
+    has_custom_backend_port = port is not None and port not in (80, 443)
+
+    if not host:
+        if not fb_h:
+            return ""
+        host = fb_h
+        scheme = "http"
+        port = 8080
+    elif (
+        _is_domain_or_wan_host(host)
+        and fb_h
+        and not _is_domain_or_wan_host(fb_h)
+        and not has_custom_backend_port
+    ):
+        host = fb_h
+        scheme = "http"
+        port = 8080
+    elif port is None or port in (80, 443):
+        scheme = "http"
+        port = 8080
+
+    host_fmt = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"{scheme}://{host_fmt}:{port}"
+
+
+def fetch_shares_from_backend_api(
+    backend_url,
+    username="",
+    password="",
+    auth_token="",
+    fallback_host="",
+    on_token_refreshed=None,
+):
+    """
+    Mengambil daftar share disk yang diizinkan dari MyServer Backend (/api/v1/storage/disks).
+    Jika auth_token kosong atau mengembalikan HTTP 401 (JWT kedaluwarsa), otomatis melakukan
+    re-autentikasi satu kali ke POST /api/v1/auth/verify memakai backend_smb_auth dan
+    memberi tahu caller lewat on_token_refreshed(new_token, auth_payload).
+    """
+    clean_url = _normalize_backend_api_url(backend_url, fallback_host=fallback_host)
+    if not clean_url:
+        return []
+
+    clean_user = (username or "").strip()
+    raw_pass = password if password is not None else ""
+    use_https = clean_url.startswith("https://")
+    ssl_ctx = ssl._create_unverified_context() if use_https else None
+
+    def _open_url(req, timeout=4.0):
+        if use_https and ssl_ctx is not None:
+            return urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx)
+        return urllib.request.urlopen(req, timeout=timeout)
+
+    def _verify_backend_jwt():
+        if not clean_user or not raw_pass:
+            return ""
+        payload = json.dumps({"username": clean_user, "password": raw_pass}).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Connection": "close",
+            "User-Agent": "MyServer-Desktop-App/4.6.0",
+        }
+        try:
+            req = urllib.request.Request(
+                f"{clean_url}/api/v1/auth/verify",
+                data=payload,
+                headers=headers,
+                method="POST",
+            )
+            with _open_url(req, timeout=4.0) as resp:
+                if resp.status == 200:
+                    auth_data = json.loads(resp.read().decode("utf-8") or "{}")
+                    if isinstance(auth_data, dict):
+                        new_tok = str(auth_data.get("access_token") or "").strip()
+                        if new_tok:
+                            if callable(on_token_refreshed):
+                                try:
+                                    on_token_refreshed(new_tok, auth_data)
+                                except Exception:
+                                    pass
+                            return new_tok
+        except Exception:
+            pass
+        return ""
+
+    def _request_disks(tok):
+        if not tok:
+            return 401, []
+        headers = {
+            "Authorization": f"Bearer {tok}",
+            "Accept": "application/json",
+            "Connection": "close",
+            "User-Agent": "MyServer-Desktop-App/4.6.0",
+        }
+        try:
+            req = urllib.request.Request(
+                f"{clean_url}/api/v1/storage/disks",
+                headers=headers,
+                method="GET",
+            )
+            with _open_url(req, timeout=4.0) as resp:
+                if resp.status == 200:
+                    body = json.loads(resp.read().decode("utf-8") or "{}")
+                    shares_out = []
+                    seen = set()
+                    if isinstance(body, dict):
+                        for d in body.get("disks", []) or []:
+                            if (
+                                isinstance(d, dict)
+                                and d.get("is_accessible", True)
+                                and d.get("name")
+                                and d.get("relative_path", None) != ""
+                            ):
+                                name = str(d["name"]).strip()
+                                if name and name not in seen:
+                                    seen.add(name)
+                                    shares_out.append(name)
+                    return 200, shares_out
+                return resp.status, []
+        except urllib.error.HTTPError as he:
+            return he.code, []
+        except Exception:
+            return 0, []
+
+    token = (auth_token or "").strip()
+    verified_this_call = False
+    if not token:
+        token = _verify_backend_jwt()
+        verified_this_call = True
+        if not token:
+            return []
+
+    status_code, shares = _request_disks(token)
+    if status_code == 401 and not verified_this_call and clean_user and raw_pass:
+        fresh_token = _verify_backend_jwt()
+        if fresh_token:
+            status_code, shares = _request_disks(fresh_token)
+
+    return shares if status_code == 200 else []
+
+
+def get_remote_smb_shares(
+    host,
+    username="",
+    password="",
+    auth_token="",
+    base_url="",
+    max_age_seconds=30,
+    force_refresh=False,
+    smb_source="zimaos",
+    backend_url="",
+    on_token_refreshed=None,
+):
     """
     Mendeteksi daftar share folder SMB yang tersedia di server.
-    Prioritas 1: Kueri resmi ZimaOS REST API jika auth_token tersedia.
+    Prioritas 1: Kueri Backend API (/api/v1/storage/disks) saat smb_source=='backend',
+                 atau ZimaOS REST API resmi saat smb_source=='zimaos'.
     Prioritas 2: Sesi IPC$ terautentikasi Windows diikuti 'net view \\host'.
     Mengembalikan list nama share disk secara murni dinamis tanpa hardcode.
     """
@@ -565,17 +776,36 @@ def get_remote_smb_shares(host, username="", password="", auth_token="", base_ur
     if not clean_h:
         return []
 
+    src_mode = (smb_source or "zimaos").strip().lower()
+    if src_mode not in ("zimaos", "backend"):
+        src_mode = "zimaos"
+
     now = time.time()
-    cache_key = f"{clean_h}:{username}"
+    cache_key = f"{src_mode}:{clean_h}:{username}"
     if not force_refresh and _cached_smb_shares.get("key") == cache_key and (now - _cached_smb_shares.get("ts", 0)) < max_age_seconds:
         return list(_cached_smb_shares.get("shares", []))
 
-    # 1. Coba kueri ZimaOS REST API resmi
-    if base_url and auth_token:
-        api_shares = fetch_shares_from_zimaos_api(base_url, auth_token, current_user=username)
-        if api_shares:
-            _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": api_shares, "ts": now}
-            return api_shares
+    # 1. Coba kueri API resmi sesuai sumber (Backend vs ZimaOS)
+    if src_mode == "backend":
+        target_backend_url = (backend_url or base_url or "").strip()
+        if target_backend_url or clean_h:
+            api_shares = fetch_shares_from_backend_api(
+                target_backend_url,
+                username=username,
+                password=password,
+                auth_token=auth_token,
+                fallback_host=clean_h,
+                on_token_refreshed=on_token_refreshed,
+            )
+            if api_shares:
+                _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": api_shares, "ts": now}
+                return api_shares
+    else:
+        if base_url and auth_token:
+            api_shares = fetch_shares_from_zimaos_api(base_url, auth_token, current_user=username)
+            if api_shares:
+                _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": api_shares, "ts": now}
+                return api_shares
 
     # 2. Coba kueri sistem via net.exe view
     creationflags = 0x08000000 if sys.platform == "win32" else 0
@@ -722,8 +952,7 @@ def purge_smb_sessions(hosts=None):
     Mendukung pembersihan terhadap single host, list of hosts, atau seluruh sesi SMB aktif
     serta membersihkan drive Red-X (ERROR_CONNECTION_UNAVAIL).
     """
-    global _cached_smb_shares
-    _cached_smb_shares = {"host": "", "shares": [], "ts": 0.0}
+    clear_smb_share_cache()
     creationflags = 0x08000000 if sys.platform == "win32" else 0
     bs = chr(92)
 
@@ -1051,7 +1280,20 @@ def mount_smb_share(
         return False, str(e)
 
 
-def mount_all_smb_shares(host, username="", password="", server_connections=None, is_domain_route=None, zerotier_ip=None, auth_token="", base_url="", force_refresh=False):
+def mount_all_smb_shares(
+    host,
+    username="",
+    password="",
+    server_connections=None,
+    is_domain_route=None,
+    zerotier_ip=None,
+    auth_token="",
+    base_url="",
+    force_refresh=False,
+    smb_source="zimaos",
+    backend_url="",
+    on_token_refreshed=None,
+):
     """
     Melakukan mounting seluruh share folder disk server yang tersedia ke huruf drive Windows yang bebas.
     Mundur dari Z:, Y:, X:, W:, V:, U:, dst.
@@ -1075,6 +1317,9 @@ def mount_all_smb_shares(host, username="", password="", server_connections=None
         auth_token=auth_token,
         base_url=base_url,
         force_refresh=force_refresh,
+        smb_source=smb_source,
+        backend_url=backend_url,
+        on_token_refreshed=on_token_refreshed,
     )
     if not shares:
         return False, "Tidak ada share folder disk yang terdeteksi di server."

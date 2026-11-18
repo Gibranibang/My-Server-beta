@@ -406,12 +406,14 @@ export function SectionLabel({
 export function Mono({
   children,
   className,
+  title,
 }: {
   children: ReactNode
   className?: string
+  title?: string
 }) {
   return (
-    <span className={cx("font-mono font-medium tracking-[-0.03em]", className)}>
+    <span className={cx("font-mono font-medium tracking-[-0.03em]", className)} title={title}>
       {children}
     </span>
   )
@@ -424,6 +426,7 @@ export function TextAction({
   tone = "info",
   trailing,
   disabled,
+  "aria-label": ariaLabel,
 }: {
   icon?: LucideIcon
   children: ReactNode
@@ -431,6 +434,7 @@ export function TextAction({
   tone?: "info" | "success" | "neutral"
   trailing?: ReactNode
   disabled?: boolean
+  "aria-label"?: string
 }) {
   const toneClass = {
     info: "text-info hover:text-info-ink",
@@ -442,6 +446,7 @@ export function TextAction({
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-label={ariaLabel}
       className={cx(
         "inline-flex items-center gap-1 rounded-full text-caption font-semibold transition-colors duration-150 disabled:opacity-45",
         focusRing,

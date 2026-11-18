@@ -4695,7 +4695,13 @@ def _backend_http_request(url, method="GET", json_body=None, headers=None, timeo
 
 
 _cached_bundled_backend_version = {"timestamp": 0, "version": "", "source": ""}
-_remote_backend_manifest_cache = {"timestamp": 0.0, "last_attempt": 0.0, "version": ""}
+_remote_backend_manifest_cache = {
+    "timestamp": 0.0,
+    "last_attempt": 0.0,
+    "version": "",
+    "package_zip": "",
+    "package_tar": "",
+}
 
 
 def _get_resource_dir_candidates():
@@ -4763,6 +4769,50 @@ def _extract_version_from_config_text(content):
     return m.group(1).strip() if m else ""
 
 
+def _extract_archive_backend_version(archive_path):
+    """Membaca SERVER_VERSION dari config.py di dalam arsip .zip atau .tar.gz secara aman."""
+    if not archive_path or not os.path.isfile(archive_path):
+        return ""
+    low = archive_path.lower()
+    if low.endswith(".zip"):
+        import zipfile
+        try:
+            with zipfile.ZipFile(archive_path, "r") as z:
+                for name in z.namelist():
+                    if name == "config.py" or name.endswith("/config.py") or name.endswith("\\config.py"):
+                        content = z.read(name).decode("utf-8", errors="ignore")
+                        v = _extract_version_from_config_text(content).lstrip("v")
+                        if v:
+                            return v
+        except Exception as e:
+            logger_manager.log_debug(f"[_extract_archive_backend_version] Gagal inspeksi ZIP {archive_path}: {e}")
+    elif low.endswith((".tar.gz", ".tgz")):
+        import tarfile
+        try:
+            with tarfile.open(archive_path, "r:gz") as t:
+                for member in t.getmembers():
+                    if member.isfile() and (member.name == "config.py" or member.name.endswith("/config.py")):
+                        f = t.extractfile(member)
+                        if f:
+                            content = f.read().decode("utf-8", errors="ignore")
+                            v = _extract_version_from_config_text(content).lstrip("v")
+                            if v:
+                                return v
+        except Exception as e:
+            logger_manager.log_debug(f"[_extract_archive_backend_version] Gagal inspeksi TAR {archive_path}: {e}")
+    return ""
+
+
+def _is_local_archive_stale_for_target(archive_path, target_ver):
+    """True hanya jika arsip lokal memiliki versi valid yang lebih lama dari target_ver."""
+    if not target_ver or not archive_path or not os.path.isfile(archive_path):
+        return False
+    pkg_ver = _extract_archive_backend_version(archive_path)
+    if not pkg_ver:
+        return False
+    return _compare_backend_versions(target_ver, pkg_ver) > 0
+
+
 _GITHUB_REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -4787,14 +4837,31 @@ def _resolve_github_repo_slug(cfg=None, body=None):
     return slug, slug
 
 
-def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5):
+def _fetch_remote_backend_manifest_info(cfg=None, timeout=2.5, force=False):
+    """Mengambil metadata versi backend terbaru dari GitHub Release (tanpa bergantung versi app Desktop)."""
     global _remote_backend_manifest_cache
     now = time.time()
-    if _remote_backend_manifest_cache["version"] and (now - _remote_backend_manifest_cache["timestamp"] < 300):
-        return _remote_backend_manifest_cache["version"]
-    # Skip repeated network fetches when offline so 4s UI polling stays responsive.
-    if now - _remote_backend_manifest_cache["last_attempt"] < 60:
-        return ""
+    cached_ts = float(_remote_backend_manifest_cache.get("timestamp") or 0.0)
+    cached_ver = str(_remote_backend_manifest_cache.get("version") or "").strip().lstrip("v")
+    positive_ttl = 10 if force else 300
+    negative_cooldown = 10 if force else 60
+
+    if cached_ver and cached_ts > 0 and (now - cached_ts < positive_ttl):
+        return (
+            cached_ver,
+            str(_remote_backend_manifest_cache.get("package_zip") or "").strip(),
+            str(_remote_backend_manifest_cache.get("package_tar") or "").strip(),
+        )
+    # Skip repeated network fetches when offline or right after check so polling stays responsive.
+    last_attempt = float(_remote_backend_manifest_cache.get("last_attempt") or 0.0)
+    if last_attempt > 0 and (now - last_attempt < negative_cooldown):
+        if cached_ver and cached_ts > 0:
+            return (
+                cached_ver,
+                str(_remote_backend_manifest_cache.get("package_zip") or "").strip(),
+                str(_remote_backend_manifest_cache.get("package_tar") or "").strip(),
+            )
+        return "", "", ""
 
     _remote_backend_manifest_cache["last_attempt"] = now
     try:
@@ -4805,7 +4872,7 @@ def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5):
     repo_slug, raw_slug = _resolve_github_repo_slug(cfg)
     if not repo_slug:
         logger_manager.log_debug(f"[_fetch_remote_backend_manifest_version] Invalid github_repo slug: {raw_slug}")
-        return ""
+        return "", "", ""
     manifest_url = f"https://github.com/{repo_slug}/releases/latest/download/backend_manifest.json"
     try:
         req = urllib.request.Request(
@@ -4813,6 +4880,7 @@ def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5):
             headers={
                 "User-Agent": f"MyServer-Core/{APP_VERSION_NUMBER}",
                 "Accept": "application/json",
+                "Cache-Control": "no-cache",
                 "Connection": "close",
             },
             method="GET",
@@ -4822,34 +4890,32 @@ def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5):
             mdata = json.loads(raw) if raw else {}
             if isinstance(mdata, dict):
                 v = (mdata.get("backend_version") or mdata.get("version") or "").strip().lstrip("v")
+                p_zip = os.path.basename(str(mdata.get("package_zip") or "").strip())
+                p_tar = os.path.basename(str(mdata.get("package_tar") or "").strip())
                 if v:
                     _remote_backend_manifest_cache["timestamp"] = now
                     _remote_backend_manifest_cache["version"] = v
-                    return v
+                    _remote_backend_manifest_cache["package_zip"] = p_zip
+                    _remote_backend_manifest_cache["package_tar"] = p_tar
+                    return v, p_zip, p_tar
     except Exception as e:
         logger_manager.log_debug(f"[_fetch_remote_backend_manifest_version] Remote manifest unavailable: {e}")
-    return ""
+    if cached_ver and cached_ts > 0:
+        return (
+            cached_ver,
+            str(_remote_backend_manifest_cache.get("package_zip") or "").strip(),
+            str(_remote_backend_manifest_cache.get("package_tar") or "").strip(),
+        )
+    return "", "", ""
 
 
-def _get_bundled_backend_version(cfg=None, allow_remote=True):
-    """
-    Menemukan dan membaca versi backend ZimaOS yang dibundel di folder resources secara dinamis.
-    1. Membaca backend_manifest.json di kandidat folder resources/
-    2. Menginspeksi arsip ZIP/TAR.GZ (canonical terlebih dahulu, lalu versi tertinggi)
-    3. Opsional fallback manifest GitHub Release terbaru jika resources lokal tidak tersedia
-    """
-    global _cached_bundled_backend_version
-    now = time.time()
-    cached_ver = _cached_bundled_backend_version.get("version", "")
-    cached_src = _cached_bundled_backend_version.get("source", "")
-    cache_ttl = 300 if cached_src == "remote" else 30
-    if cached_ver and (now - _cached_bundled_backend_version["timestamp"] < cache_ttl):
-        if allow_remote or cached_src != "remote":
-            return cached_ver
+def _fetch_remote_backend_manifest_version(cfg=None, timeout=2.5, force=False):
+    v, _, _ = _fetch_remote_backend_manifest_info(cfg=cfg, timeout=timeout, force=force)
+    return v
 
-    import zipfile
-    import tarfile
 
+def _get_local_bundled_backend_version():
+    """Membaca versi backend ZimaOS dari folder resources lokal tanpa panggilan jaringan."""
     for res_dir in _get_resource_dir_candidates():
         mdata = _read_backend_manifest_info(res_dir)
         pref_zips = ["MyServer-Backend-ZimaOS.zip"]
@@ -4857,7 +4923,6 @@ def _get_bundled_backend_version(cfg=None, allow_remote=True):
         if mdata:
             v = (mdata.get("backend_version") or mdata.get("version") or "").strip().lstrip("v")
             if v:
-                _cached_bundled_backend_version = {"timestamp": now, "version": v, "source": "local"}
                 return v
             p_zip = os.path.basename((mdata.get("package_zip") or "").strip())
             p_tar = os.path.basename((mdata.get("package_tar") or "").strip())
@@ -4867,42 +4932,104 @@ def _get_bundled_backend_version(cfg=None, allow_remote=True):
                 pref_tars.insert(0, p_tar)
 
         for zpath in _sort_backend_archives(res_dir, (".zip",), preferred_names=pref_zips):
-            try:
-                with zipfile.ZipFile(zpath, "r") as z:
-                    for name in z.namelist():
-                        if name == "config.py" or name.endswith("/config.py") or name.endswith("\\config.py"):
-                            content = z.read(name).decode("utf-8", errors="ignore")
-                            v = _extract_version_from_config_text(content).lstrip("v")
-                            if v:
-                                _cached_bundled_backend_version = {"timestamp": now, "version": v, "source": "local"}
-                                return v
-            except Exception as e:
-                logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi ZIP {zpath}: {e}")
+            v = _extract_archive_backend_version(zpath)
+            if v:
+                return v
 
         for tpath in _sort_backend_archives(res_dir, (".tar.gz", ".tgz"), preferred_names=pref_tars):
-            try:
-                with tarfile.open(tpath, "r:gz") as t:
-                    for member in t.getmembers():
-                        if member.name == "config.py" or member.name.endswith("/config.py"):
-                            f = t.extractfile(member)
-                            if f:
-                                content = f.read().decode("utf-8", errors="ignore")
-                                v = _extract_version_from_config_text(content).lstrip("v")
-                                if v:
-                                    _cached_bundled_backend_version = {"timestamp": now, "version": v, "source": "local"}
-                                    return v
-            except Exception as e:
-                logger_manager.log_debug(f"[_get_bundled_backend_version] Gagal inspeksi TAR {tpath}: {e}")
+            v = _extract_archive_backend_version(tpath)
+            if v:
+                return v
+
+    return ""
+
+
+def _get_bundled_backend_version(cfg=None, allow_remote=True, force_remote=False):
+    """
+    Menemukan versi target backend ZimaOS dengan menggabungkan bundel lokal
+    dan rilis GitHub terbaru (mengembalikan semver tertinggi agar update
+    Backend tetap terdeteksi tanpa perlu update MyServer Desktop).
+    """
+    global _cached_bundled_backend_version
+    now = time.time()
+    cached_ver = _cached_bundled_backend_version.get("version", "")
+    cached_src = _cached_bundled_backend_version.get("source", "")
+    cache_ttl = 300 if cached_src == "remote" else 30
+    if (
+        not force_remote
+        and cached_ver
+        and (now - _cached_bundled_backend_version["timestamp"] < cache_ttl)
+    ):
+        if not allow_remote:
+            if cached_src == "local":
+                return cached_ver
+        elif cached_src == "remote" or (_fetch_remote_backend_manifest_version(cfg=cfg) == "" and cached_src == "local"):
+            return cached_ver
+
+    local_ver = _get_local_bundled_backend_version()
 
     if allow_remote:
-        remote_v = _fetch_remote_backend_manifest_version(cfg=cfg)
-        if remote_v:
-            _cached_bundled_backend_version = {"timestamp": now, "version": remote_v, "source": "remote"}
-            return remote_v
+        remote_ver = _fetch_remote_backend_manifest_version(cfg=cfg, force=force_remote)
+        if remote_ver and (not local_ver or _compare_backend_versions(remote_ver, local_ver) > 0):
+            _cached_bundled_backend_version = {"timestamp": now, "version": remote_ver, "source": "remote"}
+            return remote_ver
+
+    if local_ver:
+        _cached_bundled_backend_version = {"timestamp": now, "version": local_ver, "source": "local"}
+        return local_ver
 
     if cached_ver and (allow_remote or cached_src != "remote"):
         return cached_ver
     return ""
+
+
+def _download_remote_backend_archive(repo_slug, asset_name, suffix, expected_ver="", timeout=25.0):
+    """Mengunduh paket rilis Backend terbaru (.zip/.tar.gz) dari GitHub Releases ke file sementara."""
+    if not repo_slug:
+        return None
+    import tempfile
+
+    default_name = "MyServer-Backend-ZimaOS.zip" if suffix == ".zip" else "MyServer-Backend-ZimaOS.tar.gz"
+    safe_asset = os.path.basename(str(asset_name or "").strip()) or default_name
+    dl_url = f"https://github.com/{repo_slug}/releases/latest/download/{safe_asset}"
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(prefix="myserver_backend_dl_", suffix=suffix)
+        os.close(fd)
+        req = urllib.request.Request(
+            dl_url,
+            headers={
+                "User-Agent": f"MyServer-Core/{APP_VERSION_NUMBER}",
+                "Cache-Control": "no-cache",
+                "Connection": "close",
+            },
+            method="GET",
+        )
+        max_bytes = 64 * 1024 * 1024
+        downloaded = 0
+        with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp_path, "wb") as out_f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > max_bytes:
+                    raise ValueError(f"Ukuran arsip GitHub melebihi batas {max_bytes} bytes")
+                out_f.write(chunk)
+        if downloaded < 512:
+            raise ValueError(f"Ukuran arsip GitHub terlalu kecil ({downloaded} bytes)")
+        pkg_ver = _extract_archive_backend_version(tmp_path)
+        if expected_ver and pkg_ver and _compare_backend_versions(pkg_ver, expected_ver) < 0:
+            raise ValueError(f"Versi arsip GitHub ({pkg_ver}) lebih rendah dari manifest ({expected_ver})")
+        return tmp_path
+    except Exception as e:
+        logger_manager.log_warning(f"[_download_remote_backend_archive] Gagal unduh {safe_asset} dari GitHub: {e}")
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return None
 
 
 def _get_bundled_backend_packages():
@@ -4962,7 +5089,7 @@ def _get_backend_health_info(cfg=None, force=False, target_server_id=None):
     ):
         return dict(_cached_backend_info["data"])
 
-    target_ver = _get_bundled_backend_version(cfg=cfg)
+    target_ver = _get_bundled_backend_version(cfg=cfg, force_remote=force)
     candidates = _get_backend_url_candidates(cfg, target_server_id=target_server_id, srv=srv)
     probe_list = []
     cached_entry = _backend_url_cache.get(srv_id) if srv_id else None
@@ -5066,6 +5193,7 @@ def handle_remote_backend_action(body):
     pwd = ""
     srv_id = None
     lock_acquired = False
+    temp_downloads = []
 
     try:
         action = (body.get("action") or "update").strip().lower()
@@ -5161,7 +5289,11 @@ def handle_remote_backend_action(body):
                 res_payload["error"] = msg
             return res_payload
 
-        target_ver = _get_bundled_backend_version(cfg=cfg)
+        target_ver = _get_bundled_backend_version(
+            cfg=cfg,
+            allow_remote=(source != "bundle"),
+            force_remote=(source != "bundle"),
+        )
         local_zip, local_bundle = _get_bundled_backend_packages()
 
         if source == "bundle":
@@ -5176,15 +5308,43 @@ def handle_remote_backend_action(body):
                     "message": "Paket bundle backend lokal tidak ditemukan di perangkat.",
                 }
 
+        ota_zip = local_zip
+        ssh_bundle = local_bundle
+        stale_local_zip = False
+        stale_local_bundle = False
+        if source == "auto" and target_ver:
+            local_zip_exists = bool(local_zip and os.path.exists(local_zip))
+            local_bundle_exists = bool(local_bundle and os.path.exists(local_bundle))
+            stale_local_zip = local_zip_exists and _is_local_archive_stale_for_target(local_zip, target_ver)
+            stale_local_bundle = local_bundle_exists and _is_local_archive_stale_for_target(local_bundle, target_ver)
+            if action == "update" and repo_slug and (stale_local_zip or not local_zip_exists):
+                remote_v, pkg_zip_name, _ = _fetch_remote_backend_manifest_info(cfg=cfg, force=False)
+                if stale_local_zip or (remote_v and _compare_backend_versions(remote_v, target_ver) == 0):
+                    logger_manager.log_info(
+                        f"[handle_remote_backend_action] Mengunduh paket HTTP OTA Backend v{target_ver} dari GitHub..."
+                    )
+                    dl_zip = _download_remote_backend_archive(
+                        repo_slug,
+                        pkg_zip_name or "MyServer-Backend-ZimaOS.zip",
+                        ".zip",
+                        expected_ver=target_ver,
+                    )
+                    if dl_zip:
+                        temp_downloads.append(dl_zip)
+                        ota_zip = dl_zip
+                    elif stale_local_zip:
+                        # Jangan kirim arsip lokal lama saat versi rilis GitHub sudah lebih baru
+                        ota_zip = None
+
         # Jalur Cepat 1: HTTP OTA langsung jika backend server saat ini sudah online (kecuali source="github")
-        if source != "github" and action == "update" and local_zip and os.path.exists(local_zip):
+        if source != "github" and action == "update" and ota_zip and os.path.exists(ota_zip):
             candidates = _get_backend_url_candidates(cfg, target_server_id=srv.get("id"), srv=srv)
             target_backend_url = _get_active_server_backend_url(cfg, target_server_id=srv.get("id"))
         else:
             candidates = []
             target_backend_url = ""
 
-        if source != "github" and action == "update" and candidates and local_zip and os.path.exists(local_zip):
+        if source != "github" and action == "update" and candidates and ota_zip and os.path.exists(ota_zip):
             ota_urls = []
             if target_backend_url:
                 ota_urls.append(target_backend_url)
@@ -5193,9 +5353,9 @@ def handle_remote_backend_action(body):
                     ota_urls.append(cu)
             ota_secret_masks = []
             try:
-                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {ota_urls[0]}/api/v1/system/update (paket: {local_zip})...")
+                logger_manager.log_info(f"[handle_remote_backend_action] Mencoba pembaruan cepat HTTP OTA ke {ota_urls[0]}/api/v1/system/update (paket: {ota_zip})...")
                 boundary = f"----WebKitFormBoundary{int(time.time()*1000)}"
-                with open(local_zip, "rb") as zf:
+                with open(ota_zip, "rb") as zf:
                     zip_bytes = zf.read()
 
                 smb_cfg = (
@@ -5531,11 +5691,25 @@ def handle_remote_backend_action(body):
             ssh_client.exec_command(f"rm -rf {shlex.quote(deploy_dir)} && mkdir -p {shlex.quote(deploy_dir)}")
 
             uploaded_local = False
-            if source != "github" and local_bundle and os.path.exists(local_bundle):
+            if source == "auto" and stale_local_bundle:
+                ssh_bundle = None
+                if repo_slug and target_ver:
+                    _, _, pkg_tar_name = _fetch_remote_backend_manifest_info(cfg=cfg, force=False)
+                    dl_tar = _download_remote_backend_archive(
+                        repo_slug,
+                        pkg_tar_name or "MyServer-Backend-ZimaOS.tar.gz",
+                        ".tar.gz",
+                        expected_ver=target_ver,
+                    )
+                    if dl_tar:
+                        temp_downloads.append(dl_tar)
+                        ssh_bundle = dl_tar
+
+            if source != "github" and ssh_bundle and os.path.exists(ssh_bundle):
                 try:
-                    logger_manager.log_info(f"[handle_remote_backend_action] Mengunggah paket lokal {local_bundle} via SFTP...")
+                    logger_manager.log_info(f"[handle_remote_backend_action] Mengunggah paket lokal {ssh_bundle} via SFTP...")
                     sftp = ssh_client.open_sftp()
-                    sftp.put(local_bundle, f"{deploy_dir}/backend.tar.gz")
+                    sftp.put(ssh_bundle, f"{deploy_dir}/backend.tar.gz")
                     sftp.close()
                     uploaded_local = True
                     logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
@@ -5680,6 +5854,12 @@ def handle_remote_backend_action(body):
             "message": f"Terjadi kesalahan saat memproses backend: {safe_ex}"
         })
     finally:
+        for tmp_dl in temp_downloads:
+            if tmp_dl and os.path.exists(tmp_dl):
+                try:
+                    os.remove(tmp_dl)
+                except Exception:
+                    pass
         if lock_acquired and srv_id is not None:
             with _BACKEND_DEPLOY_GUARD:
                 _ACTIVE_BACKEND_DEPLOYS.discard(srv_id)

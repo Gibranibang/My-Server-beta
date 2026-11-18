@@ -1380,10 +1380,10 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             with patch.object(core, "_active_metrics_client", fake_mc), \
                  patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]), \
                  patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"), \
-                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.1"), \
+                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.0"), \
                  patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)), \
                  patch("urllib.request.urlopen", side_effect=_fake_urlopen_user), \
-                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.1", "boot_id": "boot-3"}, 200)), \
+                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0", "boot_id": "boot-3"}, 200)), \
                  patch("time.sleep", return_value=None):
                 res_b = core.handle_remote_backend_action({"action": "update", "serverId": "srv_1"})
 

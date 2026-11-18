@@ -609,6 +609,210 @@ class TestBackendDetection(unittest.TestCase):
             self.assertEqual(len(install_cmds), 1)
             self.assertGreaterEqual(install_cmds[0][1], 180)
 
+    def test_remote_github_backend_update_overrides_older_local_bundle(self):
+        """Desktop must detect & install newer GitHub Backend (e.g. 1.4.1) even when local resources has 1.4.0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            res_dir = os.path.join(tmp, "resources")
+            os.makedirs(res_dir, exist_ok=True)
+            with open(os.path.join(res_dir, "backend_manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"version": "1.4.0", "package_zip": "MyServer-Backend-ZimaOS.zip", "package_tar": "MyServer-Backend-ZimaOS.tar.gz"}, f)
+
+            old_zip = os.path.join(res_dir, "MyServer-Backend-ZimaOS.zip")
+            with zipfile.ZipFile(old_zip, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.4.0"\n')
+
+            old_tar = os.path.join(res_dir, "MyServer-Backend-ZimaOS.tar.gz")
+            with tarfile.open(old_tar, "w:gz") as tf:
+                d = b'SERVER_VERSION = "1.4.0"\n'
+                ti = tarfile.TarInfo("app/config.py")
+                ti.size = len(d)
+                tf.addfile(ti, io.BytesIO(d))
+
+            # Build real 1.4.1 remote ZIP & TAR payloads in memory
+            buf_zip = io.BytesIO()
+            with zipfile.ZipFile(buf_zip, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.4.1"\n')
+            remote_zip_bytes = buf_zip.getvalue() * 4 if len(buf_zip.getvalue()) < 512 else buf_zip.getvalue()
+            # Padded valid ZIP (>= 512 bytes) by adding dummy README
+            buf_zip2 = io.BytesIO()
+            with zipfile.ZipFile(buf_zip2, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.4.1"\n')
+                zf.writestr("README.md", "MyServer Backend 1.4.1\n" * 40)
+            remote_zip_bytes = buf_zip2.getvalue()
+
+            buf_tar = io.BytesIO()
+            with tarfile.open(fileobj=buf_tar, mode="w:gz") as tf:
+                unique_blob = "".join(f"line_{i}_{hex(i * 7919)}\n" for i in range(120)).encode("utf-8")
+                for fn, payload in [
+                    ("app/config.py", b'SERVER_VERSION = "1.4.1"\n'),
+                    ("README.md", unique_blob),
+                ]:
+                    ti = tarfile.TarInfo(fn)
+                    ti.size = len(payload)
+                    tf.addfile(ti, io.BytesIO(payload))
+            remote_tar_bytes = buf_tar.getvalue()
+            self.assertGreaterEqual(len(remote_tar_bytes), 512)
+
+            class _BytesResp:
+                def __init__(self, raw_bytes):
+                    self._bio = io.BytesIO(raw_bytes)
+                def read(self, n=-1):
+                    return self._bio.read(n)
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    return False
+
+            cfg = {
+                "active_server_id": "srv1",
+                "github_repo": "Gibranibang/My-Server-beta",
+                "servers": [{
+                    "id": "srv1",
+                    "name": "Zima1",
+                    "connections": [{"id": "c1", "url": "http://127.0.0.1"}],
+                    "credentials": {"Admin": {"username": "nasadmin", "password": "pw"}},
+                }],
+            }
+
+            manifest_141 = json.dumps({
+                "version": "1.4.1",
+                "package_zip": "MyServer-Backend-ZimaOS.zip",
+                "package_tar": "MyServer-Backend-ZimaOS.tar.gz",
+            }).encode("utf-8")
+
+            # 1. Version check with local=1.4.0 & GitHub=1.4.1 must report latestVersion=1.4.1
+            def _urlopen_detect(req, timeout=2.5):
+                if "backend_manifest.json" in req.full_url:
+                    return _BytesResp(manifest_141)
+                raise AssertionError(f"Unexpected URL: {req.full_url}")
+
+            with (
+                mock.patch.object(core.config_manager, "get_base_dir", return_value=tmp),
+                mock.patch("urllib.request.urlopen", side_effect=_urlopen_detect),
+                mock.patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0"}, 200)),
+            ):
+                self._reset_caches()
+                info = core._get_backend_health_info(cfg=cfg, force=True, target_server_id="srv1")
+            self.assertTrue(info["online"])
+            self.assertEqual(info["version"], "1.4.0")
+            self.assertEqual(info["latestVersion"], "1.4.1")
+
+            # 2. If GitHub is older (1.3.9), local bundled 1.4.0 must still win cleanly
+            manifest_139 = json.dumps({"version": "1.3.9"}).encode("utf-8")
+            with (
+                mock.patch.object(core.config_manager, "get_base_dir", return_value=tmp),
+                mock.patch("urllib.request.urlopen", return_value=_BytesResp(manifest_139)),
+            ):
+                self._reset_caches()
+                self.assertEqual(core._get_bundled_backend_version(cfg=cfg, allow_remote=True, force_remote=True), "1.4.0")
+
+            # 3. handle_remote_backend_action(update, auto) must fetch 1.4.1 ZIP from GitHub & upload 1.4.1 (NOT stale 1.4.0)
+            uploaded_payloads = []
+            def _urlopen_ota(req, timeout=20):
+                if req.full_url.endswith("/backend_manifest.json"):
+                    return _BytesResp(manifest_141)
+                if req.full_url.endswith("/MyServer-Backend-ZimaOS.zip"):
+                    return _BytesResp(remote_zip_bytes)
+                if req.full_url.endswith("/api/v1/system/update"):
+                    uploaded_payloads.append(req.data)
+                    return _FakeHttpResponse({"status": "success", "old_version": "1.4.0", "boot_id": "boot-old"})
+                raise AssertionError(f"Unexpected URL: {req.full_url}")
+
+            with (
+                mock.patch.object(core.config_manager, "get_base_dir", return_value=tmp),
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"),
+                mock.patch("urllib.request.urlopen", side_effect=_urlopen_ota),
+                mock.patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.1", "boot_id": "boot-new"}, 200)),
+                mock.patch("time.sleep", return_value=None),
+            ):
+                self._reset_caches()
+                res = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertTrue(res["success"], res)
+            self.assertEqual(res["backend"]["version"], "1.4.1")
+            self.assertEqual(res["backend"]["latestVersion"], "1.4.1")
+            self.assertEqual(len(uploaded_payloads), 1)
+            self.assertIn(remote_zip_bytes, uploaded_payloads[0])
+
+            # 4. SSH fallback when HTTP OTA fails & local bundle is stale 1.4.0 -> skips stale local 1.4.0, SFTP uploads remote 1.4.1 tarball (NOT 1.4.0)
+            sftp_uploaded_versions = []
+            ssh_cmds_recorded = []
+            class _SftpCapture:
+                def put(self, local_p, _remote_p):
+                    sftp_uploaded_versions.append(core._extract_archive_backend_version(local_p))
+                def close(self):
+                    return None
+            class _SshCapture:
+                def set_missing_host_key_policy(self, _p):
+                    return None
+                def connect(self, *a, **kw):
+                    return None
+                def open_sftp(self):
+                    return _SftpCapture()
+                def exec_command(self, cmd, timeout=None):
+                    ssh_cmds_recorded.append(cmd)
+                    st = types.SimpleNamespace(recv_exit_status=lambda: 0)
+                    out = b"50000\n" if "wc -c" in cmd else b"ok"
+                    return None, types.SimpleNamespace(channel=st, read=lambda: out), types.SimpleNamespace(channel=st, read=lambda: b"")
+                def close(self):
+                    return None
+            fake_p = types.SimpleNamespace(SSHClient=lambda: _SshCapture(), AutoAddPolicy=lambda: object())
+
+            def _urlopen_ssh_fallback(req, timeout=20):
+                if req.full_url.endswith("/backend_manifest.json"):
+                    return _BytesResp(manifest_141)
+                if req.full_url.endswith("/MyServer-Backend-ZimaOS.zip"):
+                    raise OSError("zip blocked; test tar path")
+                if req.full_url.endswith("/MyServer-Backend-ZimaOS.tar.gz"):
+                    return _BytesResp(remote_tar_bytes)
+                raise AssertionError(f"Unexpected URL: {req.full_url}")
+
+            with (
+                mock.patch.dict(sys.modules, {"paramiko": fake_p}),
+                mock.patch.object(core.config_manager, "get_base_dir", return_value=tmp),
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg),
+                mock.patch.object(core.config_manager, "get_server_credentials", return_value={"username": "nasadmin", "password": "pw"}),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"),
+                mock.patch("urllib.request.urlopen", side_effect=_urlopen_ssh_fallback),
+                mock.patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.1", "boot_id": "boot-ssh-141"}, 200)),
+                mock.patch("time.sleep", return_value=None),
+            ):
+                self._reset_caches()
+                res_ssh = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertTrue(res_ssh["success"], res_ssh)
+            self.assertEqual(sftp_uploaded_versions, ["1.4.1"])
+
+            # 5. If both Desktop .zip & .tar.gz downloads fail when local is stale 1.4.0, skip stale SFTP & let NAS curl GitHub directly
+            sftp_uploaded_versions.clear()
+            ssh_cmds_recorded.clear()
+
+            def _urlopen_nas_curl_only(req, timeout=20):
+                if req.full_url.endswith("/backend_manifest.json"):
+                    return _BytesResp(manifest_141)
+                raise OSError("desktop direct download blocked")
+
+            with (
+                mock.patch.dict(sys.modules, {"paramiko": fake_p}),
+                mock.patch.object(core.config_manager, "get_base_dir", return_value=tmp),
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg),
+                mock.patch.object(core.config_manager, "get_server_credentials", return_value={"username": "nasadmin", "password": "pw"}),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"),
+                mock.patch("urllib.request.urlopen", side_effect=_urlopen_nas_curl_only),
+                mock.patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.1", "boot_id": "boot-curl-141"}, 200)),
+                mock.patch("time.sleep", return_value=None),
+            ):
+                self._reset_caches()
+                res_curl = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertTrue(res_curl["success"], res_curl)
+            self.assertEqual(sftp_uploaded_versions, [])
+            self.assertTrue(any("curl " in c and "MyServer-Backend-ZimaOS.tar.gz" in c for c in ssh_cmds_recorded))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

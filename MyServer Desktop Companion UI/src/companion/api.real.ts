@@ -1198,23 +1198,16 @@ export function createRealApi(): CompanionApi {
 
     async migrateVm(vmId: string, targetScope: "server" | "local", vm?: Partial<VirtualMachine>) {
       const payload = { vmId, targetScope, vm_id: vmId, target_scope: targetScope, ...(vm ? { vm } : {}) }
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'vms/migrate', payload })
-        } catch (err) {
-          console.warn('[RealApi] migrateVm invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['vms/migrate']) {
-          return await api['vms/migrate'](payload)
+        return await callCoreApi("vms/migrate", payload)
+      } catch (err: any) {
+        console.warn("[RealApi] migrateVm error:", err)
+        return {
+          status: "error",
+          success: false,
+          ...(err?.message ? { message: String(err.message) } : {}),
         }
-      } catch (err) {
-        console.warn('[RealApi] migrateVm error:', err)
       }
-      return { status: 'error' }
     },
 
     async openSshTerminal(params?: { host?: string; user?: string; port?: number }) {

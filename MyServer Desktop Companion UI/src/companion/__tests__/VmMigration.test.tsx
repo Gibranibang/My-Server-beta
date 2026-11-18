@@ -245,4 +245,71 @@ describe("VM Migration payload forwarding & rollback (MIG-03, D-03)", () => {
     })
     expect(api.saveVms).not.toHaveBeenCalled()
   })
+
+  it("keeps legacy undefined-scope VM as local on Edit without unintended migration (CR-03)", async () => {
+    const legacyLocal = makeTestVm({ id: "vm_legacy_1", name: "Legacy-Local" })
+    delete (legacyLocal as any).scope
+    const { api } = setupVmView([legacyLocal], async () => ({ status: "ok", success: true }))
+    api.updateVm = vi.fn(async () => ({ status: "ok", success: true }))
+
+    await screen.findByText("Legacy-Local")
+    await waitFor(() => expect(api.getServerDetails).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByTitle("Edit"))
+    const nameInput = await screen.findByDisplayValue("Legacy-Local")
+    fireEvent.change(nameInput, { target: { value: "Legacy-Renamed" } })
+    fireEvent.click(screen.getByRole("button", { name: "Perbarui" }))
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem("myserver_vms") || "[]")
+      expect(stored[0].name).toBe("Legacy-Renamed")
+      expect(stored[0].scope).toBe("local")
+    })
+    expect(api.migrateVm).not.toHaveBeenCalled()
+  })
+
+  it("locks submit button against double-click during async migration and applies res.vm (WR-01, WR-05)", async () => {
+    const localVm = makeTestVm({ id: "vm_lock_1", name: "Lock-Box", scope: "local" })
+    let resolveMig!: (val: any) => void
+    const { api } = setupVmView([localVm], () => new Promise((r) => { resolveMig = r }))
+
+    await screen.findByText("Lock-Box")
+    await waitFor(() => expect(api.getServerDetails).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByTitle("Edit"))
+    fireEvent.click(await screen.findByRole("button", { name: "ZimaOS-NAS" }))
+    const submitBtn = screen.getByRole("button", { name: "Perbarui" })
+    fireEvent.click(submitBtn)
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Perbarui" })).toBeDisabled()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Perbarui" }))
+    expect(api.migrateVm).toHaveBeenCalledTimes(1)
+
+    resolveMig({
+      status: "ok",
+      success: true,
+      vm: { id: "vm_lock_1", name: "Lock-Box", scope: "server", serverId: "srv_auth_99", serverName: "Authoritative-NAS" },
+    })
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem("myserver_vms") || "[]")
+      expect(stored[0].serverId).toBe("srv_auth_99")
+      expect(stored[0].serverName).toBe("Authoritative-NAS")
+    })
+  })
+
+  it("invokes Tauri call_core_api only once on realApi.migrateVm rejection (WR-05)", async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error("Core socket down")
+    })
+    ;(window as any).__TAURI_INTERNALS__ = { invoke }
+
+    const realApi = createRealApi()
+    const res = await realApi.migrateVm!("vm_fail_once", "server", makeTestVm({ id: "vm_fail_once" }))
+
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(res).toEqual({ status: "error", success: false, message: "Core socket down" })
+  })
 })

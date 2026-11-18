@@ -4002,6 +4002,8 @@ def _prepare_vm_payload_for_backend(vm):
     if not isinstance(vm, dict):
         return vm
     p = dict(vm)
+    # Strip internal DB snapshot so stale snapshot values never override local edits on re-upload
+    p.pop("_db_snapshot", None)
 
     # 1. Always-On / KeepAlive
     if "keepAliveEnabled" in p and p["keepAliveEnabled"] is not None:
@@ -4011,14 +4013,24 @@ def _prepare_vm_payload_for_backend(vm):
         p["keepAliveEnabled"] = bool(p["keep_alive_enabled"])
         p["keep_alive_enabled"] = bool(p["keep_alive_enabled"])
 
-    if "apiKey" in p and "api_key" not in p:
-        p["api_key"] = p["apiKey"]
-    if "machineId" in p and "machine_id" not in p:
-        p["machine_id"] = p["machineId"]
-    if "runtimeMinutes" in p and "runtime_minutes" not in p:
-        p["runtime_minutes"] = p["runtimeMinutes"]
-    if "maxRuntimeMinutes" in p and "max_runtime_minutes" not in p:
-        p["max_runtime_minutes"] = p["maxRuntimeMinutes"]
+    alias_pairs = (
+        ("apiKey", "api_key"),
+        ("machineId", "machine_id"),
+        ("runtimeMinutes", "runtime_minutes"),
+        ("maxRuntimeMinutes", "max_runtime_minutes"),
+        ("sshHost", "ssh_host"),
+        ("sshPort", "ssh_port"),
+        ("sshUser", "ssh_user"),
+        ("screenUrl", "screen_url"),
+        ("screenOpenTarget", "screen_target"),
+        ("webPort", "web_port"),
+        ("webUrl", "web_url"),
+        ("tokenExpiry", "token_expiry"),
+    )
+    for camel_k, snake_k in alias_pairs:
+        if camel_k in p:
+            if p[camel_k] is not None or snake_k not in p:
+                p[snake_k] = p[camel_k]
 
     # 2. Auto-Restart
     ar = p.get("autoRestart")
@@ -4330,12 +4342,12 @@ def _execute_vm_migrate_operation(body):
             }
 
         target_vm = dict(merged_source)
+        target_vm.pop("_db_snapshot", None)
         target_vm["id"] = vm_id
         target_vm["scope"] = "server"
         target_vm["serverId"] = srv.get("id")
         target_vm["serverName"] = srv.get("name")
 
-        _deleted_vms_tombstone.pop(vm_id, None)
         b_payload = _prepare_vm_payload_for_backend(target_vm)
         b_payload["force_recreate"] = True
         b_payload["_force_recreate"] = True
@@ -4361,7 +4373,8 @@ def _execute_vm_migrate_operation(body):
                 "message": f"Gagal migrasi ke ZimaOS: {be}",
             }
 
-        # Clear any prior local-migration mutation before normalizing backend response
+        # Clear any local delete tombstone and prior local-migration mutation ONLY after server create succeeds
+        _deleted_vms_tombstone.pop(vm_id, None)
         _recent_vm_mutations.pop(vm_id, None)
         _record_recent_vm_mutation(
             vm_id,
@@ -4401,6 +4414,7 @@ def _execute_vm_migrate_operation(body):
         }
 
     target_vm = dict(merged_source)
+    target_vm.pop("_db_snapshot", None)
     target_vm["id"] = vm_id
     target_vm["scope"] = "local"
     target_vm.pop("serverId", None)
@@ -4430,11 +4444,37 @@ def _execute_vm_migrate_operation(body):
 
     target_srv_id = (existing_local or {}).get("serverId") or (vm_data or {}).get("serverId")
     del_backend_url = _get_active_server_backend_url(cfg, target_server_id=target_srv_id) or _get_active_server_backend_url(cfg)
-    if del_backend_url and vm_id:
-        try:
-            _backend_http_request(f"{del_backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0)
-        except Exception as be:
-            logger_manager.log_debug(f"[api/vms/migrate] Warning: Gagal hapus dari backend saat migrasi ke lokal: {be}")
+    if not del_backend_url:
+        cfg["vms"] = local_vms
+        config_manager.save_config(cfg)
+        _recent_vm_mutations.pop(vm_id, None)
+        return 503, {
+            "status": "error",
+            "success": False,
+            "message": "Server ZimaOS tidak terhubung atau offline",
+        }
+
+    ok, data, code = False, "Unknown error", 0
+    try:
+        ok, data, code = _backend_http_request(
+            f"{del_backend_url}/api/v1/vms/{vm_id}",
+            method="DELETE",
+            timeout=5.0,
+            retries=1,
+        )
+    except Exception as be:
+        data = str(be)
+        ok = False
+
+    if not ok and code != 404:
+        cfg["vms"] = local_vms
+        config_manager.save_config(cfg)
+        _recent_vm_mutations.pop(vm_id, None)
+        return 502, {
+            "status": "error",
+            "success": False,
+            "message": f"Gagal menghapus VM dari ZimaOS saat migrasi ke lokal (HTTP {code}): {data}",
+        }
 
     return 200, {"status": "ok", "success": True, "vm": target_vm}
 

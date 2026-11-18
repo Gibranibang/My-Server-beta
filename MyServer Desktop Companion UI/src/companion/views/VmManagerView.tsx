@@ -615,6 +615,8 @@ export default function VmManagerView({ go }: ViewProps) {
   const [vmToDelete, setVmToDelete] = useState<VirtualMachine | null>(null)
   const [editingVm, setEditingVm] = useState<VirtualMachine | null>(null)
   const [isAddingVm, setIsAddingVm] = useState<boolean>(false)
+  const [isSavingVm, setIsSavingVm] = useState<boolean>(false)
+  const isSavingVmRef = useRef<boolean>(false)
 
   // Modal Auto-Restart Scheduler state
   const [schedulingVm, setSchedulingVm] = useState<VirtualMachine | null>(null)
@@ -622,7 +624,7 @@ export default function VmManagerView({ go }: ViewProps) {
   // Sync form fields when editingVm changes
   useEffect(() => {
     if (editingVm) {
-      setFormScope(editingVm.scope || "server")
+      setFormScope(editingVm.scope === "server" ? "server" : "local")
       setFormName(editingVm.name || "")
       setAddVmTab(editingVm.provider === "instabox" ? "instabox" : "manual")
       setFormSshHost(editingVm.sshHost || editingVm.ip || "")
@@ -875,7 +877,11 @@ export default function VmManagerView({ go }: ViewProps) {
   const handleMigrationFailure = useCallback(
     (vmId: string, previousVms: VirtualMachine[], message?: string) => {
       pendingMutationsRef.current.delete(vmId)
-      persistVmChanges(previousVms, false)
+      const prevVm = previousVms.find((item) => item.id === vmId)
+      const restored = prevVm
+        ? vmsRef.current.map((item) => (item.id === vmId ? prevVm : item))
+        : vmsRef.current
+      persistVmChanges(restored, false)
       notify(
         message ||
           (language === "id"
@@ -885,6 +891,43 @@ export default function VmManagerView({ go }: ViewProps) {
       )
     },
     [language, notify, persistVmChanges]
+  )
+
+  const executeMigrationRequest = useCallback(
+    async (
+      vmId: string,
+      targetScope: "server" | "local",
+      migratedVm: VirtualMachine,
+      previousVms: VirtualMachine[],
+      updatedList: VirtualMachine[]
+    ): Promise<boolean> => {
+      try {
+        const res = api.migrateVm
+          ? await api.migrateVm(vmId, targetScope, migratedVm)
+          : api.saveVms
+          ? await api.saveVms(updatedList)
+          : { status: "ok", success: true }
+        if (!res || res.status === "error" || res.success === false) {
+          handleMigrationFailure(vmId, previousVms, res?.message)
+          return false
+        }
+        if (res?.vm && typeof res.vm === "object" && res.vm.id === vmId) {
+          const resolvedVm: VirtualMachine =
+            targetScope === "local"
+              ? ({ ...res.vm, scope: "local" } as VirtualMachine)
+              : ({ ...migratedVm, ...res.vm } as VirtualMachine)
+          persistVmChanges(
+            vmsRef.current.map((item) => (item.id === vmId ? resolvedVm : item)),
+            false
+          )
+        }
+        return true
+      } catch (err: any) {
+        handleMigrationFailure(vmId, previousVms, err?.message)
+        return false
+      }
+    },
+    [handleMigrationFailure, persistVmChanges]
   )
 
   // v4.5.0 Beta: 1-Click Migration between Local & Server
@@ -917,29 +960,8 @@ export default function VmManagerView({ go }: ViewProps) {
     )
     persistVmChanges(updated, false)
 
-    if (api.migrateVm) {
-      try {
-        const res = await api.migrateVm(vm.id, nextScope, migratedVm)
-        if (!res || res.status === "error" || res.success === false) {
-          handleMigrationFailure(vm.id, previousVms, res?.message)
-          return
-        }
-      } catch (err: any) {
-        handleMigrationFailure(vm.id, previousVms, err?.message)
-        return
-      }
-    } else if (api.saveVms) {
-      try {
-        const res = await api.saveVms(updated)
-        if (!res || res.status === "error" || res.success === false) {
-          handleMigrationFailure(vm.id, previousVms, res?.message)
-          return
-        }
-      } catch (err: any) {
-        handleMigrationFailure(vm.id, previousVms, err?.message)
-        return
-      }
-    }
+    const ok = await executeMigrationRequest(vm.id, nextScope, migratedVm, previousVms, updated)
+    if (!ok) return
 
     const targetLabel = nextScope === "server" ? `${activeServerName}` : (language === "id" ? "Perangkat Ini (Lokal)" : "This Device (Local)")
     notify(
@@ -1121,6 +1143,7 @@ export default function VmManagerView({ go }: ViewProps) {
   // Save Add/Edit
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSavingVmRef.current) return
     const cleanName = formName.trim()
     if (!cleanName && addVmTab === "manual") {
       notify(language === "id" ? "Nama Virtual Machine wajib diisi." : "Virtual Machine name is required.", "danger")
@@ -1143,6 +1166,9 @@ export default function VmManagerView({ go }: ViewProps) {
     const tzInfo = getClientTimezoneInfo()
     let pendingInitialSave: Promise<any> = Promise.resolve()
 
+    isSavingVmRef.current = true
+    setIsSavingVm(true)
+    try {
     if (editingVm) {
       const editPatch: Partial<VirtualMachine> = {
         scope: formScope,
@@ -1161,7 +1187,8 @@ export default function VmManagerView({ go }: ViewProps) {
         ip: cleanHost || (addVmTab === "instabox" ? "ssh.instabox.sh" : ""),
         ...tzInfo,
       }
-      const scopeChanged = editingVm.scope !== formScope
+      const currentScope: "server" | "local" = editingVm.scope === "server" ? "server" : "local"
+      const scopeChanged = currentScope !== formScope
       if (scopeChanged) {
         const previousVms = vmsRef.current
         const migratedVm: VirtualMachine = { ...editingVm, ...editPatch }
@@ -1170,38 +1197,22 @@ export default function VmManagerView({ go }: ViewProps) {
           item.id === editingVm.id ? migratedVm : item
         )
         persistVmChanges(updated, false)
-        if (api.migrateVm) {
-          try {
-            const res = await api.migrateVm(editingVm.id, formScope, migratedVm)
-            if (!res || res.status === "error" || res.success === false) {
-              handleMigrationFailure(editingVm.id, previousVms, res?.message)
-              return
-            }
-          } catch (err: any) {
-            handleMigrationFailure(editingVm.id, previousVms, err?.message)
-            return
-          }
-        } else if (api.saveVms) {
-          try {
-            const res = await api.saveVms(updated)
-            if (!res || res.status === "error" || res.success === false) {
-              handleMigrationFailure(editingVm.id, previousVms, res?.message)
-              return
-            }
-          } catch (err: any) {
-            handleMigrationFailure(editingVm.id, previousVms, err?.message)
-            return
-          }
-        }
+        const migratedOk = await executeMigrationRequest(
+          editingVm.id,
+          formScope,
+          migratedVm,
+          previousVms,
+          updated
+        )
+        if (!migratedOk) return
         notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
         setEditingVm(null)
       } else {
-        void persistSingleVmPatch(editingVm, editPatch).then((ok) => {
-          if (ok) {
-            notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
-            setEditingVm(null)
-          }
-        })
+        const ok = await persistSingleVmPatch(editingVm, editPatch)
+        if (ok) {
+          notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
+          setEditingVm(null)
+        }
       }
     } else {
       const finalName = cleanName || (addVmTab === "instabox" ? "InstaBox-MicroVM" : "Linux-VPS")
@@ -1279,6 +1290,10 @@ export default function VmManagerView({ go }: ViewProps) {
       }).catch((err: any) => {
         console.warn("InstaBox sync error:", err)
       })
+    }
+    } finally {
+      isSavingVmRef.current = false
+      setIsSavingVm(false)
     }
   }
 
@@ -2514,6 +2529,7 @@ export default function VmManagerView({ go }: ViewProps) {
                   size="sm"
                   variant="primary"
                   type="submit"
+                  disabled={isSavingVm}
                   className="flex-1 justify-center !bg-brand !from-brand !to-brand text-brand-ink shadow-sm hover:opacity-90 h-7 text-[10.5px]"
                 >
                   {editingVm ? t("vm_save_changes_btn") : t("save_btn")}

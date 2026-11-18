@@ -1,4 +1,13 @@
 ===================================================
+[v4.6.0 - Beta] - 2026-11-18
+Catatan:
+1. Mesin SMB Mandiri MyServer Backend v1.4.0: Menambahkan daemon smbd terkelola di dalam container Backend yang membaca akun users, role, dan izin allowed_disks langsung dari SQLite serta menerapkan mutual exclusion port 445 dengan layanan SMB bawaan ZimaOS.
+2. Registrasi Resmi ZimaOS App Management & Auto-Chain OTA v1.3.0 -> v1.4.0: Memperbarui docker-compose.yml ber-x-casaos (index: /, /app/app bind mount) dan install_zimaos.sh agar menu Settings Docker tampil di ZimaOS sambil mempertahankan mount kustom /app/storage/*, dilengkapi auto-chain SSH rebuild pada handle_remote_backend_action saat rebuild_required=True.
+3. Portal Web UI Backend (GET /): Menghadirkan alur Bootstrap Admin pertama (terkunci 403 pasca-aktivasi), halaman Login, Panel Admin untuk manajemen user/allowed_disks/mode SMB, serta Storage Explorer ber-token JWT.
+4. Pemilih Sumber File Manager (ZimaOS vs Backend) di FilesView.tsx: Menambahkan segmented toggle dan Card login akun Backend terenkripsi DPAPI (api/smb/source & /api/open_backend_file_manager) dengan zero regression pada Telemetry, PowerView, AppsView, Syncthing, dan VM Manager.
+===================================================
+
+===================================================
 [v4.5.14 - Beta] - 2026-11-18
 Catatan:
 1. Migrasi VM Bolak-Balik Atomik (Server <-> Lokal <-> Server): Memperbarui _execute_vm_migrate_operation di myserver_core_service.py untuk menyimpan scope="local" (membersihkan serverId/serverName) serta mengunci mutasi _record_recent_vm_mutation (15 detik) sebelum panggilan DELETE ke backend dan melakukan rollback jika backend gagal/offline, sehingga polling 4 detik /api/vms/load tidak pernah menghilangkan VM.

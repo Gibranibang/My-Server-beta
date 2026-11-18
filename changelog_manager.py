@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.0",
+        "channel": "Beta",
+        "date": "2026-11-18",
+        "title": "Mesin SMB Mandiri Backend v1.4.0, Compose ZimaOS App Management, Web UI Explorer & Pemilih Sumber File Manager",
+        "notes": [
+            "Mesin SMB Mandiri MyServer Backend v1.4.0: Menambahkan daemon smbd terkelola di dalam container Backend yang membaca akun users, role, dan izin allowed_disks langsung dari SQLite serta menerapkan mutual exclusion port 445 dengan layanan SMB bawaan ZimaOS.",
+            "Registrasi Resmi ZimaOS App Management & Auto-Chain OTA v1.3.0 -> v1.4.0: Memperbarui docker-compose.yml ber-x-casaos (index: /, /app/app bind mount) dan install_zimaos.sh agar menu Settings Docker tampil di ZimaOS sambil mempertahankan mount kustom /app/storage/*, dilengkapi auto-chain SSH rebuild pada handle_remote_backend_action saat rebuild_required=True.",
+            "Portal Web UI Backend (GET /): Menghadirkan alur Bootstrap Admin pertama (terkunci 403 pasca-aktivasi), halaman Login, Panel Admin untuk manajemen user/allowed_disks/mode SMB, serta Storage Explorer ber-token JWT.",
+            "Pemilih Sumber File Manager (ZimaOS vs Backend) di FilesView.tsx: Menambahkan segmented toggle dan Card login akun Backend terenkripsi DPAPI (api/smb/source & /api/open_backend_file_manager) dengan zero regression pada Telemetry, PowerView, AppsView, Syncthing, dan VM Manager."
+        ],
+        "features": [
+            "Mesin SMB Mandiri Backend v1.4.0 & Mutual Exclusion Port 445",
+            "Format Compose ZimaOS App Management (Settings Docker) & Auto-Chain OTA Rebuild",
+            "Portal Web UI Backend: Bootstrap Admin, Panel User/Disk & Storage Explorer JWT",
+            "Pemilih Sumber File Manager ZimaOS vs Backend & Kredensial DPAPI di FilesView.tsx"
+        ]
+    },
+    {
         "version": "4.5.14",
         "channel": "Beta",
         "date": "2026-11-18",

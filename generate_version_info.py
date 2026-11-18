@@ -11,7 +11,7 @@ import sys
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def detect_app_version(default="4.5.14"):
+def detect_app_version(default="4.6.0"):
     """Membaca APP_VERSION_NUMBER dari myserver_core_service.py secara statis."""
     core_path = os.path.join(ROOT_DIR, "myserver_core_service.py")
     if os.path.exists(core_path):

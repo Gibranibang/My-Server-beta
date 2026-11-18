@@ -1,4 +1,13 @@
 ===================================================
+[v4.5.14 - Beta] - 2026-11-18
+Catatan:
+1. Migrasi VM Bolak-Balik Atomik (Server <-> Lokal <-> Server): Memperbarui _execute_vm_migrate_operation di myserver_core_service.py untuk menyimpan scope="local" (membersihkan serverId/serverName) serta mengunci mutasi _record_recent_vm_mutation (15 detik) sebelum panggilan DELETE ke backend dan melakukan rollback jika backend gagal/offline, sehingga polling 4 detik /api/vms/load tidak pernah menghilangkan VM.
+2. Integrasi Backend ZimaOS v1.3.0 dengan Pelepasan Tombstone Eksklusif: Menambahkan field eksplisit force_recreate (alias="forceRecreate") pada VmCreateRequest (app/models.py) serta pelepasan kondisional clear_vm_tombstone pada upsert_managed_vm (app/database.py) dan respons HTTP 409 di dev_server.py, menjaga blokir tombstone 60 detik tetap aktif bagi saveVms/updateVm latar belakang agar penghapusan multi-perangkat bebas zombie VM.
+3. Sinkronisasi Penuh Atribut camelCase ke snake_case: Memastikan _prepare_vm_payload_for_backend meneruskan seluruh konfigurasi VM tanpa tertimpa _db_snapshot usang, penerusan objek vm lengkap pada api.migrateVm (api.ts & api.real.ts), dan rollback atomik state UI/localStorage via handleMigrationFailure di VmManagerView.tsx.
+4. Pengamanan Antarmuka VmManagerView.tsx: Menambahkan kunci anti-double-submit (isSavingVmRef & disabled={isSavingVm}) selama proses migrasi asinkron serta konsistensi scope VM lokal lama yang belum memiliki field scope (undefined) agar tetap tersimpan sebagai local saat diedit.
+===================================================
+
+===================================================
 [v4.5.13 - Beta] - 2026-11-15
 Catatan:
 1. Isolasi EasyTier Multi-Server: Setiap server pada daftar multi-server kini menyimpan remote_id dan easytier_virtual_ip masing-masing secara independen di config.json dan companion UI, mencegah bentrokan IP antar-server.

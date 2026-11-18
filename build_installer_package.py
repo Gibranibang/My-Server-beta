@@ -21,7 +21,7 @@ import zipfile
 BASE_BETA = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(BASE_BETA, "dist")
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
-VERSION = "4.5.13"
+VERSION = "4.5.14"
 APP_NAME = "My-Server by algitha BETA"
 
 EASYTIER_FILES = (

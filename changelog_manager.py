@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.5.14",
+        "channel": "Beta",
+        "date": "2026-11-18",
+        "title": "Stabilitas Migrasi VM Bolak-Balik Atomik, Isolasi Tombstone Backend v1.3.0, & Rollback UI",
+        "notes": [
+            "Migrasi VM Bolak-Balik Atomik (Server <-> Lokal <-> Server): Memperbarui _execute_vm_migrate_operation di myserver_core_service.py untuk menyimpan scope=\"local\" (membersihkan serverId/serverName) serta mengunci mutasi _record_recent_vm_mutation (15 detik) sebelum panggilan DELETE ke backend dan melakukan rollback jika backend gagal/offline, sehingga polling 4 detik /api/vms/load tidak pernah menghilangkan VM.",
+            "Integrasi Backend ZimaOS v1.3.0 dengan Pelepasan Tombstone Eksklusif: Menambahkan field eksplisit force_recreate (alias=\"forceRecreate\") pada VmCreateRequest (app/models.py) serta pelepasan kondisional clear_vm_tombstone pada upsert_managed_vm (app/database.py) dan respons HTTP 409 di dev_server.py, menjaga blokir tombstone 60 detik tetap aktif bagi saveVms/updateVm latar belakang agar penghapusan multi-perangkat bebas zombie VM.",
+            "Sinkronisasi Penuh Atribut camelCase ke snake_case: Memastikan _prepare_vm_payload_for_backend meneruskan seluruh konfigurasi VM tanpa tertimpa _db_snapshot usang, penerusan objek vm lengkap pada api.migrateVm (api.ts & api.real.ts), dan rollback atomik state UI/localStorage via handleMigrationFailure di VmManagerView.tsx.",
+            "Pengamanan Antarmuka VmManagerView.tsx: Menambahkan kunci anti-double-submit (isSavingVmRef & disabled={isSavingVm}) selama proses migrasi asinkron serta konsistensi scope VM lokal lama yang belum memiliki field scope (undefined) agar tetap tersimpan sebagai local saat diedit."
+        ],
+        "features": [
+            "Migrasi VM Bolak-Balik Atomik Server <-> Lokal <-> Server",
+            "Integrasi Backend ZimaOS v1.3.0: Pelepasan Tombstone Eksklusif force_recreate",
+            "Sinkronisasi Penuh camelCase & Rollback Atomik State UI/localStorage",
+            "Kunci Anti-Double-Submit & Konsistensi Scope VM Lokal di VmManagerView.tsx"
+        ]
+    },
+    {
         "version": "4.5.13",
         "channel": "Beta",
         "date": "2026-11-15",

@@ -1585,6 +1585,13 @@ def save_server_wol_config(server_id, mac_address, broadcast_ip="255.255.255.255
     return modified
 
 
+def _normalize_smb_role(role_val):
+    r = str(role_val or "user").strip().lower()
+    if r in ("admin", "root"):
+        return r
+    return "user"
+
+
 def get_server_smb_source_config(server):
     """
     Mengambil konfigurasi sumber SMB ('zimaos' atau 'backend') serta kredensial
@@ -1596,7 +1603,7 @@ def get_server_smb_source_config(server):
             "username": "",
             "password": "",
             "access_token": "",
-            "role": "staff",
+            "role": "user",
             "allowed_disks": [],
             "hasCredentials": False,
         }
@@ -1611,7 +1618,7 @@ def get_server_smb_source_config(server):
     pw_dec = decrypt_credential(pw_enc) if pw_enc else ""
     tok_enc = auth.get("access_token", "")
     tok_dec = decrypt_credential(tok_enc) if tok_enc else ""
-    role = str(auth.get("role", "staff") or "staff").strip() or "staff"
+    role = _normalize_smb_role(auth.get("role"))
     disks = auth.get("allowed_disks") if isinstance(auth.get("allowed_disks"), list) else []
     allowed_disks = [str(d).strip() for d in disks if str(d).strip()]
     return {
@@ -1691,9 +1698,9 @@ def save_server_smb_source_config(
                 new_tok_enc = ""
 
             if role is not None:
-                new_role = str(role).strip() or "staff"
+                new_role = _normalize_smb_role(role)
             else:
-                new_role = str(existing.get("role", "staff") or "staff").strip() or "staff"
+                new_role = _normalize_smb_role(existing.get("role"))
 
             if allowed_disks is not None:
                 new_disks = [str(d).strip() for d in allowed_disks if str(d).strip()]

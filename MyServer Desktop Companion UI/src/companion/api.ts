@@ -922,7 +922,7 @@ export function createMockApi(): CompanionApi {
             drives: drives.map((d) => ({ ...d })),
           }
         }
-        const role = uname.toLowerCase() === "admin" ? "admin" : "staff"
+        const role = uname.toLowerCase() === "admin" ? "admin" : "user"
         const allowedDisks = role === "admin" ? ["DATA", "Media"] : ["DATA"]
         mockSmbSource = {
           ...mockSmbSource,

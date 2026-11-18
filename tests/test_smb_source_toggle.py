@@ -151,9 +151,9 @@ class _FakeHttpResponse:
 class _MockBackendApiState:
     def __init__(self):
         self.valid_users = {
-            "staff_budi": {
-                "password": "StaffSecret!9",
-                "role": "staff",
+            "user_1": {
+                "password": "UserSecret!9",
+                "role": "user",
                 "allowed_disks": ["Media", "Shared"],
             },
             "admin_ops": {
@@ -253,7 +253,7 @@ def _start_mock_backend_server(state):
                 if mode == "backend":
                     if not is_admin:
                         if not req_user or req_user != jwt_user or not req_pass or req_pass != rec["password"]:
-                            self._send(403, {"detail": "Forbidden: invalid staff credentials"})
+                            self._send(403, {"detail": "Forbidden: invalid user credentials"})
                             return
                     elif req_user and req_user != jwt_user:
                         self._send(403, {"detail": "Username mismatch"})
@@ -385,9 +385,9 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
             cfg,
             "srv_1",
             "backend",
-            username="staff_budi",
-            password="StaffSecret!9",
-            role="staff",
+            username="user_1",
+            password="UserSecret!9",
+            role="user",
             allowed_disks=["Media", "Backup"],
             access_token="jwt.token.abc123",
         )
@@ -410,17 +410,29 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
             raw_auth["access_token"].startswith(("dpapi:", "enc:")),
             f"Access token must be encrypted: {raw_auth['access_token']}",
         )
-        self.assertNotIn("StaffSecret!9", json.dumps(reloaded))
+        self.assertNotIn("UserSecret!9", json.dumps(reloaded))
         self.assertNotIn("jwt.token.abc123", json.dumps(reloaded))
 
         parsed = config_manager.get_server_smb_source_config(srv_after)
         self.assertEqual(parsed["source"], "backend")
-        self.assertEqual(parsed["username"], "staff_budi")
-        self.assertEqual(parsed["password"], "StaffSecret!9")
+        self.assertEqual(parsed["username"], "user_1")
+        self.assertEqual(parsed["password"], "UserSecret!9")
         self.assertEqual(parsed["access_token"], "jwt.token.abc123")
-        self.assertEqual(parsed["role"], "staff")
+        self.assertEqual(parsed["role"], "user")
         self.assertEqual(parsed["allowed_disks"], ["Media", "Backup"])
         self.assertTrue(parsed["hasCredentials"])
+
+        # Legacy "staff" role persisted/passed in must normalize cleanly to "user"
+        config_manager.save_server_smb_source_config(
+            reloaded,
+            "srv_1",
+            "backend",
+            role="staff",
+        )
+        parsed_legacy = config_manager.get_server_smb_source_config(
+            config_manager.load_or_create_config()["servers"][0]
+        )
+        self.assertEqual(parsed_legacy["role"], "user")
 
         config_manager.save_server_smb_source_config(
             reloaded,
@@ -431,20 +443,20 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
         parsed_refreshed = config_manager.get_server_smb_source_config(
             config_manager.load_or_create_config()["servers"][0]
         )
-        self.assertEqual(parsed_refreshed["password"], "StaffSecret!9")
+        self.assertEqual(parsed_refreshed["password"], "UserSecret!9")
         self.assertEqual(parsed_refreshed["access_token"], "jwt.token.refreshed")
 
         config_manager.save_server_smb_source_config(
             config_manager.load_or_create_config(),
             "srv_1",
             "backend",
-            username="other_staff",
+            username="other_user",
             password="OtherPass!1",
         )
         parsed_changed = config_manager.get_server_smb_source_config(
             config_manager.load_or_create_config()["servers"][0]
         )
-        self.assertEqual(parsed_changed["username"], "other_staff")
+        self.assertEqual(parsed_changed["username"], "other_user")
         self.assertEqual(parsed_changed["access_token"], "")
 
         config_manager.save_server_smb_source_config(
@@ -483,8 +495,8 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
 
             shares_a = smb_mount_manager.fetch_shares_from_backend_api(
                 backend_url,
-                username="staff_budi",
-                password="StaffSecret!9",
+                username="user_1",
+                password="UserSecret!9",
                 auth_token="",
                 on_token_refreshed=lambda tok, payload: refreshed.append((tok, payload)),
             )
@@ -498,8 +510,8 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
             refreshed.clear()
             shares_b = smb_mount_manager.fetch_shares_from_backend_api(
                 backend_url,
-                username="staff_budi",
-                password="StaffSecret!9",
+                username="user_1",
+                password="UserSecret!9",
                 auth_token="expired.jwt.30d",
                 on_token_refreshed=lambda tok, payload: refreshed.append((tok, payload)),
             )
@@ -514,8 +526,8 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
             state.force_disks_status = 401
             shares_c = smb_mount_manager.fetch_shares_from_backend_api(
                 backend_url,
-                username="staff_budi",
-                password="StaffSecret!9",
+                username="user_1",
+                password="UserSecret!9",
                 auth_token="expired.jwt.30d",
             )
             self.assertEqual(shares_c, [])
@@ -527,8 +539,8 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
             state.force_disks_status = 500
             shares_d = smb_mount_manager.fetch_shares_from_backend_api(
                 backend_url,
-                username="staff_budi",
-                password="StaffSecret!9",
+                username="user_1",
+                password="UserSecret!9",
                 auth_token="fresh.jwt.tok.2",
             )
             self.assertEqual(shares_d, [])
@@ -549,8 +561,8 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
             ) as mock_zima:
                 z_shares = smb_mount_manager.get_remote_smb_shares(
                     host="127.0.0.1",
-                    username="staff_budi",
-                    password="StaffSecret!9",
+                    username="user_1",
+                    password="UserSecret!9",
                     auth_token="zima_tok",
                     base_url="http://127.0.0.1:80",
                     smb_source="zimaos",
@@ -560,8 +572,8 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
 
                 b_shares = smb_mount_manager.get_remote_smb_shares(
                     host="127.0.0.1",
-                    username="staff_budi",
-                    password="StaffSecret!9",
+                    username="user_1",
+                    password="UserSecret!9",
                     auth_token="",
                     base_url="http://127.0.0.1:80",
                     smb_source="backend",
@@ -578,8 +590,8 @@ class TestSmbSourceConfigAndMountManager(unittest.TestCase):
                 ) as mock_get_shares:
                     smb_mount_manager.mount_all_smb_shares(
                         host="127.0.0.1",
-                        username="staff_budi",
-                        password="StaffSecret!9",
+                        username="user_1",
+                        password="UserSecret!9",
                         auth_token="tok_x",
                         base_url="http://127.0.0.1:80",
                         smb_source="backend",
@@ -690,26 +702,26 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
                     {
                         "action": "set",
                         "source": "backend",
-                        "username": "staff_budi",
-                        "password": "StaffSecret!9",
+                        "username": "user_1",
+                        "password": "UserSecret!9",
                     },
                 )
 
             self.assertEqual(status, 200)
             self.assertIs(res.get("success"), True)
             self.assertEqual(res.get("source"), "backend")
-            self.assertEqual(res.get("username"), "staff_budi")
-            self.assertEqual(res.get("role"), "staff")
+            self.assertEqual(res.get("username"), "user_1")
+            self.assertEqual(res.get("role"), "user")
             self.assertEqual(res.get("allowedDisks"), ["Media", "Shared"])
             self.assertIs(res.get("hasCredentials"), True)
             self.assertNotIn("password", res)
             self.assertNotIn("access_token", res)
-            self.assertNotIn("StaffSecret!9", json.dumps(res))
+            self.assertNotIn("UserSecret!9", json.dumps(res))
             self.assertNotIn("fresh.jwt.tok", json.dumps(res))
 
             # Verify strict sequence of Backend calls & mount pipeline
             self.assertEqual(len(state.verify_calls), 1)
-            self.assertEqual(state.mode_calls[0]["body"], {"mode": "backend", "username": "staff_budi", "password": "StaffSecret!9"})
+            self.assertEqual(state.mode_calls[0]["body"], {"mode": "backend", "username": "user_1", "password": "UserSecret!9"})
             self.assertGreaterEqual(len(state.disks_calls), 1)
             mock_purge.assert_called_once()
             purged_hosts = mock_purge.call_args[0][0]
@@ -720,8 +732,8 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             mkw = mock_mount.call_args.kwargs
             self.assertEqual(mkw.get("smb_source"), "backend")
             self.assertEqual(mkw.get("backend_url"), backend_url)
-            self.assertEqual(mkw.get("username"), "staff_budi")
-            self.assertEqual(mkw.get("password"), "StaffSecret!9")
+            self.assertEqual(mkw.get("username"), "user_1")
+            self.assertEqual(mkw.get("password"), "UserSecret!9")
 
             # Verify DPAPI/encrypted config & ZimaOS credentials untouched
             cfg_after = config_manager.load_or_create_config()
@@ -734,25 +746,25 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             self.assertTrue(raw_auth["access_token"].startswith(("dpapi:", "enc:")))
 
             all_logs = "\n".join(self.log_handler.messages)
-            self.assertNotIn("StaffSecret!9", all_logs)
+            self.assertNotIn("UserSecret!9", all_logs)
             self.assertNotIn("fresh.jwt.tok", all_logs)
         finally:
             bsrv.shutdown()
             bsrv.server_close()
 
-    def test_05_401_jwt_refresh_invalid_login_and_staff_admin_roundtrip(self):
+    def test_05_401_jwt_refresh_invalid_login_and_user_admin_roundtrip(self):
         state = _MockBackendApiState()
         bsrv, backend_url = _start_mock_backend_server(state)
         try:
-            # Seed expired 30-day JWT with stored staff credentials
+            # Seed expired 30-day JWT with stored user credentials
             cfg = config_manager.load_or_create_config()
             config_manager.save_server_smb_source_config(
                 cfg,
                 "srv_1",
                 "backend",
-                username="staff_budi",
-                password="StaffSecret!9",
-                role="staff",
+                username="user_1",
+                password="UserSecret!9",
+                role="user",
                 allowed_disks=["Media", "Shared"],
                 access_token="expired.jwt.30d",
             )
@@ -764,7 +776,7 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             self.assertIs(res_get.get("success"), True)
             self.assertIs(res_get.get("needsAuth"), False)
             self.assertEqual(len(state.verify_calls), 1)
-            self.assertEqual(state.verify_calls[0]["username"], "staff_budi")
+            self.assertEqual(state.verify_calls[0]["username"], "user_1")
             refreshed_cfg = config_manager.get_server_smb_source_config(
                 config_manager.load_or_create_config()["servers"][0]
             )
@@ -790,13 +802,13 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
                 core.rebind_storage_pipeline("startup_auto")
 
             self.assertEqual(len(state.verify_calls), 1)
-            self.assertEqual(state.verify_calls[0]["username"], "staff_budi")
+            self.assertEqual(state.verify_calls[0]["username"], "user_1")
             after_rebind_cfg = config_manager.get_server_smb_source_config(
                 config_manager.load_or_create_config()["servers"][0]
             )
             self.assertEqual(after_rebind_cfg["access_token"], "fresh.jwt.tok.2")
 
-            # 3. Staff round-trip switch back to zimaos sends stored username & password to /api/v1/smb/mode
+            # 3. User round-trip switch back to zimaos sends stored username & password to /api/v1/smb/mode
             state.mode_calls.clear()
             with patch.object(core, "_get_active_server_backend_url", return_value=backend_url), \
                  patch.object(core, "get_active_resolved_route", return_value=("http://192.168.55.50:80", "LAN")), \
@@ -813,7 +825,7 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             self.assertEqual(state.smb_mode, "zimaos")
             self.assertEqual(
                 state.mode_calls[-1]["body"],
-                {"mode": "zimaos", "username": "staff_budi", "password": "StaffSecret!9"},
+                {"mode": "zimaos", "username": "user_1", "password": "UserSecret!9"},
             )
             self.assertEqual(mock_z_mount.call_args.kwargs.get("smb_source"), "zimaos")
             self.assertEqual(mock_z_mount.call_args.kwargs.get("username"), "zima_admin")
@@ -844,7 +856,7 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
                 st_bad, res_bad = self._req(
                     "POST",
                     "/api/smb/source",
-                    {"action": "set", "source": "backend", "username": "staff_budi", "password": "WrongSecret!00"},
+                    {"action": "set", "source": "backend", "username": "user_1", "password": "WrongSecret!00"},
                 )
             self.assertEqual(st_bad, 401)
             self.assertIs(res_bad.get("success"), False)
@@ -862,8 +874,8 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
                 config_manager.load_or_create_config(),
                 "srv_1",
                 "zimaos",
-                username="staff_budi",
-                password="StaffSecret!9",
+                username="user_1",
+                password="UserSecret!9",
                 access_token="expired.jwt.30d",
             )
             state.verify_calls.clear()
@@ -931,9 +943,9 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             config_manager.load_or_create_config(),
             "srv_1",
             "backend",
-            username="staff_budi",
-            password="StaffSecret!9",
-            role="staff",
+            username="user_1",
+            password="UserSecret!9",
+            role="user",
             allowed_disks=["Media", "Shared"],
             access_token="tok_valid",
         )
@@ -1057,7 +1069,7 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
              patch.object(smb_mount_manager.subprocess, "run", side_effect=AssertionError("net.exe view must NOT run in backend mode")):
             shares_first = smb_mount_manager.get_remote_smb_shares(
                 host="10.126.126.2",
-                username="staff_zero",
+                username="user_zero",
                 password="secret",
                 smb_source="backend",
                 backend_url="http://10.126.126.2:8080",
@@ -1068,7 +1080,7 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             # Empty list should also be cached without calling net.exe view or re-querying API immediately
             shares_cached = smb_mount_manager.get_remote_smb_shares(
                 host="10.126.126.2",
-                username="staff_zero",
+                username="user_zero",
                 password="secret",
                 smb_source="backend",
                 backend_url="http://10.126.126.2:8080",
@@ -1124,26 +1136,26 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             self.assertEqual(refreshed["role"], admin_role)
             self.assertEqual(refreshed["allowed_disks"], ["DATA", "Media"])
 
-        # Staff user empty allowed_disks still updates normally
+        # Non-admin user empty allowed_disks still updates normally
         config_manager.save_server_smb_source_config(
             config_manager.load_or_create_config(),
             "srv_1",
             "backend",
-            username="staff_budi",
-            password="StaffSecret!9",
-            role="staff",
+            username="user_1",
+            password="UserSecret!9",
+            role="user",
             allowed_disks=["Media"],
-            access_token="expired.staff.jwt",
+            access_token="expired.user.jwt",
         )
         core._persist_refreshed_backend_token(
             "srv_1",
-            "fresh.staff.jwt",
-            {"role": "staff", "allowed_disks": []},
+            "fresh.user.jwt",
+            {"role": "user", "allowed_disks": []},
         )
-        staff_refreshed = config_manager.get_server_smb_source_config(
+        user_refreshed = config_manager.get_server_smb_source_config(
             config_manager.load_or_create_config()["servers"][0]
         )
-        self.assertEqual(staff_refreshed["allowed_disks"], [])
+        self.assertEqual(user_refreshed["allowed_disks"], [])
 
     def test_10_wr02_scan_live_drives_now_recognizes_easytier_virtual_ip(self):
         cfg = config_manager.load_or_create_config()
@@ -1340,20 +1352,20 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             self.assertIn(b'name="password"\r\n\r\nAdminOps!99\r\n', req_a["data"])
             self.assertIn(b'name="zimaos_token"\r\n\r\nzima_live_tok_99\r\n', req_a["data"])
 
-            # Case B: Staff token in backend_smb_auth must NOT be sent as OTA Bearer; uses ZimaOS creds & token
+            # Case B: Non-admin user token in backend_smb_auth must NOT be sent as OTA Bearer; uses ZimaOS creds & token
             config_manager.save_server_smb_source_config(
                 config_manager.load_or_create_config(),
                 "srv_1",
                 "backend",
-                username="staff_budi",
-                password="StaffSecret!9",
-                role="staff",
+                username="user_1",
+                password="UserSecret!9",
+                role="user",
                 allowed_disks=["Media"],
-                access_token="staff.jwt.must.not.send",
+                access_token="user.jwt.must.not.send",
             )
             captured_reqs.clear()
 
-            def _fake_urlopen_staff(req, timeout=20):
+            def _fake_urlopen_user(req, timeout=20):
                 captured_reqs.append(
                     {
                         "url": req.full_url,
@@ -1368,16 +1380,16 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             with patch.object(core, "_active_metrics_client", fake_mc), \
                  patch.object(core, "_get_backend_url_candidates", return_value=["http://127.0.0.1:8080"]), \
                  patch.object(core, "_get_active_server_backend_url", return_value="http://127.0.0.1:8080"), \
-                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.0"), \
+                 patch.object(core, "_get_bundled_backend_version", return_value="1.4.1"), \
                  patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)), \
-                 patch("urllib.request.urlopen", side_effect=_fake_urlopen_staff), \
-                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.0", "boot_id": "boot-3"}, 200)), \
+                 patch("urllib.request.urlopen", side_effect=_fake_urlopen_user), \
+                 patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok", "version": "1.4.1", "boot_id": "boot-3"}, 200)), \
                  patch("time.sleep", return_value=None):
                 res_b = core.handle_remote_backend_action({"action": "update", "serverId": "srv_1"})
 
             self.assertIs(res_b.get("success"), True)
             upd_req = [r for r in captured_reqs if r["url"].endswith("/api/v1/system/update")][0]
-            self.assertNotEqual(upd_req["headers"].get("authorization"), "Bearer staff.jwt.must.not.send")
+            self.assertNotEqual(upd_req["headers"].get("authorization"), "Bearer user.jwt.must.not.send")
             self.assertEqual(upd_req["headers"].get("authorization"), "Bearer zima.admin.jwt.B")
             self.assertIn(b'name="username"\r\n\r\nzima_admin\r\n', upd_req["data"])
             self.assertIn(b'name="password"\r\n\r\nZimaAdminPass!9\r\n', upd_req["data"])

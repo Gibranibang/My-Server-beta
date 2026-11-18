@@ -15725,8 +15725,8 @@ def _persist_refreshed_backend_token(server_id, new_token, auth_data=None):
     auth_dict = auth_data if isinstance(auth_data, dict) else {}
     new_role = auth_dict.get("role") if auth_dict.get("role") is not None else None
     raw_disks = auth_dict.get("allowed_disks")
-    eff_role = str(new_role if new_role is not None else smb_cfg.get("role", "staff")).strip().lower()
-    existing_role = str(smb_cfg.get("role", "staff")).strip().lower()
+    eff_role = str(new_role if new_role is not None else smb_cfg.get("role", "user")).strip().lower()
+    existing_role = str(smb_cfg.get("role", "user")).strip().lower()
     if isinstance(raw_disks, list):
         if len(raw_disks) == 0 and eff_role in ("admin", "root") and existing_role in ("admin", "root"):
             new_disks = None
@@ -15968,7 +15968,7 @@ def _handle_smb_source_request(body=None):
                     "error": err_msg,
                 }
             active_token = str((v_data or {}).get("access_token") or "").strip()
-            role = str((v_data or {}).get("role") or "staff").strip() or "staff"
+            role = config_manager._normalize_smb_role((v_data or {}).get("role")) if hasattr(config_manager, "_normalize_smb_role") else ("admin" if str((v_data or {}).get("role") or "").strip().lower() == "admin" else ("root" if str((v_data or {}).get("role") or "").strip().lower() == "root" else "user"))
             allowed_from_auth = (v_data or {}).get("allowed_disks") or []
 
             m_ok, m_data, m_status = _backend_http_request(
@@ -16017,7 +16017,7 @@ def _handle_smb_source_request(body=None):
 
             uname = smb_cfg["username"]
             pwd = smb_cfg["password"]
-            role = smb_cfg.get("role", "staff")
+            role = smb_cfg.get("role", "user")
             allowed_from_auth = smb_cfg.get("allowed_disks", [])
 
             m_status, m_data, active_token = _backend_authenticated_request(

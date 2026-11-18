@@ -145,7 +145,7 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     const submitBtn = screen.getByRole("button", { name: "Hubungkan Akun Backend" })
     expect(submitBtn).toBeDisabled()
 
-    fireEvent.change(userInput, { target: { value: "staff_budi" } })
+    fireEvent.change(userInput, { target: { value: "user_1" } })
     expect(submitBtn).toBeDisabled()
     fireEvent.change(passInput, { target: { value: "rahasia123" } })
     expect(submitBtn).toBeEnabled()
@@ -156,7 +156,7 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     await waitFor(() => {
       expect(api.configureFileManagerSource).toHaveBeenCalledWith({
         source: "backend",
-        username: "staff_budi",
+        username: "user_1",
         password: "rahasia123",
         autoMount: true,
       })
@@ -166,9 +166,9 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
       expect((api.listDrives as any).mock.calls.length).toBeGreaterThan(listCallsBeforeSubmit)
     })
 
-    const monoUser = await screen.findByText("staff_budi")
-    expect(monoUser).toHaveAttribute("title", "staff_budi")
-    expect(screen.getByText("Staff · 1 Disk")).toBeInTheDocument()
+    const monoUser = await screen.findByText("user_1")
+    expect(monoUser).toHaveAttribute("title", "user_1")
+    expect(screen.getByText("User · 1 Disk")).toBeInTheDocument()
     const switchBtn = screen.getByRole("button", { name: "Ganti Akun Backend" })
     expect(switchBtn).toBeInTheDocument()
 
@@ -219,13 +219,13 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
         source: "backend",
         hasCredentials: true,
         needsAuth: true,
-        username: "staff_budi",
+        username: "user_1",
         backendOnline: true,
       },
     })
 
     const userInput = (await screen.findByLabelText("Username Akun Backend")) as HTMLInputElement
-    expect(userInput.value).toBe("staff_budi")
+    expect(userInput.value).toBe("user_1")
     expect(screen.getByLabelText("Kata Sandi Akun Backend")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Hubungkan Akun Backend" })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Ganti Akun Backend" })).not.toBeInTheDocument()
@@ -351,7 +351,7 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     const rootMono = await screen.findByText("root")
     expect(rootMono).toHaveAttribute("title", "root")
     expect(screen.getByText("Admin")).toBeInTheDocument()
-    expect(screen.queryByText(/Staff ·/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/User ·/i)).not.toBeInTheDocument()
   })
 
   it("keeps Batal Ganti Akun visible when Ganti Akun Backend submission fails (WR-05)", async () => {
@@ -360,8 +360,8 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
       initialSource: {
         success: true,
         source: "backend",
-        username: "staff_budi",
-        role: "staff",
+        username: "user_1",
+        role: "user",
         allowedDisks: ["DATA"],
         hasCredentials: true,
         needsAuth: false,
@@ -397,8 +397,8 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     await waitFor(() => {
       expect(screen.queryByLabelText("Kata Sandi Akun Backend")).not.toBeInTheDocument()
     })
-    expect(screen.getByText("staff_budi")).toBeInTheDocument()
-    expect(screen.getByText("Staff · 1 Disk")).toBeInTheDocument()
+    expect(screen.getByText("user_1")).toBeInTheDocument()
+    expect(screen.getByText("User · 1 Disk")).toBeInTheDocument()
   })
 
   it("shows danger toast on openBackendFileManager failure and removes redundant pywebview catch fallback (WR-05, WR-09)", async () => {

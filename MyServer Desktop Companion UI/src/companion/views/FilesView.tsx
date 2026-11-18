@@ -529,7 +529,7 @@ export default function FilesView() {
                   <Chip size="sm" tone="info" className="shrink-0">
                     {["admin", "root"].includes((sourceStatus?.role || "").toLowerCase())
                       ? "Admin"
-                      : `Staff · ${(sourceStatus?.allowedDisks || []).length} Disk`}
+                      : `User · ${(sourceStatus?.allowedDisks || []).length} Disk`}
                   </Chip>
                 </div>
               </div>

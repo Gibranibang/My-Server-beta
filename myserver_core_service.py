@@ -4294,6 +4294,151 @@ def _execute_vm_update_operation(body):
     }
 
 
+def _execute_vm_migrate_operation(body):
+    """Menjalankan migrasi VM antara Server ZimaOS dan Lokal secara atomik. Return (http_status, response_dict)."""
+    if not isinstance(body, dict):
+        body = {}
+    vm_id = str(body.get("vmId") or body.get("vm_id") or body.get("id") or "").strip()
+    target_scope = str(body.get("targetScope") or body.get("target_scope") or "").strip().lower()
+    vm_data = body.get("vm") if isinstance(body.get("vm"), dict) else None
+    if not vm_id or target_scope not in ("server", "local"):
+        return 400, {
+            "status": "error",
+            "success": False,
+            "message": "vmId dan targetScope ('server'|'local') wajib diisi",
+        }
+
+    cfg = config_manager.load_or_create_config()
+    local_vms = cfg.get("vms", []) or []
+    srv = config_manager.get_active_server(cfg)
+    existing_local = next((v for v in local_vms if isinstance(v, dict) and v.get("id") == vm_id), None)
+
+    if target_scope == "server":
+        backend_url = _get_active_server_backend_url(cfg)
+        if not backend_url or not srv:
+            return 400, {
+                "status": "error",
+                "success": False,
+                "message": "Server ZimaOS tidak terhubung atau offline",
+            }
+        merged_source = {**(existing_local or {}), **(vm_data or {})} if (existing_local or vm_data) else None
+        if not merged_source:
+            return 404, {
+                "status": "error",
+                "success": False,
+                "message": f"VM '{vm_id}' tidak ditemukan",
+            }
+
+        target_vm = dict(merged_source)
+        target_vm["id"] = vm_id
+        target_vm["scope"] = "server"
+        target_vm["serverId"] = srv.get("id")
+        target_vm["serverName"] = srv.get("name")
+
+        _deleted_vms_tombstone.pop(vm_id, None)
+        b_payload = _prepare_vm_payload_for_backend(target_vm)
+        b_payload["force_recreate"] = True
+        b_payload["_force_recreate"] = True
+
+        try:
+            ok, data, _code = _backend_http_request(
+                f"{backend_url}/api/v1/vms",
+                method="POST",
+                json_body=b_payload,
+                timeout=5.0,
+                retries=1,
+            )
+            if not ok:
+                return 500, {
+                    "status": "error",
+                    "success": False,
+                    "message": f"Gagal migrasi ke ZimaOS: {data}",
+                }
+        except Exception as be:
+            return 500, {
+                "status": "error",
+                "success": False,
+                "message": f"Gagal migrasi ke ZimaOS: {be}",
+            }
+
+        # Clear any prior local-migration mutation before normalizing backend response
+        _recent_vm_mutations.pop(vm_id, None)
+        _record_recent_vm_mutation(
+            vm_id,
+            {"scope": "server", "serverId": srv.get("id"), "serverName": srv.get("name")},
+            ttl=15.0,
+        )
+        if isinstance(data, dict) and data.get("id") == vm_id:
+            normalized = _normalize_server_vm_entry(dict(data), srv)
+            for field in ("status", "runtimeMinutes", "maxRuntimeMinutes", "telemetry"):
+                if normalized.get(field) is not None:
+                    target_vm[field] = normalized[field]
+            target_vm["scope"] = "server"
+            target_vm["serverId"] = srv.get("id")
+            target_vm["serverName"] = srv.get("name")
+
+        updated_list = []
+        replaced = False
+        for v in local_vms:
+            if isinstance(v, dict) and v.get("id") == vm_id:
+                updated_list.append(target_vm)
+                replaced = True
+            else:
+                updated_list.append(v)
+        if not replaced:
+            updated_list.append(target_vm)
+        cfg["vms"] = updated_list
+        config_manager.save_config(cfg)
+        return 200, {"status": "ok", "success": True, "vm": target_vm}
+
+    # target_scope == "local"
+    merged_source = {**(existing_local or {}), **(vm_data or {})} if (existing_local or vm_data) else None
+    if not merged_source:
+        return 404, {
+            "status": "error",
+            "success": False,
+            "message": f"VM '{vm_id}' tidak ditemukan",
+        }
+
+    target_vm = dict(merged_source)
+    target_vm["id"] = vm_id
+    target_vm["scope"] = "local"
+    target_vm.pop("serverId", None)
+    target_vm.pop("serverName", None)
+
+    _deleted_vms_tombstone.pop(vm_id, None)
+    _recent_vm_mutations.pop(vm_id, None)
+    _record_recent_vm_mutation(
+        vm_id,
+        {"scope": "local", "serverId": None, "serverName": None},
+        ttl=15.0,
+    )
+
+    # Persist local scope BEFORE remote DELETE so concurrent 4s /api/vms/load polls never drop the VM
+    updated_list = []
+    replaced = False
+    for v in local_vms:
+        if isinstance(v, dict) and v.get("id") == vm_id:
+            updated_list.append(target_vm)
+            replaced = True
+        else:
+            updated_list.append(v)
+    if not replaced:
+        updated_list.append(target_vm)
+    cfg["vms"] = updated_list
+    config_manager.save_config(cfg)
+
+    target_srv_id = (existing_local or {}).get("serverId") or (vm_data or {}).get("serverId")
+    del_backend_url = _get_active_server_backend_url(cfg, target_server_id=target_srv_id) or _get_active_server_backend_url(cfg)
+    if del_backend_url and vm_id:
+        try:
+            _backend_http_request(f"{del_backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0)
+        except Exception as be:
+            logger_manager.log_debug(f"[api/vms/migrate] Warning: Gagal hapus dari backend saat migrasi ke lokal: {be}")
+
+    return 200, {"status": "ok", "success": True, "vm": target_vm}
+
+
 def _parse_backend_semver(v_str):
     import re
     cleaned = (v_str or "").strip()
@@ -29966,58 +30111,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"status": "error", "message": "Invalid vms list"}, status=400)
             return
 
-        if path == "/api/vms/migrate":
-            vm_id = body.get("vmId") or body.get("vm_id") or body.get("id")
-            target_scope = body.get("targetScope") or body.get("target_scope")  # "server" or "local"
-            vm_data = body.get("vm")
-            cfg = config_manager.load_or_create_config()
-            local_vms = cfg.get("vms", []) or []
-            srv = config_manager.get_active_server(cfg)
-            backend_url = _get_active_server_backend_url(cfg)
-
-            if target_scope == "server":
-                if not backend_url or not srv:
-                    self._send_json({"status": "error", "message": "Server ZimaOS tidak terhubung atau offline"}, status=400)
-                    return
-                target_vm = vm_data or next((v for v in local_vms if isinstance(v, dict) and v.get("id") == vm_id), None)
-                if not target_vm:
-                    self._send_json({"status": "error", "message": f"VM '{vm_id}' tidak ditemukan"}, status=404)
-                    return
-                target_vm["scope"] = "server"
-                target_vm["serverId"] = srv.get("id")
-                target_vm["serverName"] = srv.get("name")
-                try:
-                    b_payload = _prepare_vm_payload_for_backend(target_vm)
-                    ok, data, code = _backend_http_request(f"{backend_url}/api/v1/vms", method="POST", json_body=b_payload, timeout=3.0)
-                    if not ok:
-                        self._send_json({"status": "error", "message": f"Gagal migrasi ke ZimaOS: {data}"}, status=500)
-                        return
-                except Exception as be:
-                    self._send_json({"status": "error", "message": f"Gagal migrasi ke ZimaOS: {be}"}, status=500)
-                    return
-                updated_list = [v for v in local_vms if isinstance(v, dict) and v.get("id") != vm_id]
-                updated_list.append(target_vm)
-                cfg["vms"] = updated_list
-                config_manager.save_config(cfg)
-                self._send_json({"status": "ok", "success": True, "vm": target_vm})
-                return
-
-            elif target_scope == "local":
-                target_vm = vm_data or next((v for v in local_vms if isinstance(v, dict) and v.get("id") == vm_id), {})
-                target_vm["scope"] = "local"
-                target_vm.pop("serverId", None)
-                target_vm.pop("serverName", None)
-                if backend_url and vm_id:
-                    try:
-                        _backend_http_request(f"{backend_url}/api/v1/vms/{vm_id}", method="DELETE", timeout=3.0)
-                    except Exception as be:
-                        logger_manager.log_debug(f"[api/vms/migrate] Warning: Gagal hapus dari backend saat migrasi ke lokal: {be}")
-                filtered = [v for v in local_vms if isinstance(v, dict) and v.get("id") != vm_id]
-                filtered.append(target_vm)
-                cfg["vms"] = filtered
-                config_manager.save_config(cfg)
-                self._send_json({"status": "ok", "success": True, "vm": target_vm})
-                return
+        if path in ("/api/vms/migrate", "/api/vms_migrate"):
+            http_status, resp_body = _execute_vm_migrate_operation(body)
+            self._send_json(resp_body, status=http_status)
+            return
 
         if path in ("/api/wizard/verify_zimaos", "/api/wizard_verify_zimaos"):
             status_code, res = _handle_wizard_verify_zimaos(body)

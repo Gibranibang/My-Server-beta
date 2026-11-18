@@ -5201,8 +5201,28 @@ def handle_remote_backend_action(body):
                         last_ota_err = cand_err
                 if ota_succeeded_url:
                     pre_boot_id = (ota_resp_data.get("boot_id") or "").strip()
-                    rebuild_required = bool(ota_resp_data.get("rebuild_required"))
-                    has_ssh_creds = bool(_resolve_ssh_admin_credentials(srv)[1])
+                    has_ssh_override_pwd = bool(
+                        body.get("sshPassword")
+                        if body.get("sshPassword") is not None
+                        else body.get("ssh_password")
+                    )
+                    has_ssh_creds = bool(_resolve_ssh_admin_credentials(srv)[1]) or has_ssh_override_pwd
+                    cached_data = (
+                        _cached_backend_info.get("data")
+                        if isinstance(_cached_backend_info.get("data"), dict)
+                        else {}
+                    )
+                    pre_ota_cached_ver = ""
+                    if _cached_backend_info.get("server_id") == srv_id and cached_data.get("online"):
+                        pre_ota_cached_ver = (cached_data.get("version") or "").strip()
+                    old_ver = (ota_resp_data.get("old_version") or pre_ota_cached_ver or "").strip()
+                    crossed_140_boundary = bool(
+                        old_ver
+                        and target_ver
+                        and _compare_backend_versions(old_ver, "1.4.0") < 0
+                        and _compare_backend_versions(target_ver, "1.4.0") >= 0
+                    )
+                    rebuild_required = bool(ota_resp_data.get("rebuild_required")) or crossed_140_boundary
                     logger_manager.log_info("[handle_remote_backend_action] HTTP OTA diterima! Menunggu proses restart & verifikasi /health...")
 
                     # Bersihkan cache lama agar status versi pra-restart tidak terbaca sebagai sukses palsu
@@ -5231,6 +5251,11 @@ def handle_remote_backend_action(body):
                         ver = (health_data.get("version") or "").strip()
                         active_target_ver = target_ver or ver
                         backend_state = _set_backend_health_cache(srv_id, True, ver, active_target_ver, ota_succeeded_url)
+                        if rebuild_required and has_ssh_creds:
+                            logger_manager.log_info(
+                                "[handle_remote_backend_action] Perubahan Dockerfile/docker-compose.yml terdeteksi (rebuild_required=True); melanjutkan auto-chain rebuild via SSH..."
+                            )
+                            raise RuntimeError("Auto-chaining SSH rebuild because rebuild_required=True")
                         msg = f"Backend ZimaOS v{ver or active_target_ver} berhasil diperbarui!"
                         if rebuild_required:
                             msg += " Perubahan Dockerfile/requirements.txt terdeteksi; disarankan rebuild image container via SSH."
@@ -13221,6 +13246,15 @@ def _scan_live_drives_now():
 
     seen_shares = set()
 
+    smb_cfg_scan = {"source": "zimaos", "allowed_disks": []}
+    try:
+        cfg_scan = config_manager.load_or_create_config() if config_manager else {}
+        srv_scan = config_manager.get_active_server(cfg_scan) if config_manager else None
+        if srv_scan and hasattr(config_manager, "get_server_smb_source_config"):
+            smb_cfg_scan = config_manager.get_server_smb_source_config(srv_scan)
+    except Exception:
+        pass
+
 
 
 
@@ -13559,43 +13593,17 @@ def _scan_live_drives_now():
 
 
 
-                    for cp in cached_parts:
-
-
-
-                        if not isinstance(cp, dict):
-
-
-
-                            continue
-
-
-
-                        cp_raw = str(cp.get("raw_name") or cp.get("name") or "").strip().lower()
-
-
-
-                        cp_drv = str(cp.get("drive_letter") or "").strip().upper()
-
-
-
-                        if (cp_drv == d or cp_raw == share_key or cp_raw.startswith(share_key + " (")) and int(cp.get("total_bytes", 0)) > 0:
-
-
-
-                            tot = int(cp.get("total_bytes", 0))
-
-
-
-                            used_b = int(cp.get("used_bytes", 0))
-
-
-
-                            fr = max(tot - used_b, 0)
-
-
-
-                            break
+                    if smb_cfg_scan.get("source") != "backend":
+                        for cp in cached_parts:
+                            if not isinstance(cp, dict):
+                                continue
+                            cp_raw = str(cp.get("raw_name") or cp.get("name") or "").strip().lower()
+                            cp_drv = str(cp.get("drive_letter") or "").strip().upper()
+                            if (cp_drv == d or cp_raw == share_key or cp_raw.startswith(share_key + " (")) and int(cp.get("total_bytes", 0)) > 0:
+                                tot = int(cp.get("total_bytes", 0))
+                                used_b = int(cp.get("used_bytes", 0))
+                                fr = max(tot - used_b, 0)
+                                break
 
 
 
@@ -13878,6 +13886,40 @@ def _scan_live_drives_now():
 
 
 
+
+    if smb_cfg_scan.get("source") == "backend":
+        try:
+            used_letters = {
+                str(item.get("letter", "")).rstrip(":").upper()
+                for item in drives
+                if isinstance(item, dict)
+            }
+            avail_pool = [
+                str(lt).rstrip(":").upper()
+                for lt in (smb_mount_manager.get_available_drive_letters() or [])
+                if str(lt).rstrip(":").upper() not in used_letters
+            ]
+            for disk_name in (smb_cfg_scan.get("allowed_disks") or []):
+                d_clean = str(disk_name).strip()
+                if not d_clean:
+                    continue
+                d_key = d_clean.lower()
+                if d_key in seen_shares:
+                    continue
+                seen_shares.add(d_key)
+                next_letter = avail_pool.pop(0) if avail_pool else "–"
+                if next_letter != "–":
+                    used_letters.add(next_letter)
+                drives.append({
+                    "letter": next_letter,
+                    "name": d_clean,
+                    "free": "–",
+                    "total": "–",
+                    "usedPct": 0,
+                    "mounted": False,
+                })
+        except Exception:
+            pass
 
     if not drives:
 
@@ -15195,94 +15237,26 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
 
 
 
+        active_u, _ = get_active_resolved_route(cfg)
+
         if not soft_mode:
-
-
-
-
-
-
-
             all_hosts = set()
-
-
-
-
-
-
-
             for c in srv.get("connections", []):
-
-
-
-
-
-
-
                 if isinstance(c, dict) and c.get("url"):
-
-
-
-
-
-
-
                     h = c["url"].replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
-
-
-
-
-
-
-
                     if h:
-
-
-
-
-
-
-
                         all_hosts.add(h)
-
-
-
-
-
-
-
             if srv.get("zerotier_virtual_ip"):
+                all_hosts.add(str(srv["zerotier_virtual_ip"]).strip())
+            if srv.get("easytier_virtual_ip"):
+                all_hosts.add(str(srv["easytier_virtual_ip"]).strip())
+            if active_u:
+                active_h = _extract_host_from_url(active_u)
+                if active_h:
+                    all_hosts.add(active_h)
 
-
-
-
-
-
-
-                all_hosts.add(srv["zerotier_virtual_ip"].strip())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            smb_mount_manager.clear_smb_share_cache()
             smb_mount_manager.purge_smb_sessions(all_hosts)
-
-
-
-
-
-
-
             time.sleep(0.5)
 
 
@@ -15299,266 +15273,78 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
 
 
 
-        act_p = srv.get("active_profile", "Admin")
-
-
-
-
-
-
-
-        creds = config_manager.get_server_credentials(srv, act_p)
-
-
-
-
-
-
-
-        u_val = creds.get("username", "")
-
-
-
-
-
-
-
-        p_val = creds.get("password", "")
-
-
-
-
-
-
-
-        active_u, _ = get_active_resolved_route(cfg)
-
-
-
-
-
-
-
+        smb_cfg = config_manager.get_server_smb_source_config(srv)
+        smb_source = smb_cfg.get("source", "zimaos")
         conns = srv.get("connections", [])
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # Gunakan kembali token metrics client aktif & sinkronkan ZeroTier IP
-
-
-
-        auth_token = ""
-
-
-
-
-
-
-
-        try:
-
-
-
-
-
-
-
-            client = get_cached_metrics_client(srv, active_u)
-
-
-
-
-
-
-
-            if client is not None:
-
-
-
-
-
-
-
-                if not client.token:
-
-
-
-
-
-
-
-                    client.authenticate()
-
-
-
-
-
-
-
-                auth_token = client.token or ""
-
-
-
-
-
-
-
-                sync_server_zerotier_ip(srv.get("id"), client=client)
-
-
-
-
-
-
-
-                cfg = config_manager.load_or_create_config()
-
-
-
-
-
-
-
-                srv = config_manager.get_active_server(cfg) or srv
-
-
-
-
-
-
-
-        except Exception:
-
-
-
-
-
-
-
-            pass
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
+        backend_url = ""
+        on_token_refreshed_cb = None
 
+        if smb_source == "backend":
+            u_val = smb_cfg.get("username", "")
+            p_val = smb_cfg.get("password", "")
+            auth_token = smb_cfg.get("access_token", "")
+            raw_backend_url = _get_active_server_backend_url(cfg, target_server_id=srv.get("id")) or ""
+            resolved_b_host = ""
+            try:
+                resolved_b_host = smb_mount_manager.resolve_smb_host(host, conns, is_domain, zt_ip) or ""
+            except Exception:
+                resolved_b_host = ""
+            if raw_backend_url:
+                backend_url = smb_mount_manager._normalize_backend_api_url(
+                    raw_backend_url, fallback_host=resolved_b_host
+                )
+                if (
+                    _is_wan_host_safe(_extract_host_from_url(backend_url))
+                    and resolved_b_host
+                    and not _is_wan_host_safe(resolved_b_host)
+                ):
+                    backend_url = _format_backend_url(resolved_b_host, 8080)
+            elif active_u:
+                backend_url = smb_mount_manager._normalize_backend_api_url(
+                    active_u, fallback_host=resolved_b_host
+                )
+            elif resolved_b_host:
+                backend_url = _format_backend_url(resolved_b_host, 8080)
 
+            target_srv_id = srv.get("id")
+            on_token_refreshed_cb = (
+                lambda tok, data, sid=target_srv_id: _persist_refreshed_backend_token(sid, tok, data)
+            )
+        else:
+            act_p = srv.get("active_profile", "Admin")
+            creds = config_manager.get_server_credentials(srv, act_p)
+            u_val = creds.get("username", "")
+            p_val = creds.get("password", "")
 
-
-
-
-
-
-
-
-
-
-
-
+            # Gunakan kembali token metrics client aktif & sinkronkan ZeroTier IP
+            auth_token = ""
+            try:
+                client = get_cached_metrics_client(srv, active_u)
+                if client is not None:
+                    if not client.token:
+                        client.authenticate()
+                    auth_token = client.token or ""
+                    sync_server_zerotier_ip(srv.get("id"), client=client)
+                    cfg = config_manager.load_or_create_config()
+                    srv = config_manager.get_active_server(cfg) or srv
+            except Exception:
+                pass
+            host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
 
         res = smb_mount_manager.mount_all_smb_shares(
-
-
-
-
-
-
-
             host=host,
-
-
-
-
-
-
-
             username=u_val,
-
-
-
-
-
-
-
             password=p_val,
-
-
-
-
-
-
-
             server_connections=conns,
-
-
-
-
-
-
-
             is_domain_route=is_domain,
-
-
-
-
-
-
-
             zerotier_ip=zt_ip,
-
-
-
-
-
-
-
             auth_token=auth_token,
-
-
-
-
-
-
-
-            base_url=active_u.rstrip("/"),
-
-
-
-
-
-
-
+            base_url=(active_u or "").rstrip("/"),
             force_refresh=True,
-
-
-
-
-
-
-
+            smb_source=smb_source,
+            backend_url=backend_url,
+            on_token_refreshed=on_token_refreshed_cb,
         )
 
 
@@ -15736,6 +15522,486 @@ def mount_active_server_smb():
 
 
     return rebind_storage_pipeline("mount_all")
+
+
+def _verify_backend_account(backend_url, username, password):
+    """Memverifikasi kredensial akun Backend ke POST /api/v1/auth/verify tanpa fallback ZimaOS."""
+    clean_url = str(backend_url or "").strip().rstrip("/")
+    if not clean_url:
+        return 400, {"error": "URL Backend tidak tersedia."}
+    ok, data, status = _backend_http_request(
+        f"{clean_url}/api/v1/auth/verify",
+        method="POST",
+        json_body={"username": username, "password": password},
+        timeout=5.0,
+        retries=1,
+    )
+    if ok and status == 200 and isinstance(data, dict):
+        return 200, data
+    if isinstance(data, dict):
+        err_detail = data.get("detail") or data.get("error") or data.get("message") or f"HTTP {status}"
+    else:
+        err_detail = str(data or f"HTTP {status}")
+    return (status or 502), {"error": _mask_secret(err_detail, password)}
+
+
+def _persist_refreshed_backend_token(server_id, new_token, auth_data=None):
+    """Memperbarui access_token JWT Backend terenkripsi DPAPI tanpa menyentuh password atau kredensial ZimaOS."""
+    if not config_manager or not new_token:
+        return False
+    cfg = config_manager.load_or_create_config()
+    srv = _select_target_server(cfg, target_server_id=server_id)
+    if not srv:
+        return False
+    actual_srv_id = srv.get("id")
+    smb_cfg = config_manager.get_server_smb_source_config(srv)
+    auth_dict = auth_data if isinstance(auth_data, dict) else {}
+    new_role = auth_dict.get("role") if auth_dict.get("role") is not None else None
+    new_disks = auth_dict.get("allowed_disks") if isinstance(auth_dict.get("allowed_disks"), list) else None
+    return config_manager.save_server_smb_source_config(
+        cfg,
+        actual_srv_id,
+        source=smb_cfg.get("source", "zimaos"),
+        role=new_role,
+        allowed_disks=new_disks,
+        access_token=str(new_token).strip(),
+    )
+
+
+def _backend_authenticated_request(backend_url, endpoint, smb_cfg, srv_id, method="GET", json_body=None):
+    """
+    Mengirim permintaan terautentikasi Bearer JWT ke MyServer Backend dengan silent re-auth
+    satu kali ke POST /api/v1/auth/verify ketika token kosong atau kedaluwarsa (HTTP 401),
+    memakai kredensial terisolasi backend_smb_auth tanpa pernah fallback ke ZimaOS.
+    """
+    clean_base = str(backend_url or "").strip().rstrip("/")
+    ep = endpoint if str(endpoint).startswith("/") else f"/{endpoint}"
+    pwd = str((smb_cfg or {}).get("password") or "")
+    uname = str((smb_cfg or {}).get("username") or "").strip()
+    has_creds = bool((smb_cfg or {}).get("hasCredentials") and uname and pwd)
+    token = str((smb_cfg or {}).get("access_token") or "").strip()
+
+    verified_this_call = False
+    if not token:
+        if has_creds:
+            v_status, v_data = _verify_backend_account(clean_base, uname, pwd)
+            verified_this_call = True
+            if v_status == 200 and isinstance(v_data, dict) and v_data.get("access_token"):
+                token = str(v_data.get("access_token") or "").strip()
+                _persist_refreshed_backend_token(srv_id, token, v_data)
+            else:
+                err_msg = _mask_secret((v_data or {}).get("error") or "Autentikasi Backend diperlukan.", pwd)
+                return v_status, {"success": False, "needsAuth": (v_status == 401), "error": err_msg}, ""
+        else:
+            return 401, {"success": False, "needsAuth": True, "error": "Kredensial akun Backend belum dikonfigurasi."}, ""
+
+    ok, data, status_code = _backend_http_request(
+        f"{clean_base}{ep}",
+        method=method,
+        json_body=json_body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=5.0,
+        retries=1,
+    )
+
+    if status_code == 401:
+        if not verified_this_call and has_creds:
+            v_status, v_data = _verify_backend_account(clean_base, uname, pwd)
+            if v_status == 200 and isinstance(v_data, dict) and v_data.get("access_token"):
+                token = str(v_data.get("access_token") or "").strip()
+                _persist_refreshed_backend_token(srv_id, token, v_data)
+                ok, data, status_code = _backend_http_request(
+                    f"{clean_base}{ep}",
+                    method=method,
+                    json_body=json_body,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=5.0,
+                    retries=1,
+                )
+                if status_code == 401:
+                    err_detail = (
+                        (data.get("detail") or data.get("error") or "Sesi Backend kedaluwarsa. Silakan login ulang.")
+                        if isinstance(data, dict)
+                        else str(data or "Unauthorized")
+                    )
+                    return 401, {
+                        "success": False,
+                        "needsAuth": True,
+                        "error": _mask_secret(_mask_secret(err_detail, pwd), token),
+                    }, ""
+            else:
+                err_detail = (v_data or {}).get("error") or "Sesi Backend kedaluwarsa. Silakan login ulang."
+                return (401 if v_status == 401 else v_status), {
+                    "success": False,
+                    "needsAuth": True,
+                    "error": _mask_secret(_mask_secret(err_detail, pwd), token),
+                }, ""
+        else:
+            err_detail = (
+                (data.get("detail") or data.get("error") or "Autentikasi Backend diperlukan.")
+                if isinstance(data, dict)
+                else str(data or "Unauthorized")
+            )
+            return 401, {
+                "success": False,
+                "needsAuth": True,
+                "error": _mask_secret(_mask_secret(err_detail, pwd), token),
+            }, ""
+
+    if isinstance(data, dict):
+        return status_code, data, token
+    return status_code, {"raw": _mask_secret(_mask_secret(str(data), pwd), token)}, token
+
+
+def _handle_smb_source_request(body=None):
+    """Menangani GET/POST /api/smb/source untuk membaca atau mengalihkan sumber SMB ZimaOS <-> Backend."""
+    global _cached_live_drives
+
+    body = body if isinstance(body, dict) else {}
+    req_server_id = str(body.get("serverId") or body.get("server_id") or "").strip() or None
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    srv = _select_target_server(cfg, target_server_id=req_server_id)
+    if not srv:
+        return 400, {"success": False, "source": "zimaos", "error": "Server aktif tidak ditemukan."}
+
+    srv_id = srv.get("id") or "default"
+    smb_cfg = config_manager.get_server_smb_source_config(srv)
+
+    raw_action = str(body.get("action") or "").strip().lower()
+    if raw_action == "get" or (not raw_action and "source" not in body):
+        action = "get"
+    elif raw_action == "set" or "source" in body:
+        action = "set"
+    else:
+        action = "get"
+
+    def _collect_hosts(target_srv, target_cfg):
+        hosts = set()
+        for c in (target_srv.get("connections") or []):
+            if isinstance(c, dict) and c.get("url"):
+                ch = _extract_host_from_url(c["url"])
+                if ch:
+                    hosts.add(ch)
+        for k in ("zerotier_virtual_ip", "easytier_virtual_ip"):
+            val = str(target_srv.get(k) or "").strip()
+            if val:
+                hosts.add(val)
+        try:
+            au, _ = get_active_resolved_route(target_cfg)
+            if au:
+                ah = _extract_host_from_url(au)
+                if ah:
+                    hosts.add(ah)
+        except Exception:
+            pass
+        return hosts
+
+    def _resolve_backend_url(target_cfg, target_srv):
+        raw_url = _get_active_server_backend_url(target_cfg, target_server_id=target_srv.get("id")) or ""
+        if not raw_url:
+            return ""
+        try:
+            au, _ = get_active_resolved_route(target_cfg)
+            h, is_dom, zt_ip = _resolve_smb_route_params(target_srv, au)
+            if _is_wan_host_safe(_extract_host_from_url(raw_url)):
+                fb = smb_mount_manager.resolve_smb_host(h, target_srv.get("connections", []), is_dom, zt_ip) or ""
+                if fb and not _is_wan_host_safe(fb):
+                    return smb_mount_manager._normalize_backend_api_url(raw_url, fallback_host=fb)
+        except Exception:
+            pass
+        return raw_url.rstrip("/")
+
+    backend_url = _resolve_backend_url(cfg, srv)
+
+    if action == "get":
+        backend_online = False
+        smb_mode = smb_cfg["source"]
+        needs_auth = False
+
+        if backend_url:
+            h_ok, h_data, h_code = _backend_http_request(
+                f"{backend_url.rstrip('/')}/health", method="GET", timeout=2.0, retries=0
+            )
+            backend_online = bool(
+                (h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok")
+                or (h_code and h_code not in (0, 502))
+            )
+            if backend_online and (smb_cfg.get("access_token") or smb_cfg.get("hasCredentials")):
+                st_code, st_data, _ = _backend_authenticated_request(
+                    backend_url, "/api/v1/smb/status", smb_cfg, srv_id, method="GET"
+                )
+                if st_code == 200 and isinstance(st_data, dict):
+                    smb_mode = str(st_data.get("mode") or smb_cfg["source"]).strip().lower()
+                    cfg = config_manager.load_or_create_config()
+                    srv = _select_target_server(cfg, target_server_id=srv_id) or srv
+                    smb_cfg = config_manager.get_server_smb_source_config(srv)
+                elif st_code == 401:
+                    needs_auth = True
+
+        return 200, {
+            "success": True,
+            "source": smb_cfg["source"],
+            "username": smb_cfg["username"],
+            "role": smb_cfg["role"],
+            "allowedDisks": list(smb_cfg["allowed_disks"]),
+            "hasCredentials": bool(smb_cfg["hasCredentials"]),
+            "backendOnline": bool(backend_online),
+            "backendUrl": backend_url,
+            "smbMode": smb_mode,
+            "needsAuth": bool(needs_auth),
+            "drives": get_live_drives_list(),
+        }
+
+    # action == "set"
+    target_source = str(body.get("source") or "").strip().lower()
+    if target_source not in ("zimaos", "backend"):
+        return 400, {
+            "success": False,
+            "source": smb_cfg["source"],
+            "error": f"Sumber File Manager tidak valid: {target_source}",
+        }
+
+    auto_mount = bool(body.get("autoMount", True))
+
+    if target_source == "backend":
+        if not backend_url:
+            return 400, {
+                "success": False,
+                "source": smb_cfg["source"],
+                "error": "Backend MyServer tidak ditemukan atau offline.",
+            }
+
+        req_uname = str(body.get("username") or "").strip()
+        req_pwd = body.get("password")
+        explicit_pwd = req_pwd is not None and str(req_pwd) != ""
+
+        if explicit_pwd:
+            uname = req_uname or smb_cfg.get("username", "")
+            pwd = str(req_pwd)
+            if not uname:
+                return 400, {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": True,
+                    "error": "Username dan password akun Backend wajib diisi.",
+                }
+            v_status, v_data = _verify_backend_account(backend_url, uname, pwd)
+            if v_status != 200:
+                err_msg = _mask_secret((v_data or {}).get("error") or "Login akun Backend gagal.", pwd)
+                return (v_status if v_status >= 400 else 401), {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": (v_status == 401),
+                    "error": err_msg,
+                }
+            active_token = str((v_data or {}).get("access_token") or "").strip()
+            role = str((v_data or {}).get("role") or "staff").strip() or "staff"
+            allowed_from_auth = (v_data or {}).get("allowed_disks") or []
+
+            m_ok, m_data, m_status = _backend_http_request(
+                f"{backend_url.rstrip('/')}/api/v1/smb/mode",
+                method="POST",
+                json_body={"mode": "backend", "username": uname, "password": pwd},
+                headers={"Authorization": f"Bearer {active_token}"},
+                timeout=5.0,
+                retries=1,
+            )
+            if not m_ok or m_status != 200:
+                raw_m_err = (
+                    (m_data.get("detail") or m_data.get("error") or f"HTTP {m_status}")
+                    if isinstance(m_data, dict)
+                    else str(m_data or f"HTTP {m_status}")
+                )
+                return (m_status if m_status >= 400 else 502), {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": (m_status == 401),
+                    "error": _mask_secret(_mask_secret(raw_m_err, pwd), active_token),
+                }
+
+            d_ok, d_data, d_status = _backend_http_request(
+                f"{backend_url.rstrip('/')}/api/v1/storage/disks",
+                method="GET",
+                headers={"Authorization": f"Bearer {active_token}"},
+                timeout=5.0,
+                retries=1,
+            )
+        else:
+            if req_uname and smb_cfg.get("username") and req_uname.lower() != smb_cfg["username"].lower():
+                return 400, {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": True,
+                    "error": "Kata sandi wajib diisi untuk akun Backend baru.",
+                }
+            if not smb_cfg.get("hasCredentials"):
+                return 400, {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": True,
+                    "error": "Silakan masukkan username dan password akun Backend.",
+                }
+
+            uname = smb_cfg["username"]
+            pwd = smb_cfg["password"]
+            role = smb_cfg.get("role", "staff")
+            allowed_from_auth = smb_cfg.get("allowed_disks", [])
+
+            m_status, m_data, active_token = _backend_authenticated_request(
+                backend_url,
+                "/api/v1/smb/mode",
+                smb_cfg,
+                srv_id,
+                method="POST",
+                json_body={"mode": "backend", "username": uname, "password": pwd},
+            )
+            if m_status != 200:
+                if isinstance(m_data, dict) and m_data.get("needsAuth"):
+                    return (401 if m_status == 401 else m_status), {
+                        "success": False,
+                        "source": smb_cfg["source"],
+                        "needsAuth": True,
+                        "error": _mask_secret(m_data.get("error") or "Login akun Backend diperlukan.", pwd),
+                    }
+                raw_m_err = (
+                    (m_data.get("detail") or m_data.get("error") or f"HTTP {m_status}")
+                    if isinstance(m_data, dict)
+                    else str(m_data or f"HTTP {m_status}")
+                )
+                return (m_status if m_status >= 400 else 502), {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": (m_status == 401),
+                    "error": _mask_secret(_mask_secret(raw_m_err, pwd), active_token),
+                }
+
+            cfg = config_manager.load_or_create_config()
+            srv = _select_target_server(cfg, target_server_id=srv_id) or srv
+            smb_cfg = config_manager.get_server_smb_source_config(srv)
+            role = smb_cfg.get("role", role)
+
+            d_status, d_data, active_token = _backend_authenticated_request(
+                backend_url, "/api/v1/storage/disks", smb_cfg, srv_id, method="GET"
+            )
+            if d_status == 401:
+                return 401, {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": True,
+                    "error": _mask_secret((d_data or {}).get("error") or "Sesi Backend kedaluwarsa.", pwd),
+                }
+
+        permitted_disks = []
+        if d_status == 200 and isinstance(d_data, dict):
+            for disk_item in (d_data.get("disks") or []):
+                if (
+                    isinstance(disk_item, dict)
+                    and disk_item.get("is_accessible", True)
+                    and disk_item.get("name")
+                    and disk_item.get("relative_path", None) != ""
+                ):
+                    d_name = str(disk_item["name"]).strip()
+                    if d_name and d_name not in permitted_disks:
+                        permitted_disks.append(d_name)
+        elif isinstance(allowed_from_auth, list):
+            permitted_disks = [str(x).strip() for x in allowed_from_auth if str(x).strip()]
+
+        cfg = config_manager.load_or_create_config()
+        config_manager.save_server_smb_source_config(
+            cfg,
+            srv_id,
+            source="backend",
+            username=uname,
+            password=pwd,
+            role=role,
+            allowed_disks=permitted_disks,
+            access_token=active_token,
+        )
+
+        smb_mount_manager.clear_smb_share_cache()
+        if auto_mount:
+            rebind_storage_pipeline("switch_source_backend")
+        else:
+            smb_mount_manager.unmount_all_smb_shares()
+            smb_mount_manager.purge_smb_sessions(_collect_hosts(srv, cfg))
+
+        fresh_drives = _scan_live_drives_now()
+        with _drives_cache_lock:
+            _cached_live_drives = fresh_drives
+
+        return 200, {
+            "success": True,
+            "source": "backend",
+            "username": uname,
+            "role": role,
+            "allowedDisks": permitted_disks,
+            "hasCredentials": True,
+            "backendOnline": True,
+            "backendUrl": backend_url,
+            "smbMode": "backend",
+            "needsAuth": False,
+            "drives": fresh_drives,
+        }
+
+    # target_source == "zimaos"
+    backend_online = False
+    warning_msg = ""
+    if backend_url and (smb_cfg.get("access_token") or smb_cfg.get("hasCredentials")):
+        zimaos_payload = {"mode": "zimaos"}
+        if smb_cfg.get("hasCredentials"):
+            zimaos_payload["username"] = smb_cfg["username"]
+            zimaos_payload["password"] = smb_cfg["password"]
+        m_status, m_data, _ = _backend_authenticated_request(
+            backend_url,
+            "/api/v1/smb/mode",
+            smb_cfg,
+            srv_id,
+            method="POST",
+            json_body=zimaos_payload,
+        )
+        if m_status == 200:
+            backend_online = True
+        else:
+            safe_err = _mask_secret(str(m_data), smb_cfg.get("password", ""))
+            logger_manager.log_warning(
+                f"[/api/smb/source] Gagal memberi tahu Backend beralih ke mode zimaos (best-effort): HTTP {m_status} {safe_err}"
+            )
+            warning_msg = "Mode SMB dialihkan ke ZimaOS; layanan SMB Backend tidak merespons."
+
+    cfg = config_manager.load_or_create_config()
+    config_manager.save_server_smb_source_config(cfg, srv_id, "zimaos")
+
+    smb_mount_manager.clear_smb_share_cache()
+    if auto_mount:
+        rebind_storage_pipeline("switch_source_zimaos")
+    else:
+        smb_mount_manager.unmount_all_smb_shares()
+        smb_mount_manager.purge_smb_sessions(_collect_hosts(srv, cfg))
+
+    fresh_drives = _scan_live_drives_now()
+    with _drives_cache_lock:
+        _cached_live_drives = fresh_drives
+
+    cfg_after = config_manager.load_or_create_config()
+    srv_after = _select_target_server(cfg_after, target_server_id=srv_id) or srv
+    smb_cfg_after = config_manager.get_server_smb_source_config(srv_after)
+
+    resp = {
+        "success": True,
+        "source": "zimaos",
+        "username": smb_cfg_after["username"],
+        "role": smb_cfg_after["role"],
+        "allowedDisks": list(smb_cfg_after["allowed_disks"]),
+        "hasCredentials": bool(smb_cfg_after["hasCredentials"]),
+        "backendOnline": bool(backend_online),
+        "backendUrl": backend_url,
+        "smbMode": "zimaos",
+        "needsAuth": False,
+        "drives": fresh_drives,
+    }
+    if warning_msg:
+        resp["warning"] = warning_msg
+    return 200, resp
 
 
 
@@ -22927,6 +23193,15 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             req_srv_id = (query.get("serverId", [""])[0] or query.get("server_id", [""])[0]).strip() or None
             self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id))
 
+        elif path in ("/api/smb/source", "/api/smb_source"):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            req_srv_id = (query.get("serverId", [""])[0] or query.get("server_id", [""])[0]).strip() or None
+            get_body = {"action": "get"}
+            if req_srv_id:
+                get_body["serverId"] = req_srv_id
+            status_code, res = _handle_smb_source_request(get_body)
+            self._send_json(res, status=status_code)
+
 
 
 
@@ -29984,6 +30259,14 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 path = "/api/wizard/commit_server"
             elif ep in ("wizard/complete", "wizard_complete"):
                 path = "/api/wizard/complete"
+            elif ep in ("smb/source", "smb_source"):
+                if isinstance(body.get("payload"), dict):
+                    body = {**body, **body["payload"]}
+                path = "/api/smb/source"
+            elif ep in ("open_backend_file_manager", "open/backend_file_manager"):
+                if isinstance(body.get("payload"), dict):
+                    body = {**body, **body["payload"]}
+                path = "/api/open_backend_file_manager"
 
         # --- Endpoints Persisten VM, Migrasi Server & Terminal SSH (v4.5.5 Beta) ---
         if path in ("/api/vms/delete", "/api/vms_delete"):
@@ -30189,6 +30472,34 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             else:
                 status_code = 500
             self._send_json(res, status=status_code)
+            return
+
+        if path in ("/api/smb/source", "/api/smb_source"):
+            status_code, res = _handle_smb_source_request(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/open_backend_file_manager":
+            cfg = config_manager.load_or_create_config()
+            req_srv_id = (
+                (body.get("serverId") or body.get("server_id") or "").strip() or None
+                if isinstance(body, dict)
+                else None
+            )
+            srv = _select_target_server(cfg, target_server_id=req_srv_id)
+            backend_url = _get_active_server_backend_url(
+                cfg, target_server_id=(srv.get("id") if srv else None)
+            )
+            if backend_url:
+                srv_name = srv.get("name", "MyServer") if srv else "MyServer"
+                fm_url = backend_url.rstrip("/") + "/"
+                spawn_app_window(fm_url, f"{srv_name} Backend Files")
+                self._send_json({"success": True, "url": fm_url})
+            else:
+                self._send_json(
+                    {"success": False, "error": "Backend MyServer tidak ditemukan atau offline."},
+                    status=400,
+                )
             return
 
         if path == "/api/server/ssh_terminal":

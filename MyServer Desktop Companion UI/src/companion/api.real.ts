@@ -15,6 +15,7 @@ import type {
   SyncthingConfigData,
   WizardCommitServerPayload,
   BackendDeploySource,
+  VirtualMachine,
 } from "./types"
 
 
@@ -1195,8 +1196,8 @@ export function createRealApi(): CompanionApi {
       return { status: 'error' }
     },
 
-    async migrateVm(vmId: string, targetScope: "server" | "local") {
-      const payload = { vmId, targetScope, vm_id: vmId, target_scope: targetScope }
+    async migrateVm(vmId: string, targetScope: "server" | "local", vm?: Partial<VirtualMachine>) {
+      const payload = { vmId, targetScope, vm_id: vmId, target_scope: targetScope, ...(vm ? { vm } : {}) }
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke

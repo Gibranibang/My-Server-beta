@@ -165,7 +165,7 @@ export interface CompanionApi {
 
   deleteVm?(vmId: string, scope?: string, serverId?: string): Promise<any>
 
-  migrateVm?(vmId: string, targetScope: "server" | "local"): Promise<any>
+  migrateVm?(vmId: string, targetScope: "server" | "local", vm?: Partial<VirtualMachine>): Promise<any>
 
   openSshTerminal?(params?: { host?: string; user?: string; port?: number }): Promise<any>
 
@@ -860,7 +860,7 @@ export function createMockApi(): CompanionApi {
       return { status: "ok", success: true }
     },
 
-    async migrateVm() {
+    async migrateVm(_vmId: string, _targetScope: "server" | "local", _vm?: Partial<VirtualMachine>) {
       return { status: "ok", success: true }
     },
 

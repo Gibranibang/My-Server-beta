@@ -872,12 +872,35 @@ export default function VmManagerView({ go }: ViewProps) {
     }
   }
 
+  const handleMigrationFailure = useCallback(
+    (vmId: string, previousVms: VirtualMachine[], message?: string) => {
+      pendingMutationsRef.current.delete(vmId)
+      persistVmChanges(previousVms, false)
+      notify(
+        message ||
+          (language === "id"
+            ? "Gagal memindahkan VM ke target yang dipilih."
+            : "Failed to migrate VM to selected target."),
+        "danger"
+      )
+    },
+    [language, notify, persistVmChanges]
+  )
+
   // v4.5.0 Beta: 1-Click Migration between Local & Server
-  const handleMigrateVm = (vm: VirtualMachine) => {
+  const handleMigrateVm = async (vm: VirtualMachine) => {
     const isCurrentlyServer = vm.scope === "server"
     const nextScope: "server" | "local" = isCurrentlyServer ? "local" : "server"
     const nextServerId = nextScope === "server" ? activeServerId : undefined
     const nextServerName = nextScope === "server" ? activeServerName : undefined
+
+    const previousVms = vmsRef.current
+    const migratedVm: VirtualMachine = {
+      ...vm,
+      scope: nextScope,
+      serverId: nextServerId,
+      serverName: nextServerName,
+    }
 
     recordPendingMutation(
       vm.id,
@@ -889,24 +912,33 @@ export default function VmManagerView({ go }: ViewProps) {
       15000
     )
 
-    const updated = vms.map((item) =>
-      item.id === vm.id
-        ? {
-            ...item,
-            scope: nextScope,
-            serverId: nextServerId,
-            serverName: nextServerName,
-          }
-        : item
+    const updated = previousVms.map((item) =>
+      item.id === vm.id ? migratedVm : item
     )
     persistVmChanges(updated, false)
 
     if (api.migrateVm) {
-      void api.migrateVm(vm.id, nextScope).catch(() => {
-        if (api.saveVms) void api.saveVms(updated).catch(() => {})
-      })
+      try {
+        const res = await api.migrateVm(vm.id, nextScope, migratedVm)
+        if (!res || res.status === "error" || res.success === false) {
+          handleMigrationFailure(vm.id, previousVms, res?.message)
+          return
+        }
+      } catch (err: any) {
+        handleMigrationFailure(vm.id, previousVms, err?.message)
+        return
+      }
     } else if (api.saveVms) {
-      void api.saveVms(updated).catch(() => {})
+      try {
+        const res = await api.saveVms(updated)
+        if (!res || res.status === "error" || res.success === false) {
+          handleMigrationFailure(vm.id, previousVms, res?.message)
+          return
+        }
+      } catch (err: any) {
+        handleMigrationFailure(vm.id, previousVms, err?.message)
+        return
+      }
     }
 
     const targetLabel = nextScope === "server" ? `${activeServerName}` : (language === "id" ? "Perangkat Ini (Lokal)" : "This Device (Local)")
@@ -1087,7 +1119,7 @@ export default function VmManagerView({ go }: ViewProps) {
   }
 
   // Save Add/Edit
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault()
     const cleanName = formName.trim()
     if (!cleanName && addVmTab === "manual") {
@@ -1131,13 +1163,35 @@ export default function VmManagerView({ go }: ViewProps) {
       }
       const scopeChanged = editingVm.scope !== formScope
       if (scopeChanged) {
+        const previousVms = vmsRef.current
+        const migratedVm: VirtualMachine = { ...editingVm, ...editPatch }
         recordPendingMutation(editingVm.id, editPatch, 15000)
-        const updated = vms.map((item) =>
-          item.id === editingVm.id ? { ...item, ...editPatch } : item
+        const updated = previousVms.map((item) =>
+          item.id === editingVm.id ? migratedVm : item
         )
-        pendingInitialSave = persistVmChanges(updated, true)
+        persistVmChanges(updated, false)
         if (api.migrateVm) {
-          void api.migrateVm(editingVm.id, formScope).catch(() => {})
+          try {
+            const res = await api.migrateVm(editingVm.id, formScope, migratedVm)
+            if (!res || res.status === "error" || res.success === false) {
+              handleMigrationFailure(editingVm.id, previousVms, res?.message)
+              return
+            }
+          } catch (err: any) {
+            handleMigrationFailure(editingVm.id, previousVms, err?.message)
+            return
+          }
+        } else if (api.saveVms) {
+          try {
+            const res = await api.saveVms(updated)
+            if (!res || res.status === "error" || res.success === false) {
+              handleMigrationFailure(editingVm.id, previousVms, res?.message)
+              return
+            }
+          } catch (err: any) {
+            handleMigrationFailure(editingVm.id, previousVms, err?.message)
+            return
+          }
         }
         notify(language === "id" ? `${cleanName || editingVm.name} berhasil diperbarui!` : `${cleanName || editingVm.name} updated successfully!`, "success")
         setEditingVm(null)

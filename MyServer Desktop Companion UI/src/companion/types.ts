@@ -129,6 +129,32 @@ export interface Drive {
   usedBytes?: number
 }
 
+export type SmbSourceMode = "zimaos" | "backend"
+
+export interface FileManagerSourceStatus {
+  success?: boolean
+  source: SmbSourceMode
+  username?: string
+  role?: string
+  allowedDisks?: string[]
+  hasCredentials?: boolean
+  backendOnline?: boolean
+  backendUrl?: string
+  smbMode?: SmbSourceMode
+  error?: string
+  needsAuth?: boolean
+  warning?: string
+  drives?: Drive[]
+}
+
+export interface FileManagerSourcePayload {
+  action?: "get" | "set"
+  source?: SmbSourceMode
+  username?: string
+  password?: string
+  autoMount?: boolean
+}
+
 export interface TransitionState {
   active: boolean
   title: string

@@ -15,6 +15,8 @@ import type {
   BackendDeploySource,
   BackendActionResult,
   SyncthingAutoDetectResult,
+  FileManagerSourceStatus,
+  FileManagerSourcePayload,
 } from "./types"
 
 import { APP_VERSION, APP_CHANNEL } from "./version"
@@ -176,6 +178,12 @@ export interface CompanionApi {
   openFileExplorer(): Promise<void>
 
   openZimaFileManager(): Promise<void>
+
+  openBackendFileManager?(): Promise<void>
+
+  getFileManagerSource?(): Promise<FileManagerSourceStatus>
+
+  configureFileManagerSource?(payload: FileManagerSourcePayload): Promise<FileManagerSourceStatus>
 
   openPeerDrop(): Promise<void>
 
@@ -554,6 +562,15 @@ export function createMockApi(): CompanionApi {
 
   let metrics = MOCK_METRICS
 
+  let mockSmbSource: FileManagerSourceStatus = {
+    success: true,
+    source: "zimaos",
+    hasCredentials: false,
+    backendOnline: true,
+    smbMode: "zimaos",
+    needsAuth: false,
+  }
+
   let powerTimer: number | undefined
 
   const powerListeners = new Set<(p: PowerState) => void>()
@@ -877,6 +894,65 @@ export function createMockApi(): CompanionApi {
     async openFileExplorer() {},
 
     async openZimaFileManager() {},
+
+    async openBackendFileManager() {},
+
+    async getFileManagerSource() {
+      return {
+        ...mockSmbSource,
+        drives: drives.map((d) => ({ ...d })),
+      }
+    },
+
+    async configureFileManagerSource(payload: FileManagerSourcePayload) {
+      const nextSource = payload?.source || mockSmbSource.source || "zimaos"
+      if (nextSource === "backend") {
+        const uname = (payload?.username ?? mockSmbSource.username ?? "").trim()
+        const hasPwd =
+          Boolean(payload?.password) ||
+          Boolean(mockSmbSource.hasCredentials && !mockSmbSource.needsAuth)
+        if (!uname || !hasPwd) {
+          return {
+            ...mockSmbSource,
+            success: false,
+            needsAuth: true,
+            error: "Username dan password akun Backend wajib diisi.",
+            drives: drives.map((d) => ({ ...d })),
+          }
+        }
+        const role = uname.toLowerCase() === "admin" ? "admin" : "staff"
+        const allowedDisks = role === "admin" ? ["DATA", "Media"] : ["DATA"]
+        mockSmbSource = {
+          ...mockSmbSource,
+          success: true,
+          source: "backend",
+          username: uname,
+          role,
+          allowedDisks,
+          hasCredentials: true,
+          backendOnline: true,
+          smbMode: "backend",
+          needsAuth: false,
+          error: undefined,
+        }
+        return {
+          ...mockSmbSource,
+          drives: drives.map((d) => ({ ...d })),
+        }
+      }
+      mockSmbSource = {
+        ...mockSmbSource,
+        success: true,
+        source: "zimaos",
+        smbMode: "zimaos",
+        needsAuth: false,
+        error: undefined,
+      }
+      return {
+        ...mockSmbSource,
+        drives: drives.map((d) => ({ ...d })),
+      }
+    },
 
     async openPeerDrop() {},
 

@@ -16,6 +16,8 @@ import type {
   WizardCommitServerPayload,
   BackendDeploySource,
   VirtualMachine,
+  FileManagerSourceStatus,
+  FileManagerSourcePayload,
 } from "./types"
 
 
@@ -1322,6 +1324,57 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] Open Zima File Manager error:", err)
+      }
+    },
+
+    async openBackendFileManager() {
+      try {
+        await callCoreApi("open_backend_file_manager", {})
+        return
+      } catch (err) {
+        try {
+          const api = await getPyApi()
+          if (api && api.open_backend_file_manager) {
+            await api.open_backend_file_manager()
+            return
+          }
+        } catch (pyErr) {
+          console.error("[RealApi] Open Backend File Manager error:", pyErr)
+        }
+        console.error("[RealApi] Open Backend File Manager error:", err)
+      }
+    },
+
+    async getFileManagerSource(): Promise<FileManagerSourceStatus> {
+      try {
+        const res = await callCoreApi("smb/source", { action: "get" })
+        if (res && typeof res === "object") {
+          return res as FileManagerSourceStatus
+        }
+      } catch (err) {
+        console.warn("[RealApi] getFileManagerSource error:", err)
+      }
+      return { success: false, source: "zimaos", hasCredentials: false }
+    },
+
+    async configureFileManagerSource(payload: FileManagerSourcePayload): Promise<FileManagerSourceStatus> {
+      try {
+        const res = await callCoreApi("smb/source", { action: "set", ...payload })
+        if (res && typeof res === "object") {
+          return res as FileManagerSourceStatus
+        }
+      } catch (err) {
+        console.warn("[RealApi] configureFileManagerSource error:", err)
+        return {
+          success: false,
+          source: payload.source || "zimaos",
+          error: err instanceof Error ? err.message : String(err),
+        }
+      }
+      return {
+        success: false,
+        source: payload.source || "zimaos",
+        error: "Core API unavailable",
       }
     },
 

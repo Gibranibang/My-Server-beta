@@ -168,9 +168,12 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
 
     const monoUser = await screen.findByText("user_1")
     expect(monoUser).toHaveAttribute("title", "user_1")
-    expect(screen.getByText("User · 1 Disk")).toBeInTheDocument()
+    expect(screen.queryByText(/User ·/)).not.toBeInTheDocument()
     const switchBtn = screen.getByRole("button", { name: "Ganti Akun Backend" })
     expect(switchBtn).toBeInTheDocument()
+    const accountCard = monoUser.closest(".rounded-card")
+    expect(accountCard).not.toBeNull()
+    expect(accountCard).toHaveClass("cursor-pointer", "hover:border-line-strong", "hover:bg-surface-sunken")
 
     // Ensure Web Files LaunchTile now routes to Backend File Manager
     const backendFilesTile = screen.getByText("Backend Files").closest("button")
@@ -179,8 +182,8 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     expect(api.openBackendFileManager).toHaveBeenCalledTimes(1)
     expect(api.openZimaFileManager).not.toHaveBeenCalled()
 
-    // Clicking Ganti Akun Backend reveals empty password field (never retained in UI memory) and Batal Ganti Akun
-    fireEvent.click(switchBtn)
+    // Clicking the Backend account card itself (or Ganti Akun Backend) reveals empty password field and Batal Ganti Akun
+    fireEvent.click(accountCard!)
     const reopenedPass = await screen.findByLabelText("Kata Sandi Akun Backend")
     expect((reopenedPass as HTMLInputElement).value).toBe("")
     const cancelSwitchBtn = screen.getByRole("button", { name: "Batal Ganti Akun" })
@@ -191,7 +194,7 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
       expect(screen.queryByLabelText("Kata Sandi Akun Backend")).not.toBeInTheDocument()
     })
 
-    // Also verifies Admin role Chip when connected as admin
+    // Also verifies connected admin card without redundant role Chip
     cleanup()
     setupFilesView({
       language: "id",
@@ -208,7 +211,7 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     })
     const adminMono = await screen.findByText("admin")
     expect(adminMono).toHaveAttribute("title", "admin")
-    expect(screen.getByText("Admin")).toBeInTheDocument()
+    expect(screen.queryByText("Admin")).not.toBeInTheDocument()
   })
 
   it("shows inline Backend login Card when needsAuth is true even if hasCredentials is true", async () => {
@@ -333,7 +336,7 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     expect(openRes).toMatchObject({ success: true })
   })
 
-  it("displays Admin Chip when Backend role is root (WR-04)", async () => {
+  it("renders connected root account card with hover classes and without redundant role Chip (WR-04)", async () => {
     setupFilesView({
       language: "id",
       initialSource: {
@@ -350,8 +353,13 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
 
     const rootMono = await screen.findByText("root")
     expect(rootMono).toHaveAttribute("title", "root")
-    expect(screen.getByText("Admin")).toBeInTheDocument()
+    expect(screen.queryByText("Admin")).not.toBeInTheDocument()
     expect(screen.queryByText(/User ·/i)).not.toBeInTheDocument()
+    expect(rootMono.closest(".rounded-card")).toHaveClass(
+      "cursor-pointer",
+      "hover:border-line-strong",
+      "hover:bg-surface-sunken",
+    )
   })
 
   it("keeps Batal Ganti Akun visible when Ganti Akun Backend submission fails (WR-05)", async () => {
@@ -398,7 +406,7 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
       expect(screen.queryByLabelText("Kata Sandi Akun Backend")).not.toBeInTheDocument()
     })
     expect(screen.getByText("user_1")).toBeInTheDocument()
-    expect(screen.getByText("User · 1 Disk")).toBeInTheDocument()
+    expect(screen.queryByText(/User ·/)).not.toBeInTheDocument()
   })
 
   it("shows danger toast on openBackendFileManager failure and removes redundant pywebview catch fallback (WR-05, WR-09)", async () => {

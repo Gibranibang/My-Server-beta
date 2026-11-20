@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.1",
+        "channel": "Beta",
+        "date": "2026-11-20",
+        "title": "Auto-Refresh Izin Disk Per Akun (allowed_disks) di Mode Backend, Perapihan Kartu Akun Backend & Integrasi Backend v1.4.3",
+        "notes": [
+            "Auto-Refresh Daftar Disk Per Akun (allowed_disks) Tanpa Perlu Toggle ZimaOS: Memperbarui GET /api/smb/source (action=\"get\") dan rebind_storage_pipeline di myserver_core_service.py serta siklus polling FilesView.tsx untuk memantau perubahan allowed_disks akun dari GET /api/v1/storage/disks, memperbarui config.json, menyaring drive yang dicabut di _scan_live_drives_now, dan otomatis memicu rebind_storage_pipeline(\"backend_acl_changed\") ketika izin disk akun berubah di Panel Admin Backend.",
+            "Perapihan Kartu Status Akun Backend & Interaksi Hover Design System di FilesView.tsx: Menghapus pill Chip \"User · N Disk\" / \"Admin\" yang redundan dan menghimpit username serta menabrak teks \"Switch Backend Account\", menambahkan shrink-0 pada TextAction, dan menambahkan interaksi klik + efek hover standar design system MyServer (cursor-pointer hover:border-line-strong hover:bg-surface-sunken) pada seluruh kartu akun Backend.",
+            "Integrasi Rilis MyServer Backend v1.4.3 & Multi-Arch GHCR: Menyertakan paket Backend v1.4.3 dengan perbaikan direktori ncalrpc smbd (/run/samba/ncalrpc), verifikasi liveness post-fork _wait_backend_smbd_ready, serta workflow multi-arch ghcr.io/gibranibang/myserver-backend:latest agar fitur Save pada Settings Docker ZimaOS berjalan mulus."
+        ],
+        "features": [
+            "Auto-Refresh Izin Disk Per Akun (allowed_disks) & Rebind SMB Otomatis di Mode Backend",
+            "Perapihan Kartu Akun Backend (Tanpa Pill Redundan) & Hover Interaktif Design System",
+            "Integrasi Paket MyServer Backend v1.4.3 (Perbaikan smbd ncalrpc & Compose GHCR ZimaOS)"
+        ]
+    },
+    {
         "version": "4.6.0",
         "channel": "Beta",
         "date": "2026-11-18",

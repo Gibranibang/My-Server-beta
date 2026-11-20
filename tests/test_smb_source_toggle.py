@@ -1433,6 +1433,54 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
                 ["Bearer expired.admin.jwt", "Bearer refreshed.admin.jwt.C"],
             )
 
+    def test_10_auto_refresh_allowed_disks_on_get_smb_source_without_zimaos_toggle(self):
+        state = _MockBackendApiState()
+        state.smb_mode = "backend"
+        state.active_tokens["tok_live_u1"] = "user_1"
+        bsrv, backend_url = _start_mock_backend_server(state)
+        try:
+            cfg = config_manager.load_or_create_config()
+            config_manager.save_server_smb_source_config(
+                cfg,
+                "srv_1",
+                "backend",
+                username="user_1",
+                password="UserSecret!9",
+                role="user",
+                allowed_disks=["Media", "Shared"],
+                access_token="tok_live_u1",
+            )
+
+            # Simulate Admin changing user_1's allowed_disks on Backend from ["Media", "Shared"] to ["Media"]
+            state.valid_users["user_1"]["allowed_disks"] = ["Media"]
+
+            with patch.object(core, "_get_active_server_backend_url", return_value=backend_url), \
+                 patch.object(core, "rebind_storage_pipeline", return_value=[]) as mock_rebind, \
+                 patch.object(smb_mount_manager, "get_available_drive_letters", return_value=["Z:", "Y:"]):
+                st_get, res_get = self._req("GET", "/api/smb/source")
+
+            self.assertEqual(st_get, 200)
+            self.assertIs(res_get.get("success"), True)
+            self.assertEqual(res_get.get("allowedDisks"), ["Media"])
+            mock_rebind.assert_called_once_with("backend_acl_changed")
+            self.assertEqual([d["name"] for d in res_get.get("drives", [])], ["Media"])
+
+            updated_cfg = config_manager.get_server_smb_source_config(
+                config_manager.load_or_create_config()["servers"][0]
+            )
+            self.assertEqual(updated_cfg["allowed_disks"], ["Media"])
+
+            # Subsequent poll with unchanged allowed_disks must NOT trigger rebind again
+            with patch.object(core, "_get_active_server_backend_url", return_value=backend_url), \
+                 patch.object(core, "rebind_storage_pipeline", return_value=[]) as mock_rebind_2:
+                st_get_2, res_get_2 = self._req("GET", "/api/smb/source")
+            self.assertEqual(st_get_2, 200)
+            self.assertEqual(res_get_2.get("allowedDisks"), ["Media"])
+            mock_rebind_2.assert_not_called()
+        finally:
+            bsrv.shutdown()
+            bsrv.server_close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

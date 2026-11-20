@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.0"
+APP_VERSION_NUMBER = "4.6.1"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -13918,7 +13918,15 @@ def _scan_live_drives_now():
 
                     share_key = share_name.strip().lower()
 
-
+                    if smb_cfg_scan.get("source") == "backend":
+                        scan_role = str(smb_cfg_scan.get("role") or "user").strip().lower()
+                        allowed_scan_keys = {
+                            str(x).strip().lower()
+                            for x in (smb_cfg_scan.get("allowed_disks") or [])
+                            if str(x).strip()
+                        }
+                        if (allowed_scan_keys or scan_role not in ("admin", "root")) and share_key not in allowed_scan_keys:
+                            continue
 
                     if share_key in seen_shares:
 
@@ -15702,11 +15710,19 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
 
         logger_manager.log_info(f"[SMB Pipeline] Hasil pemasangan ulang ({reason}): {res}")
 
-
-
-
-
-
+        if smb_source == "backend" and config_manager:
+            try:
+                cached_sh = list((getattr(smb_mount_manager, "_cached_smb_shares", {}) or {}).get("shares") or [])
+                if cached_sh:
+                    cfg_latest = config_manager.load_or_create_config()
+                    config_manager.save_server_smb_source_config(
+                        cfg_latest,
+                        srv.get("id"),
+                        source="backend",
+                        allowed_disks=cached_sh,
+                    )
+            except Exception:
+                pass
 
         try:
 
@@ -16088,6 +16104,45 @@ def _handle_smb_source_request(body=None):
                     cfg = config_manager.load_or_create_config()
                     srv = _select_target_server(cfg, target_server_id=srv_id) or srv
                     smb_cfg = config_manager.get_server_smb_source_config(srv)
+                    if smb_cfg.get("source") == "backend":
+                        d_code, d_data, _ = _backend_authenticated_request(
+                            backend_url, "/api/v1/storage/disks", smb_cfg, srv_id, method="GET"
+                        )
+                        if d_code == 200 and isinstance(d_data, dict):
+                            fresh_permitted = []
+                            for disk_item in (d_data.get("disks") or []):
+                                if (
+                                    isinstance(disk_item, dict)
+                                    and disk_item.get("is_accessible", True)
+                                    and disk_item.get("name")
+                                    and disk_item.get("relative_path", None) != ""
+                                ):
+                                    d_name = str(disk_item["name"]).strip()
+                                    if d_name and d_name not in fresh_permitted:
+                                        fresh_permitted.append(d_name)
+                            prev_disks = [
+                                str(x).strip()
+                                for x in (smb_cfg.get("allowed_disks") or [])
+                                if str(x).strip()
+                            ]
+                            if {x.lower() for x in fresh_permitted} != {x.lower() for x in prev_disks}:
+                                cfg = config_manager.load_or_create_config()
+                                config_manager.save_server_smb_source_config(
+                                    cfg,
+                                    srv_id,
+                                    source="backend",
+                                    allowed_disks=fresh_permitted,
+                                )
+                                smb_mount_manager.clear_smb_share_cache()
+                                rebind_storage_pipeline("backend_acl_changed")
+                                fresh_drives = _scan_live_drives_now()
+                                with _drives_cache_lock:
+                                    _cached_live_drives = fresh_drives
+                                cfg = config_manager.load_or_create_config()
+                                srv = _select_target_server(cfg, target_server_id=srv_id) or srv
+                                smb_cfg = config_manager.get_server_smb_source_config(srv)
+                        elif d_code == 401:
+                            needs_auth = True
                 elif st_code == 401:
                     needs_auth = True
 

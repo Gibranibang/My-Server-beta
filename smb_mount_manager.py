@@ -671,7 +671,7 @@ def fetch_shares_from_backend_api(
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Connection": "close",
-            "User-Agent": "MyServer-Desktop-App/4.6.0",
+            "User-Agent": "MyServer-Desktop-App/4.6.1",
         }
         try:
             req = urllib.request.Request(
@@ -703,7 +703,7 @@ def fetch_shares_from_backend_api(
             "Authorization": f"Bearer {tok}",
             "Accept": "application/json",
             "Connection": "close",
-            "User-Agent": "MyServer-Desktop-App/4.6.0",
+            "User-Agent": "MyServer-Desktop-App/4.6.1",
         }
         try:
             req = urllib.request.Request(

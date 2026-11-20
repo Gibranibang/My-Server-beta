@@ -161,10 +161,30 @@ export default function FilesView() {
   useEffect(() => {
     void refreshDrives?.()
     const timer = setInterval(() => {
-      void refreshDrives?.()
+      if (
+        smbSource === "backend" &&
+        !isSwitchingSource &&
+        !isSubmittingAuth &&
+        !editingBackendAuth &&
+        typeof api.getFileManagerSource === "function"
+      ) {
+        void api
+          .getFileManagerSource()
+          .then((res) => {
+            if (res && res.source === "backend") {
+              setSourceStatus((prev) => ({ ...(prev ?? { source: "backend" }), ...res }))
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            void refreshDrives?.()
+          })
+      } else {
+        void refreshDrives?.()
+      }
     }, 3000)
     return () => clearInterval(timer)
-  }, [refreshDrives])
+  }, [api, editingBackendAuth, isSubmittingAuth, isSwitchingSource, refreshDrives, smbSource])
 
   useEffect(() => {
     let active = true
@@ -516,22 +536,22 @@ export default function FilesView() {
               </form>
             </Card>
           ) : (
-            <Card className="flex items-center justify-between gap-2 p-2.5">
+            <Card
+              onClick={() => {
+                setBackendUser(sourceStatus?.username || "")
+                setBackendPass("")
+                setEditingBackendAuth(true)
+              }}
+              className="flex items-center justify-between gap-2 p-2.5 transition-colors cursor-pointer hover:border-line-strong hover:bg-surface-sunken"
+            >
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <IconBadge icon={ShieldCheck} tone="info" size="sm" />
-                <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <Mono
-                    className="truncate text-caption font-semibold text-ink"
-                    title={sourceStatus?.username}
-                  >
-                    {sourceStatus?.username}
-                  </Mono>
-                  <Chip size="sm" tone="info" className="shrink-0">
-                    {["admin", "root"].includes((sourceStatus?.role || "").toLowerCase())
-                      ? "Admin"
-                      : `User · ${(sourceStatus?.allowedDisks || []).length} Disk`}
-                  </Chip>
-                </div>
+                <Mono
+                  className="truncate text-caption font-semibold text-ink"
+                  title={sourceStatus?.username}
+                >
+                  {sourceStatus?.username}
+                </Mono>
               </div>
               <TextAction
                 aria-label={t("backend_smb_switch_btn", "Ganti Akun Backend")}

@@ -448,7 +448,7 @@ export function TextAction({
       disabled={disabled}
       aria-label={ariaLabel}
       className={cx(
-        "inline-flex items-center gap-1 rounded-full text-caption font-semibold transition-colors duration-150 disabled:opacity-45",
+        "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full text-caption font-semibold transition-colors duration-150 disabled:opacity-45",
         focusRing,
         toneClass,
       )}

@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.6.1 - Beta] - 2026-11-20
+
+- Auto-Refresh Daftar Disk Per Akun (allowed_disks) Tanpa Perlu Toggle ZimaOS: Memperbarui GET /api/smb/source (action="get") dan rebind_storage_pipeline di myserver_core_service.py serta siklus polling FilesView.tsx untuk memantau perubahan allowed_disks akun dari GET /api/v1/storage/disks, memperbarui config.json, menyaring drive yang dicabut di _scan_live_drives_now, dan otomatis memicu rebind_storage_pipeline("backend_acl_changed") ketika izin disk akun berubah di Panel Admin Backend.
+- Perapihan Kartu Status Akun Backend & Interaksi Hover Design System di FilesView.tsx: Menghapus pill Chip "User · N Disk" / "Admin" yang redundan dan menghimpit username serta menabrak teks "Switch Backend Account", menambahkan shrink-0 pada TextAction, dan menambahkan interaksi klik + efek hover standar design system MyServer (cursor-pointer hover:border-line-strong hover:bg-surface-sunken) pada seluruh kartu akun Backend.
+- Integrasi Rilis MyServer Backend v1.4.3 & Multi-Arch GHCR: Menyertakan paket Backend v1.4.3 dengan perbaikan direktori ncalrpc smbd (/run/samba/ncalrpc), verifikasi liveness post-fork _wait_backend_smbd_ready, serta workflow multi-arch ghcr.io/gibranibang/myserver-backend:latest agar fitur Save pada Settings Docker ZimaOS berjalan mulus.
+
 ## [v4.6.0 - Beta] - 2026-11-18
 
 - Mesin SMB Mandiri MyServer Backend v1.4.2: Menambahkan daemon smbd terkelola di dalam container Backend yang membaca akun users (role default 'user' dan migrasi otomatis role lama), izin allowed_disks langsung dari SQLite, menyaring entri device stub tanpa sandi agar tidak muncul di Panel Admin, mendukung manajemen layanan SMB host ZimaOS (smb.service / smbd) lewat nsenter & multi-pidfile smbd pada mutual exclusion port 445.

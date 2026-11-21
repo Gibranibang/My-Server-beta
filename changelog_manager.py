@@ -12,6 +12,24 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.2",
+        "channel": "Beta",
+        "date": "2026-11-21",
+        "title": "Stabilitas SMB Anti-Freeze File Explorer, Optimasi EasyTier UDP/P2P, Auto-Install ZeroTier & Fitur Share Link Publik Backend v1.4.4",
+        "notes": [
+            "Stabilitas SMB & Siklus Hidup Anti-Freeze File Explorer (Phase 7): Memperbaiki 10 akar masalah SMB tersendat dan Windows Explorer Not Responding melalui resolusi host LAN-first ber-cache 15s + fail-fast, soft_mode eviksi drive IP usang, scoped unmount khusus host MyServer, notifikasi Shell per-drive (SHCNE_DRIVEADD/DRIVEREMOVED), preflight TCP port 445 (< 0.8s) sebelum membuka Explorer, handler Win32 WM_POWERBROADCAST sleep/wake + NotifyAddrChange + 5-tick offline-streak, eliminasi GetDiskFreeSpaceExW/shutil.disk_usage/WNet pada polling latar belakang, dan client-first teardown saat beralih ZimaOS <-> Backend.",
+            "Optimasi EasyTier Remote P2P & Peringatan --no-tun: Memprioritaskan relay UDP regional, menghapus flag --lazy-p2p bawaan, memperbaiki deadlock RLock saat fallback --no-tun, mengecualikan IP 10.126.126.x saat Wintun tidak aktif, menambah cache 12s, serta menampilkan banner peringatan ringkas di FilesView.tsx dengan polling adaptif 25s (jeda saat tab tersembunyi).",
+            "Paket Backend v1.4.4 (Share Link Publik + Samba 4 Tuning): Menyertakan engine Share Link Publik (/s/{token} viewer mandiri & proteksi sandi/kedaluwarsa di explorer.html), 8 direktif tuning performa smb.conf, cache status smbd & kapasitas disk 12s, serta hash-gated SHA-256 reload smb.conf tanpa mengganggu sesi aktif.",
+            "Installer ZeroTier One Terbundel & Isolasi Telemetri DISK: Pembundelan resmi ZeroTier One.msi pada installer Inno Setup (silent auto-install + layanan aktif otomatis), perbaikan ikon dinamis pill rute di HomeView, serta isolasi kartu DISK saat mode SMB Backend aktif."
+        ],
+        "features": [
+            "Siklus Hidup SMB Anti-Freeze, Preflight Port 445 Explorer & Scoped Unmount Aman",
+            "Optimasi EasyTier UDP P2P, Penjaga Mode --no-tun & Polling UI Adaptif 25s",
+            "Integrasi Paket MyServer Backend v1.4.4 (Share Link Publik /s/{token} & Samba 4 Tuning)",
+            "Auto-Install ZeroTier One.msi di Installer, Ikon Pill Rute Dinamis & Isolasi Telemetri DISK"
+        ]
+    },
+    {
         "version": "4.6.1",
         "channel": "Beta",
         "date": "2026-11-20",

@@ -68,51 +68,141 @@ def clear_smb_share_cache():
     _cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
 
 
-def _get_dynamic_host_aliases(clean_host, zerotier_ip=None):
+SHCNE_DRIVEREMOVED = 0x00000080
+SHCNE_DRIVEADD = 0x00000100
+SHCNF_PATHW = 0x0005
+
+
+def _extract_unc_host_and_share(unc_path):
+    """Mengekstrak pasangan (host_lowercase, share_name) dari path UNC Windows/POSIX."""
+    if not unc_path or not isinstance(unc_path, str):
+        return "", ""
+    norm = unc_path.strip().replace("/", "\\")
+    if not norm.startswith("\\\\"):
+        return "", ""
+    parts = [p for p in norm.lstrip("\\").split("\\") if p]
+    if not parts:
+        return "", ""
+    host_part = parts[0].strip().lower()
+    share_part = parts[1].strip() if len(parts) > 1 else ""
+    return host_part, share_part
+
+
+def get_active_1219_aliases():
+    """Mengembalikan salinan peta alias aktif mitigasi Error 1219."""
+    return dict(_cached_1219_alias)
+
+
+def _collect_configured_myserver_hosts():
+    """Mengumpulkan seluruh hostname/IP resmi milik server MyServer dari konfigurasi dan cache aktif."""
+    hosts = set()
+    try:
+        import config_manager
+        cfg = config_manager.load_or_create_config()
+        servers = cfg.get("servers", []) if isinstance(cfg, dict) else []
+        for srv in servers:
+            if not isinstance(srv, dict):
+                continue
+            for key in ("host", "zerotier_virtual_ip", "easytier_virtual_ip"):
+                val = sanitize_input(srv.get(key, "")).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+                if val:
+                    hosts.add(val)
+            for conn in srv.get("connections", []) or []:
+                if isinstance(conn, dict):
+                    u = conn.get("url", "")
+                    h = sanitize_input(u).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+                    if h:
+                        hosts.add(h)
+    except Exception:
+        pass
+    for v in _cached_1219_alias.values():
+        ch = sanitize_input(v).strip().lower()
+        if ch:
+            hosts.add(ch)
+    resolved_cached = _cached_resolved_smb_host.get("resolved")
+    if resolved_cached:
+        hosts.add(str(resolved_cached).strip().lower())
+    return hosts
+
+
+def _get_dynamic_host_aliases(clean_host, zerotier_ip=None, alternate_local_hosts=None, allow_public_dns_alias=False):
     """
-    Menghasilkan kandidat alias host dinamis (NetBIOS/PTR lokal via gethostbyaddr,
-    DNS loopback LAN nip.io/sslip.io, dan ZeroTier IP) untuk memitigasi Windows Error 1219
-    apabila proses/sesi lain di PC yang sama sedang menahan koneksi ke IP utama dengan akun berbeda.
-    100% DINAMIS - ZERO HARDCODED.
+    Menghasilkan kandidat alias host dinamis yang aman untuk LAN (NetBIOS/PTR lokal cepat,
+    alternate IP lokal, ZeroTier non-blocked; serta wildcard DNS publik hanya jika allow_public_dns_alias=True)
+    untuk memitigasi Windows Error 1219 lintas-sesi.
     """
     aliases = []
     if not clean_host:
         return aliases
-    # 1. Coba resolusi reverse DNS / NetBIOS lokal (100% LAN lokal, tanpa internet)
-    try:
-        nb_host = socket.gethostbyaddr(clean_host)[0]
-        if nb_host:
-            nb_clean = nb_host.strip()
-            if nb_clean and nb_clean.lower() != clean_host.lower() and nb_clean not in aliases:
-                aliases.append(nb_clean)
-    except Exception:
-        pass
-    # 2. Jika clean_host adalah IPv4 privat, tambahkan wildcard DNS yang meresolusi kembali ke IP LAN lokal yang sama
-    try:
-        ip_obj = ipaddress.ip_address(clean_host)
-        if ip_obj.version == 4 and ip_obj.is_private:
-            for cand_dns in (f"{clean_host}.nip.io", f"{clean_host.replace('.', '-')}.sslip.io"):
-                try:
-                    if socket.gethostbyname(cand_dns) == clean_host and cand_dns not in aliases:
-                        aliases.append(cand_dns)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    # 3. Kandidat ZeroTier IP jika berbeda dan port 445 terbuka
+    # 1. Resolusi reverse DNS / NetBIOS lokal berbatas waktu (0.3s max)
+    nb_clean = _reverse_lookup_fast(clean_host, timeout=0.3)
+    if nb_clean and nb_clean.lower() != clean_host.lower() and nb_clean not in aliases:
+        aliases.append(nb_clean)
+    # 2. Kandidat IP LAN alternatif server yang port 445 merespons
+    if alternate_local_hosts:
+        for alt in alternate_local_hosts:
+            alt_c = sanitize_input(alt).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
+            if alt_c and alt_c.lower() != clean_host.lower() and alt_c not in aliases:
+                if is_port_open(alt_c, 445, timeout=0.5):
+                    aliases.append(alt_c)
+    # 3. Kandidat ZeroTier / VPN IP jika tidak diblokir mode --no-tun EasyTier
     clean_zt = sanitize_input(zerotier_ip).strip() if zerotier_ip else ""
     if clean_zt and clean_zt.lower() != clean_host.lower() and clean_zt not in aliases:
-        if is_port_open(clean_zt, 445, timeout=0.8):
-            aliases.append(clean_zt)
+        if not (_is_easytier_tun_disabled() and _is_easytier_ip(clean_zt)):
+            if is_port_open(clean_zt, 445, timeout=0.8):
+                aliases.append(clean_zt)
+    # 4. Wildcard DNS publik (nip.io / sslip.io) dinonaktifkan secara default demi privasi & kecepatan LAN
+    if allow_public_dns_alias:
+        try:
+            ip_obj = ipaddress.ip_address(clean_host)
+            if ip_obj.version == 4 and ip_obj.is_private:
+                for cand_dns in (f"{clean_host}.nip.io", f"{clean_host.replace('.', '-')}.sslip.io"):
+                    try:
+                        if socket.gethostbyname(cand_dns) == clean_host and cand_dns not in aliases:
+                            aliases.append(cand_dns)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     return aliases
 
 
-def _notify_windows_explorer_refresh():
-    """Memberitahu Windows Shell (Explorer) secara asinkron bahwa daftar network drive telah berubah."""
+def _notify_windows_explorer_refresh(added_drives=None, removed_drives=None):
+    """Memberitahu Windows Shell (Explorer) secara terarah per-drive tanpa flush asosiasi global."""
     if sys.platform != "win32":
         return
+
+    def _norm_drive_root(drv):
+        if not drv or not isinstance(drv, str):
+            return ""
+        c = drv.strip().rstrip("\\/").upper()
+        if not c:
+            return ""
+        if not c.endswith(":"):
+            c += ":"
+        return f"{c}\\"
+
+    seen_rem = []
+    for d in (removed_drives or []):
+        r = _norm_drive_root(d)
+        if r and r not in seen_rem:
+            seen_rem.append(r)
+
+    seen_add = []
+    for d in (added_drives or []):
+        r = _norm_drive_root(d)
+        if r and r not in seen_add:
+            seen_add.append(r)
+
+    if not seen_rem and not seen_add:
+        return
+
     try:
-        ctypes.windll.shell32.SHChangeNotify(0x08000000, 0x0000, None, None)
+        shell32 = ctypes.windll.shell32
+        for r in seen_rem:
+            shell32.SHChangeNotify(SHCNE_DRIVEREMOVED, SHCNF_PATHW, ctypes.c_wchar_p(r), None)
+        for r in seen_add:
+            shell32.SHChangeNotify(SHCNE_DRIVEADD, SHCNF_PATHW, ctypes.c_wchar_p(r), None)
     except Exception:
         pass
 
@@ -297,10 +387,11 @@ def _delete_windows_credential(host):
 
 
 def _cancel_connection_safe(target_name, force=True, timeout=2.0):
-    """Memanggil WNetCancelConnection2W dengan batas waktu ketat agar tidak memblokir thread saat sesi SMB macet."""
+    """Memanggil WNetCancelConnection2W dengan batas waktu ketat; mengembalikan (cancelled_ok, timed_out)."""
     if sys.platform != "win32" or not target_name:
-        return False
+        return False, False
     res_box = [False]
+
     def _worker():
         try:
             ret = ctypes.windll.mpr.WNetCancelConnection2W(target_name, 0x00000001, bool(force))
@@ -309,10 +400,12 @@ def _cancel_connection_safe(target_name, force=True, timeout=2.0):
             res_box[0] = (ret == 0)
         except Exception:
             pass
+
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
     t.join(timeout=float(timeout))
-    return res_box[0]
+    timed_out = t.is_alive()
+    return (False if timed_out else res_box[0]), timed_out
 
 
 def sanitize_input(val):
@@ -945,81 +1038,99 @@ def get_remote_smb_shares(
 
 def is_drive_letter_in_use(drive_letter="Z:"):
     """
-    Memeriksa apakah huruf drive Windows (misal 'Z:') sedang digunakan
-    oleh partisi lokal, disk fisik, atau network mapping (baik aktif maupun Disconnected/Red-X).
+    Memeriksa secara O(1) via bitmask GetLogicalDrives() + QueryDosDeviceW apakah huruf drive
+    sedang dipakai (tanpa pernah memanggil WNetGetConnectionW/MPR pada huruf kosong).
     """
     clean_drive = drive_letter.strip().rstrip("\\").upper()
     if not clean_drive.endswith(":"):
         clean_drive += ":"
 
-    # 1. Cek GetLogicalDrives bitmask Win32 (instan, bebas blokir I/O jaringan)
     try:
         idx = ord(clean_drive[0].upper()) - 65
         if 0 <= idx < 26:
-            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-            if bitmask != 0 and bool(bitmask & (1 << idx)):
-                return True
+            raw_mask = ctypes.windll.kernel32.GetLogicalDrives()
+            if isinstance(raw_mask, int) and not isinstance(raw_mask, bool):
+                if raw_mask != 0 and bool(raw_mask & (1 << idx)):
+                    return True
     except Exception:
         pass
 
-    # 2. Cek apakah masih terdaftar di WNet atau LanmanRedirector (termasuk status 1201 / 1203 Red-X)
-    wnet_code, _ = _get_wnet_remote_unc(clean_drive)
-    if wnet_code in (0, 1201, 1203):
+    if _get_dos_lanman_target(clean_drive):
         return True
 
     return False
 
 
-def get_available_drive_letters():
+def get_available_drive_letters(exclude_letters=None):
     """
-    Mendeteksi secara dinamis seluruh huruf drive Windows yang saat ini
-    benar-benar kosong dan belum digunakan oleh partisi fisik atau network mapping.
-    Mengembalikan daftar huruf drive dari Z: mundur ke D:.
+    Mendeteksi secara O(1) seluruh huruf drive Windows yang kosong via GetLogicalDrives() +
+    _get_dos_lanman_target() (tanpa pernah memanggil _get_wnet_remote_unc).
     """
+    excluded_set = set()
+    if exclude_letters:
+        for item in exclude_letters:
+            if not item or not isinstance(item, str):
+                continue
+            c = item.strip().rstrip("\\/").upper()
+            if c:
+                if not c.endswith(":"):
+                    c += ":"
+                excluded_set.add(c)
     try:
-        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        raw_mask = ctypes.windll.kernel32.GetLogicalDrives()
+        bitmask = raw_mask if (isinstance(raw_mask, int) and not isinstance(raw_mask, bool)) else 0
         available = []
         for i in range(25, 2, -1):
             d = f"{chr(65 + i)}:"
-            if not (bitmask & (1 << i)):
-                wnet_code, _ = _get_wnet_remote_unc(d)
-                if wnet_code not in (0, 1201, 1203):
-                    available.append(d)
+            if d in excluded_set:
+                continue
+            if not (bitmask & (1 << i)) and not _get_dos_lanman_target(d):
+                available.append(d)
         if available:
             return available
     except Exception:
         pass
-    return ["Z:", "Y:", "X:", "W:", "V:", "U:", "T:", "S:"]
+    return [d for d in ("Z:", "Y:", "X:", "W:", "V:", "U:", "T:", "S:") if d not in excluded_set]
 
 
-def get_available_drive_letter(preferred="Z:"):
+def get_available_drive_letter(preferred="Z:", exclude_letters=None):
     """
-    Mencari huruf drive kosong yang tersedia secara dinamis.
+    Mencari satu huruf drive kosong secara O(1) tanpa memanggil WNetGetConnectionW.
     """
+    excluded_set = set()
+    if exclude_letters:
+        for item in exclude_letters:
+            if not item or not isinstance(item, str):
+                continue
+            c = item.strip().rstrip("\\/").upper()
+            if c:
+                if not c.endswith(":"):
+                    c += ":"
+                excluded_set.add(c)
+
     clean_p = preferred.strip().rstrip("\\").upper() if preferred else "Z:"
     if not clean_p.endswith(":"):
         clean_p += ":"
-    if not is_drive_letter_in_use(clean_p):
+    if clean_p not in excluded_set and not is_drive_letter_in_use(clean_p):
         return clean_p
 
-    for d in get_available_drive_letters():
-        if not is_drive_letter_in_use(d):
-            return d
-    return None
+    avail = get_available_drive_letters(exclude_letters=excluded_set)
+    return avail[0] if avail else None
 
 
-def purge_smb_sessions(hosts=None):
+def purge_smb_sessions(hosts=None, notify_explorer=True):
     """
-    Membersihkan sesi koneksi SMB lama secara menyeluruh (mencegah Windows Error 1219).
-    Mendukung pembersihan terhadap single host, list of hosts, atau seluruh sesi SMB aktif
-    serta membersihkan drive Red-X (ERROR_CONNECTION_UNAVAIL).
+    Membersihkan sesi koneksi SMB milik server MyServer secara terarah (mencegah Error 1219)
+    tanpa pernah menyentuh network drive/sesi asing milik pengguna.
     """
     clear_smb_share_cache()
     creationflags = 0x08000000 if sys.platform == "win32" else 0
     bs = chr(92)
 
     target_hosts = set()
-    if hosts:
+    if hosts is None:
+        target_hosts.update(_collect_configured_myserver_hosts())
+    elif hosts:
         if isinstance(hosts, (list, tuple, set)):
             for h in hosts:
                 ch = sanitize_input(h).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
@@ -1030,8 +1141,23 @@ def purge_smb_sessions(hosts=None):
             if ch:
                 target_hosts.add(ch)
 
-    # Satu kali 'net use' untuk seluruh fungsi: hanya host/drive yang benar-benar terdaftar di tabel sesi
-    # Windows yang dibersihkan (tidak menyentuh WNet/net.exe terhadap host yang tidak punya sesi).
+    for ch in list(target_hosts):
+        nb = _reverse_lookup_fast(ch)
+        if nb:
+            target_hosts.add(nb)
+        if ch in _cached_1219_alias:
+            target_hosts.add(_cached_1219_alias[ch])
+        elif ch.lower() in _cached_1219_alias:
+            target_hosts.add(_cached_1219_alias[ch.lower()])
+
+    target_hosts_lc = {h.lower() for h in target_hosts if h}
+    if not target_hosts_lc:
+        return
+
+    for k in list(_cached_1219_alias.keys()):
+        if k.lower() in target_hosts_lc:
+            _cached_1219_alias.pop(k, None)
+
     net_use_out = ""
     if sys.platform == "win32":
         try:
@@ -1058,22 +1184,14 @@ def purge_smb_sessions(hosts=None):
             m_drv = re.search(r'\b([A-Za-z]:)\b', line)
             drv_val = m_drv.group(1).upper() if m_drv else ""
             if unc_val:
-                session_hosts.add(unc_val.lstrip(bs).split(bs)[0].lower())
+                h_u, _ = _extract_unc_host_and_share(unc_val)
+                if h_u:
+                    session_hosts.add(h_u)
             if drv_val:
                 session_drives.add(drv_val)
             session_lines.append((unc_val, drv_val))
 
-    # Sertakan juga nama NetBIOS/PTR (hanya IPv4 privat, timeout ketat) agar sesi alias ikut dibersihkan
-    for ch in list(target_hosts):
-        nb = _reverse_lookup_fast(ch)
-        if nb:
-            target_hosts.add(nb)
-        if ch in _cached_1219_alias:
-            target_hosts.add(_cached_1219_alias[ch])
-    _cached_1219_alias.clear()
-    target_hosts_lc = {h.lower() for h in target_hosts}
-
-    # 1. Bersihkan drive WNet / LanmanRedirector yang mengarah ke target_hosts (termasuk Disconnected/Red-X)
+    # 1. Bersihkan drive WNet / LanmanRedirector strictly milik target_hosts_lc (termasuk 1203)
     handled_drives = set()
     if sys.platform == "win32":
         letters = list(_candidate_network_letters())
@@ -1083,9 +1201,9 @@ def purge_smb_sessions(hosts=None):
         for d in letters:
             wnet_code, wnet_unc = _get_wnet_remote_unc(d)
             if wnet_code in (0, 1201, 1203) and wnet_unc:
-                h_part = wnet_unc.lstrip(bs).split(bs)[0].lower()
-                if not target_hosts_lc or h_part in target_hosts_lc or wnet_code == 1203:
-                    _cancel_connection_safe(d, force=True, timeout=1.5)
+                h_part, _ = _extract_unc_host_and_share(wnet_unc)
+                if h_part and h_part in target_hosts_lc:
+                    _, timed_out = _cancel_connection_safe(d, force=True, timeout=1.5)
                     try:
                         subprocess.run(
                             ["net.exe", "use", d, "/DELETE", "/YES"],
@@ -1096,27 +1214,28 @@ def purge_smb_sessions(hosts=None):
                         )
                     except Exception:
                         pass
-                    _remove_dos_lanman_device(d)
+                    if wnet_code == 1203 or not timed_out:
+                        _remove_dos_lanman_device(d)
                     handled_drives.add(d)
 
-    # 2. Bersihkan entri sesi di 'net use' (UNC target host & drive) yang belum tertangani di langkah 1
+    # 2. Bersihkan entri sesi di 'net use' strictly milik target_hosts_lc
     try:
         for unc, drv_code in session_lines:
             if drv_code and drv_code in handled_drives:
                 continue
-            if unc:
-                h_part = unc.lstrip(bs).split(bs)[0].lower()
-                if not target_hosts_lc or h_part in target_hosts_lc:
-                    _cancel_connection_safe(unc, force=True, timeout=1.5)
-                    subprocess.run(
-                        ["net.exe", "use", unc, "/DELETE", "/YES"],
-                        stdin=subprocess.DEVNULL,
-                        capture_output=True,
-                        creationflags=creationflags,
-                        timeout=3.0,
-                    )
+            h_part, _ = _extract_unc_host_and_share(unc) if unc else ("", "")
+            if not h_part or h_part not in target_hosts_lc:
+                continue
+            _cancel_connection_safe(unc, force=True, timeout=1.5)
+            subprocess.run(
+                ["net.exe", "use", unc, "/DELETE", "/YES"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                creationflags=creationflags,
+                timeout=3.0,
+            )
             if drv_code:
-                _cancel_connection_safe(drv_code, force=True, timeout=1.5)
+                _, timed_out_drv = _cancel_connection_safe(drv_code, force=True, timeout=1.5)
                 subprocess.run(
                     ["net.exe", "use", drv_code, "/DELETE", "/YES"],
                     stdin=subprocess.DEVNULL,
@@ -1124,10 +1243,13 @@ def purge_smb_sessions(hosts=None):
                     creationflags=creationflags,
                     timeout=3.0,
                 )
+                if not timed_out_drv:
+                    _remove_dos_lanman_device(drv_code)
+                handled_drives.add(drv_code)
     except Exception:
         pass
 
-    # 3. Hapus sesi IPC$/root UNC hanya untuk host yang benar-benar punya sesi aktif; cmdkey lokal untuk semua host
+    # 3. Hapus sesi IPC$/root UNC dan cmdkey lokal untuk target_hosts_lc
     for h in target_hosts:
         try:
             if sys.platform == "win32" and h.lower() in session_hosts:
@@ -1151,7 +1273,8 @@ def purge_smb_sessions(hosts=None):
         except Exception:
             pass
 
-    _notify_windows_explorer_refresh()
+    if notify_explorer and handled_drives:
+        _notify_windows_explorer_refresh(removed_drives=sorted(handled_drives))
 
 
 def mount_smb_share(
@@ -1254,7 +1377,7 @@ def mount_smb_share(
 
         if res.returncode == 0:
             if notify_explorer:
-                _notify_windows_explorer_refresh()
+                _notify_windows_explorer_refresh(added_drives=[target_drive])
             return True, f"Berhasil memasang {unc_path} ke {target_drive}"
 
         # Langkah 3 (Standar Zima Client service/smb.go): Jika gagal karena Error 1219 / 85 / 1202 (konflik sesi/drive),
@@ -1262,7 +1385,7 @@ def mount_smb_share(
         if any(err_code in combined_out for err_code in ("1219", "85", "1202")):
             logger_manager.log_warning(f"[SMB Mount] Terdeteksi konflik sesi ({combined_out[:80]}). Menjalankan pembersihan otomatis ala Zima Client...")
             unmount_smb_share(target_drive, notify_explorer=False)
-            purge_smb_sessions([clean_host])
+            purge_smb_sessions([clean_host], notify_explorer=False)
             time.sleep(0.25)
             if clean_user:
                 _register_windows_credential(clean_host, clean_user, clean_pass)
@@ -1300,14 +1423,30 @@ def mount_smb_share(
             if retry_res.returncode == 0:
                 logger_manager.log_info(f"[SMB Mount] Pemasangan berhasil setelah auto-recovery konflik sesi untuk {target_drive}")
                 if notify_explorer:
-                    _notify_windows_explorer_refresh()
+                    _notify_windows_explorer_refresh(added_drives=[target_drive])
                 return True, f"Berhasil memasang {unc_path} ke {target_drive}"
             stderr_msg = (retry_res.stderr or retry_res.stdout or stderr_msg).strip()
 
             # Langkah 4: Jika masih Error 1219 (misal proses/sesi lain di PC sedang menahan koneksi ke IP yang sama
             # dengan akun berbeda), gunakan alias host dinamis (NetBIOS/PTR lokal gethostbyaddr, nip.io, atau ZeroTier)!
             if "1219" in f"{retry_res.stdout or ''} {retry_res.stderr or ''}":
-                for alias_h in _get_dynamic_host_aliases(clean_host, zerotier_ip=zerotier_ip):
+                alt_local_hosts = []
+                if server_connections and isinstance(server_connections, list):
+                    for conn in server_connections:
+                        if isinstance(conn, dict):
+                            u_alt = conn.get("url", "")
+                            h_alt = sanitize_input(u_alt).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
+                            if h_alt and h_alt.lower() != clean_host.lower() and not _is_easytier_ip(h_alt):
+                                try:
+                                    if ipaddress.ip_address(h_alt).is_private and h_alt not in alt_local_hosts:
+                                        alt_local_hosts.append(h_alt)
+                                except Exception:
+                                    pass
+                for alias_h in _get_dynamic_host_aliases(
+                    clean_host,
+                    zerotier_ip=zerotier_ip,
+                    alternate_local_hosts=alt_local_hosts,
+                ):
                     alias_unc = f"{bs}{bs}{alias_h}{bs}{chosen_share}"
                     if clean_user:
                         _register_windows_credential(alias_h, clean_user, clean_pass)
@@ -1333,7 +1472,7 @@ def mount_smb_share(
                             f"[SMB Mount] Pemasangan {target_drive} berhasil via alias dinamis {alias_unc} (mitigasi Error 1219 lintas-sesi)"
                         )
                         if notify_explorer:
-                            _notify_windows_explorer_refresh()
+                            _notify_windows_explorer_refresh(added_drives=[target_drive])
                         return True, f"Berhasil memasang {alias_unc} ke {target_drive}"
 
         raw_err = stderr_msg or stdout_msg or "Gagal memasang network drive"
@@ -1357,11 +1496,12 @@ def mount_all_smb_shares(
     smb_source="zimaos",
     backend_url="",
     on_token_refreshed=None,
+    known_server_hosts=None,
 ):
     """
     Melakukan mounting seluruh share folder disk server yang tersedia ke huruf drive Windows yang bebas.
-    Mundur dari Z:, Y:, X:, W:, V:, U:, dst.
-    Mencegah duplikasi drive untuk share yang sama serta mengeksekusi registrasi cmdkey & IPC$ cukup 1x per batch.
+    Memverifikasi host UNC & port 445 pada drive MyServer yang sudah terpasang dalam soft_mode
+    agar drive zombie ber-IP lama atau tak terjangkau dicabut tanpa menyentuh drive asing.
     """
     resolved_host = resolve_smb_host(
         target_host=host,
@@ -1390,26 +1530,62 @@ def mount_all_smb_shares(
     if not shares:
         return False, "Tidak ada share folder disk yang terdeteksi di server."
 
-    # 1. Periksa drive yang sudah ada: jika ada drive Red-X (1201 / 1203) ke host ini, bersihkan dulu.
-    #    Jika sudah ada drive sehat (0) ke share yang sama pada host yang sama, catat agar tidak diduplikasi!
+    known_hosts_lc = set(_collect_configured_myserver_hosts())
+    for raw_kh in ([host, clean_host, resolved_host, zerotier_ip] + list(known_server_hosts or [])):
+        if raw_kh:
+            kh = sanitize_input(raw_kh).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+            if kh:
+                known_hosts_lc.add(kh)
+    if server_connections and isinstance(server_connections, list):
+        for conn in server_connections:
+            if isinstance(conn, dict):
+                ch_c = sanitize_input(conn.get("url", "")).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+                if ch_c:
+                    known_hosts_lc.add(ch_c)
+    for av in _cached_1219_alias.values():
+        if av:
+            known_hosts_lc.add(str(av).strip().lower())
+
+    valid_target_hosts_lc = {clean_host.lower()}
+    if clean_host in _cached_1219_alias:
+        valid_target_hosts_lc.add(str(_cached_1219_alias[clean_host]).strip().lower())
+    elif clean_host.lower() in _cached_1219_alias:
+        valid_target_hosts_lc.add(str(_cached_1219_alias[clean_host.lower()]).strip().lower())
+
+    desired_shares_lc = {sanitize_input(sh).lstrip("/" + bs).strip().lower() for sh in shares if sh}
+
     already_mounted_map = {}
+    removed_drives = []
+    added_drives = []
+    host_reachability_cache = {}
+
     if sys.platform == "win32":
         for d in _candidate_network_letters():
             wnet_code, wnet_unc = _get_wnet_remote_unc(d)
+            unc_host, unc_share = _extract_unc_host_and_share(wnet_unc)
+            # Abaikan sepenuhnya network drive milik server/NAS asing
+            if unc_host and known_hosts_lc and unc_host not in known_hosts_lc:
+                continue
             if wnet_code in (1201, 1203):
-                unmount_smb_share(d, notify_explorer=False)
+                if unc_host or not known_hosts_lc:
+                    unmount_smb_share(d, notify_explorer=False)
+                    removed_drives.append(d)
             elif wnet_code == 0 and wnet_unc:
                 norm_unc = wnet_unc.rstrip(bs).lower()
                 drv_type = ctypes.windll.kernel32.GetDriveTypeW(d + bs)
-                if drv_type == 4:
-                    if norm_unc in already_mounted_map:
-                        unmount_smb_share(d, notify_explorer=False)
-                    else:
-                        already_mounted_map[norm_unc] = d
-                else:
+                host_matches = bool(unc_host and unc_host in valid_target_hosts_lc)
+                share_wanted = bool(unc_share and unc_share.lower() in desired_shares_lc)
+                reachable_ok = False
+                if drv_type == 4 and host_matches and share_wanted:
+                    if unc_host not in host_reachability_cache:
+                        host_reachability_cache[unc_host] = bool(is_port_open(unc_host, 445, timeout=0.6))
+                    reachable_ok = host_reachability_cache[unc_host]
+                if drv_type != 4 or not host_matches or not share_wanted or not reachable_ok or norm_unc in already_mounted_map:
                     unmount_smb_share(d, notify_explorer=False)
+                    removed_drives.append(d)
+                else:
+                    already_mounted_map[norm_unc] = d
 
-    # 2. Lakukan registrasi cmdkey dan pembukaan sesi IPC$ cukup 1x untuk seluruh batch
     creationflags = 0x08000000 if sys.platform == "win32" else 0
     if clean_user and clean_host:
         _register_windows_credential(clean_host, clean_user, clean_pass)
@@ -1462,48 +1638,76 @@ def mount_all_smb_shares(
         if ok:
             mounted_count += 1
             already_mounted_map[expected_unc_lower] = target_drive
+            added_drives.append(target_drive)
             messages.append(f"• [Drive {target_drive}] {sh} (Terpasang)")
         else:
             messages.append(f"• [Drive {target_drive}] {sh} (Gagal: {msg})")
 
-    _notify_windows_explorer_refresh()
+    if added_drives or removed_drives:
+        _notify_windows_explorer_refresh(added_drives=added_drives, removed_drives=removed_drives)
     summary = f"Berhasil memasang {mounted_count} dari {len(shares)} partisi disk:\n" + "\n".join(messages)
     return (mounted_count > 0), summary
 
 
-def unmount_all_smb_shares():
+def unmount_all_smb_shares(allowed_hosts=None, allowed_prefixes=None):
     """
-    Melepaskan seluruh network drive server secara aman.
-    Sama sekali TIDAK PERNAH menyentuh drive fisik lokal (C:, D:, dll.).
-    Menargetkan drive bertipe DRIVE_REMOTE (GetDriveTypeW == 4) MAUPUN drive jaringan
-    yang berstatus Disconnected / Red-X (WNetGetConnectionW == 0, 1201, atau LanmanRedirector 1203).
+    Melepaskan hanya network drive milik host server MyServer (fail-safe host scoping).
+    Tidak pernah menyentuh drive fisik lokal atau network drive asing milik pengguna.
     """
+    if allowed_hosts is None and allowed_prefixes is None:
+        allowed_hosts_lc = _collect_configured_myserver_hosts()
+        prefix_list = ()
+    else:
+        allowed_hosts_lc = set()
+        for h in (allowed_hosts or []):
+            ch = sanitize_input(h).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+            if ch:
+                allowed_hosts_lc.add(ch)
+        prefix_list = tuple(str(p).strip().lower() for p in (allowed_prefixes or []) if p and str(p).strip())
+
+    if not allowed_hosts_lc and not prefix_list:
+        logger_manager.log_warning("[SMB Unmount] allowed_hosts/allowed_prefixes kosong; melewati unmount demi keamanan drive asing.")
+        return 0
+
     unmounted = 0
+    removed_drives = []
     for d in _candidate_network_letters():
         try:
             drv_type = ctypes.windll.kernel32.GetDriveTypeW(d + "\\") if sys.platform == "win32" else 0
-            wnet_code, _ = _get_wnet_remote_unc(d)
+            wnet_code, wnet_unc = _get_wnet_remote_unc(d)
             if drv_type == 4 or wnet_code in (0, 1201, 1203):
+                unc_host, _ = _extract_unc_host_and_share(wnet_unc)
+                if not unc_host:
+                    continue
+                host_allowed = (unc_host in allowed_hosts_lc) or any(unc_host.startswith(p) for p in prefix_list)
+                if not host_allowed:
+                    continue
                 if unmount_smb_share(d, notify_explorer=False):
                     unmounted += 1
+                    removed_drives.append(d)
         except Exception:
             pass
-    if unmounted > 0:
-        _notify_windows_explorer_refresh()
+    if removed_drives:
+        _notify_windows_explorer_refresh(removed_drives=removed_drives)
     return unmounted
 
 
 def unmount_smb_share(drive_letter="Z:", notify_explorer=True):
     """
-    Melepaskan network mapping SMB secara bersih (termasuk drive berstatus Disconnected / Red-X / Orphaned LanmanRedirector).
+    Melepaskan network mapping SMB secara bersih; membatasi DefineDosDeviceW strictly
+    pada tautan yatim wnet_code == 1203 atau setelah WNetCancelConnection2W selesai tanpa timeout.
     """
     clean_drive = drive_letter.strip().rstrip("\\").upper()
     if not clean_drive.endswith(":"):
         clean_drive += ":"
 
     unmounted_ok = False
+    initial_wnet_code = -1
+    cancel_timed_out = False
     if sys.platform == "win32":
-        if _cancel_connection_safe(clean_drive, force=True, timeout=2.0):
+        initial_wnet_code, _ = _get_wnet_remote_unc(clean_drive)
+        cancelled_ok, cancel_timed_out = _cancel_connection_safe(clean_drive, force=True, timeout=2.0)
+        if cancelled_ok:
             unmounted_ok = True
 
     creationflags = 0x08000000 if sys.platform == "win32" else 0
@@ -1522,37 +1726,66 @@ def unmount_smb_share(drive_letter="Z:", notify_explorer=True):
         pass
 
     if sys.platform == "win32":
-        if _remove_dos_lanman_device(clean_drive):
+        allow_dos_cleanup = False
+        if initial_wnet_code == 1203:
+            allow_dos_cleanup = True
+        elif not cancel_timed_out:
+            post_code, _ = _get_wnet_remote_unc(clean_drive)
+            if post_code != 0:
+                allow_dos_cleanup = True
+        if allow_dos_cleanup and _remove_dos_lanman_device(clean_drive):
             unmounted_ok = True
 
     if notify_explorer and unmounted_ok:
-        _notify_windows_explorer_refresh()
+        _notify_windows_explorer_refresh(removed_drives=[clean_drive])
     return unmounted_ok
 
 
-def open_drive_in_explorer(drive_letter="Z:"):
+def preflight_smb_port(host, timeout=0.8):
+    """Memeriksa keterjangkauan TCP port 445 sebelum meluncurkan File Explorer (batas <= 0.8s)."""
+    clean_h = sanitize_input(host).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
+    if not clean_h:
+        return False
+    bounded_timeout = min(float(timeout), 0.8) if timeout is not None else 0.8
+    if bounded_timeout <= 0:
+        bounded_timeout = 0.8
+    return bool(is_port_open(clean_h, 445, timeout=bounded_timeout))
+
+
+def open_drive_in_explorer(drive_letter="Z:", timeout=0.8):
     """
-    Membuka drive network yang ter-mount langsung di Windows File Explorer.
+    Membuka drive network yang ter-mount di File Explorer setelah preflight status & TCP port 445.
+    Mengembalikan tuple (bool, str).
     """
     clean_drive = drive_letter.strip().rstrip("\\").upper()
     if not clean_drive.endswith(":"):
         clean_drive += ":"
 
     target_path = f"{clean_drive}\\"
+    if sys.platform == "win32":
+        wnet_code, wnet_unc = _get_wnet_remote_unc(clean_drive)
+        if wnet_code in (1201, 1203):
+            return False, f"Drive {clean_drive} terputus atau tidak aktif; tidak membuka Explorer."
+        if wnet_code == 0 and wnet_unc:
+            unc_host, _ = _extract_unc_host_and_share(wnet_unc)
+            if unc_host and not preflight_smb_port(unc_host, timeout=timeout):
+                return False, f"Host SMB ({unc_host}:445) tidak merespons; pembukaan {clean_drive} dibatalkan agar Explorer tidak hang."
+
     try:
         if sys.platform == "win32":
             os.startfile(target_path)
-            return True
+            return True, f"Membuka {clean_drive} di File Explorer"
         else:
             subprocess.Popen(["explorer.exe", target_path])
-            return True
-    except Exception:
-        return False
+            return True, f"Membuka {clean_drive} di File Explorer"
+    except Exception as e:
+        return False, str(e)
 
 
 def open_unc_root_in_explorer(host, server_connections=None, is_domain_route=None, zerotier_ip=None, timeout=0.8):
     r"""
-    Membuka folder akar jaringan server (\\IP_Server\) langsung di Windows File Explorer.
+    Membuka folder akar jaringan server (\\IP_Server\) di File Explorer setelah preflight port 445.
+    Mengembalikan tuple (bool, str).
     """
     resolved_host = resolve_smb_host(
         target_host=host,
@@ -1560,8 +1793,8 @@ def open_unc_root_in_explorer(host, server_connections=None, is_domain_route=Non
         is_domain_route=is_domain_route,
         zerotier_ip=zerotier_ip,
     )
-    if not resolved_host:
-        return False, "Host SMB server tidak dapat dijangkau di port 445."
+    if not resolved_host or not preflight_smb_port(resolved_host, timeout=timeout):
+        return False, f"Host SMB ({resolved_host or host}:445) tidak dapat dijangkau; pembukaan UNC dibatalkan agar Explorer tidak hang."
     unc_path = f"\\\\{resolved_host}"
     try:
         if sys.platform == "win32":

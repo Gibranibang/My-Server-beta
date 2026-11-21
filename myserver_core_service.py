@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.2"
+APP_VERSION_NUMBER = "4.6.3"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -4983,6 +4983,93 @@ def _get_bundled_backend_version(cfg=None, allow_remote=True, force_remote=False
     return ""
 
 
+def _download_stream_bounded(url, dest_path, headers=None, socket_timeout=25.0, total_timeout=35.0, max_bytes=None):
+    """Download URL to dest_path enforcing both per-read socket timeout and total wall-clock deadline."""
+    req = urllib.request.Request(url, headers=headers or {}, method="GET")
+    deadline = time.monotonic() + max(float(total_timeout), float(socket_timeout), 1.0)
+    downloaded = 0
+    try:
+        with urllib.request.urlopen(req, timeout=socket_timeout) as resp, open(dest_path, "wb") as out_f:
+            while True:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"Unduhan melebihi batas waktu total ({int(total_timeout)}s)")
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if max_bytes is not None and downloaded > max_bytes:
+                    raise ValueError(f"Ukuran arsip GitHub melebihi batas {max_bytes} bytes")
+                out_f.write(chunk)
+        return downloaded
+    except Exception:
+        if dest_path and os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
+        raise
+
+
+def _exec_ssh_command_bounded(ssh_client, cmd, timeout=30.0):
+    """
+    Execute an SSH command with active stdout/stderr draining and a hard wall-clock deadline.
+    Avoids Paramiko's unbounded recv_exit_status() wait and channel window-full deadlocks.
+    """
+    _, stdout, stderr = ssh_client.exec_command(cmd, timeout=timeout)
+    chan = getattr(stdout, "channel", None)
+    if chan is None:
+        out_raw = stdout.read() if hasattr(stdout, "read") else b""
+        err_raw = stderr.read() if hasattr(stderr, "read") else b""
+        return 0, out_raw, err_raw
+
+    set_to = getattr(chan, "settimeout", None)
+    if callable(set_to):
+        try:
+            set_to(timeout)
+        except Exception:
+            pass
+
+    ready_fn = getattr(chan, "exit_status_ready", None)
+    if not callable(ready_fn):
+        exit_code = chan.recv_exit_status()
+        out_raw = stdout.read() if hasattr(stdout, "read") else b""
+        err_raw = stderr.read() if hasattr(stderr, "read") else b""
+        return exit_code, out_raw, err_raw
+
+    deadline = time.monotonic() + max(float(timeout), 1.0)
+    out_chunks = []
+    err_chunks = []
+
+    def _drain():
+        while callable(getattr(chan, "recv_ready", None)) and chan.recv_ready():
+            chunk = chan.recv(65536)
+            if not chunk:
+                break
+            out_chunks.append(chunk)
+        while callable(getattr(chan, "recv_stderr_ready", None)) and chan.recv_stderr_ready():
+            chunk = chan.recv_stderr(65536)
+            if not chunk:
+                break
+            err_chunks.append(chunk)
+
+    while not ready_fn():
+        _drain()
+        if time.monotonic() > deadline:
+            close_fn = getattr(chan, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+            raise TimeoutError(f"Perintah SSH melebihi batas waktu ({int(timeout)}s)")
+        time.sleep(0.1)
+
+    _drain()
+    exit_code = chan.recv_exit_status()
+    _drain()
+    return exit_code, b"".join(out_chunks), b"".join(err_chunks)
+
+
 def _download_remote_backend_archive(repo_slug, asset_name, suffix, expected_ver="", timeout=25.0):
     """Mengunduh paket rilis Backend terbaru (.zip/.tar.gz) dari GitHub Releases ke file sementara."""
     if not repo_slug:
@@ -4996,26 +5083,18 @@ def _download_remote_backend_archive(repo_slug, asset_name, suffix, expected_ver
     try:
         fd, tmp_path = tempfile.mkstemp(prefix="myserver_backend_dl_", suffix=suffix)
         os.close(fd)
-        req = urllib.request.Request(
+        downloaded = _download_stream_bounded(
             dl_url,
+            tmp_path,
             headers={
                 "User-Agent": f"MyServer-Core/{APP_VERSION_NUMBER}",
                 "Cache-Control": "no-cache",
                 "Connection": "close",
             },
-            method="GET",
+            socket_timeout=timeout,
+            total_timeout=max(float(timeout) + 15.0, 40.0),
+            max_bytes=64 * 1024 * 1024,
         )
-        max_bytes = 64 * 1024 * 1024
-        downloaded = 0
-        with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp_path, "wb") as out_f:
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                downloaded += len(chunk)
-                if downloaded > max_bytes:
-                    raise ValueError(f"Ukuran arsip GitHub melebihi batas {max_bytes} bytes")
-                out_f.write(chunk)
         if downloaded < 512:
             raise ValueError(f"Ukuran arsip GitHub terlalu kecil ({downloaded} bytes)")
         pkg_ver = _extract_archive_backend_version(tmp_path)
@@ -5407,7 +5486,7 @@ def handle_remote_backend_action(body):
 
                 def _verify_ota_jwt(cand_base, uname_val, pwd_val, ztok_val=""):
                     if not uname_val or not (pwd_val or ztok_val):
-                        return "", None
+                        return "", None, None
                     v_payload = {"username": uname_val}
                     if pwd_val:
                         v_payload["password"] = pwd_val
@@ -5427,10 +5506,14 @@ def handle_remote_backend_action(body):
                                 tok = str(v_data.get("access_token") or "").strip()
                                 v_role = str(v_data.get("role") or "").strip().lower()
                                 if tok and v_role in ("admin", "root"):
-                                    return tok, v_data
+                                    return tok, v_data, None
+                    except urllib.error.HTTPError:
+                        return "", None, None
+                    except (urllib.error.URLError, TimeoutError, OSError) as net_ex:
+                        return "", None, net_ex
                     except Exception:
                         pass
-                    return "", None
+                    return "", None, None
 
                 body_bytes = _build_ota_body(ota_username, ota_password, zimaos_token)
 
@@ -5441,7 +5524,10 @@ def handle_remote_backend_action(body):
                     try:
                         bearer_token = smb_token
                         if not bearer_token and (ota_password or zimaos_token):
-                            fetched_tok, _ = _verify_ota_jwt(cand_ota_url, ota_username, ota_password, zimaos_token)
+                            fetched_tok, _, verify_net_err = _verify_ota_jwt(cand_ota_url, ota_username, ota_password, zimaos_token)
+                            if verify_net_err is not None:
+                                last_ota_err = verify_net_err
+                                continue
                             if fetched_tok:
                                 bearer_token = fetched_tok
 
@@ -5465,11 +5551,11 @@ def handle_remote_backend_action(body):
                             resp_data = _send_ota_upload(bearer_token, body_bytes)
                         except urllib.error.HTTPError as he:
                             if he.code == 401 and bearer_token:
-                                fresh_tok, v_data = _verify_ota_jwt(cand_ota_url, ota_username, ota_password, zimaos_token)
+                                fresh_tok, v_data, _ = _verify_ota_jwt(cand_ota_url, ota_username, ota_password, zimaos_token)
                                 if not fresh_tok and zima_user and (zima_pwd or zimaos_token) and (
                                     ota_username != zima_user or ota_password != zima_pwd
                                 ):
-                                    fresh_tok, v_data = _verify_ota_jwt(cand_ota_url, zima_user, zima_pwd, zimaos_token)
+                                    fresh_tok, v_data, _ = _verify_ota_jwt(cand_ota_url, zima_user, zima_pwd, zimaos_token)
                                 if fresh_tok:
                                     if smb_is_admin:
                                         _persist_refreshed_backend_token(srv_id, fresh_tok, v_data)
@@ -5688,7 +5774,11 @@ def handle_remote_backend_action(body):
             # 4. Unggah paket lokal via SFTP atau unduh dari GitHub Release sesuai mode source
             safe_user = re.sub(r"[^A-Za-z0-9_.-]", "_", user or "admin").strip("._") or "admin"
             deploy_dir = f"/tmp/myserver_deploy_{safe_user}"
-            ssh_client.exec_command(f"rm -rf {shlex.quote(deploy_dir)} && mkdir -p {shlex.quote(deploy_dir)}")
+            _exec_ssh_command_bounded(
+                ssh_client,
+                f"rm -rf {shlex.quote(deploy_dir)} && mkdir -p {shlex.quote(deploy_dir)}",
+                timeout=15.0,
+            )
 
             uploaded_local = False
             if source == "auto" and stale_local_bundle:
@@ -5709,8 +5799,13 @@ def handle_remote_backend_action(body):
                 try:
                     logger_manager.log_info(f"[handle_remote_backend_action] Mengunggah paket lokal {ssh_bundle} via SFTP...")
                     sftp = ssh_client.open_sftp()
-                    sftp.put(ssh_bundle, f"{deploy_dir}/backend.tar.gz")
-                    sftp.close()
+                    sftp_chan = getattr(sftp, "get_channel", lambda: None)()
+                    if sftp_chan is not None and callable(getattr(sftp_chan, "settimeout", None)):
+                        sftp_chan.settimeout(30.0)
+                    try:
+                        sftp.put(ssh_bundle, f"{deploy_dir}/backend.tar.gz")
+                    finally:
+                        sftp.close()
                     uploaded_local = True
                     logger_manager.log_info("[handle_remote_backend_action] Paket lokal berhasil diunggah via SFTP.")
                 except Exception as sftp_err:
@@ -5741,12 +5836,16 @@ def handle_remote_backend_action(body):
                         "message": f"Format github_repo tidak valid (harus owner/repo): {raw_repo_slug}",
                     })
                 github_url = f"https://github.com/{repo_slug}/releases/latest/download/MyServer-Backend-ZimaOS.tar.gz"
-                curl_cmd = f"cd {shlex.quote(deploy_dir)} && curl -sSL -f {shlex.quote(github_url)} -o backend.tar.gz"
-                _, stdout, stderr = ssh_client.exec_command(curl_cmd, timeout=30)
-                exit_status = stdout.channel.recv_exit_status()
+                curl_cmd = f"cd {shlex.quote(deploy_dir)} && curl -sSL --connect-timeout 10 --max-time 30 -f {shlex.quote(github_url)} -o backend.tar.gz"
+                exit_status, _, _ = _exec_ssh_command_bounded(ssh_client, curl_cmd, timeout=35.0)
 
-                _, sz_stdout, _ = ssh_client.exec_command(f"wc -c < {shlex.quote(deploy_dir)}/backend.tar.gz 2>/dev/null || echo 0")
-                downloaded_bytes = int(sz_stdout.read().decode().strip() or "0")
+                _, sz_raw, _ = _exec_ssh_command_bounded(
+                    ssh_client,
+                    f"wc -c < {shlex.quote(deploy_dir)}/backend.tar.gz 2>/dev/null || echo 0",
+                    timeout=10.0,
+                )
+                sz_text = sz_raw.decode("utf-8", errors="ignore").strip() if isinstance(sz_raw, bytes) else str(sz_raw).strip()
+                downloaded_bytes = int(sz_text or "0")
 
                 if exit_status != 0 or downloaded_bytes < 1000:
                     return _with_ota_state({
@@ -5755,13 +5854,12 @@ def handle_remote_backend_action(body):
                         "message": "Paket installer backend tidak dapat diunggah via SFTP maupun diunduh dari GitHub."
                     })
 
-            # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo (timeout 180s untuk docker build)
+            # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo (bounded 210s agar tidak deadlock di recv_exit_status)
             logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
             exec_script = f"cd {shlex.quote(deploy_dir)} && tar -xzf backend.tar.gz && printf '%s\\n' {shlex.quote(pwd)} | sudo -S bash install_zimaos.sh"
-            _, exec_stdout, exec_stderr = ssh_client.exec_command(exec_script, timeout=180)
-            exec_exit = exec_stdout.channel.recv_exit_status()
-            exec_out_text = _mask_secret(exec_stdout.read().decode("utf-8", errors="replace"), pwd)
-            exec_err_text = _mask_secret(exec_stderr.read().decode("utf-8", errors="replace"), pwd)
+            exec_exit, exec_out_raw, exec_err_raw = _exec_ssh_command_bounded(ssh_client, exec_script, timeout=210.0)
+            exec_out_text = _mask_secret(exec_out_raw.decode("utf-8", errors="replace") if isinstance(exec_out_raw, bytes) else str(exec_out_raw), pwd)
+            exec_err_text = _mask_secret(exec_err_raw.decode("utf-8", errors="replace") if isinstance(exec_err_raw, bytes) else str(exec_err_raw), pwd)
             logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi (exit={exec_exit}): {exec_out_text[-500:]}")
 
             err_lower = exec_err_text.lower()
@@ -30625,9 +30723,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
             try:
                 logger_manager.log_info(f"[Updater] Mengunduh pembaruan dari: {download_url} -> {temp_file}")
-                req = urllib.request.Request(download_url, headers={"User-Agent": "MyServer-Updater/1.0"})
-                with urllib.request.urlopen(req, timeout=180) as resp, open(temp_file, "wb") as out_f:
-                    shutil.copyfileobj(resp, out_f)
+                downloaded_bytes = _download_stream_bounded(
+                    download_url,
+                    temp_file,
+                    headers={"User-Agent": "MyServer-Updater/1.0", "Connection": "close"},
+                    socket_timeout=30.0,
+                    total_timeout=180.0,
+                    max_bytes=512 * 1024 * 1024,
+                )
+                if downloaded_bytes < 1024:
+                    raise ValueError(f"Berkas unduhan pembaruan tidak lengkap ({downloaded_bytes} bytes)")
 
                 logger_manager.log_info(f"[Updater] Unduhan selesai ({os.path.getsize(temp_file):,} bytes)")
 

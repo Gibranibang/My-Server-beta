@@ -170,7 +170,7 @@ export default function ServerView({ go }: ViewProps) {
         const updated = await api.getServerDetails()
         setDetails(updated)
       } else {
-        notify(res?.message || t("server_backend_failed", "Gagal memperbarui backend server"), "danger")
+        notify(res?.message || res?.error || t("server_backend_failed", "Gagal memperbarui backend server"), "danger")
       }
     } catch (err: any) {
       notify(errorText(err), "danger")

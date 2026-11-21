@@ -2475,7 +2475,8 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] downloadAndInstallUpdate error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal mengunduh dan memasang pembaruan.")
+        const errMsg = typeof err === "string" ? err : err instanceof Error ? err.message : "Gagal mengunduh dan memasang pembaruan."
+        throw new Error(errMsg)
       }
       return { success: false, error: "Metode pembaruan otomatis tidak tersedia." }
     },

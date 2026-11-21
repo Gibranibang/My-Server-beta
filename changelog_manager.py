@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.3",
+        "channel": "Beta",
+        "date": "2026-11-21",
+        "title": "Perbaikan Infinite Loading Update Backend ZimaOS v1.4.5 & Ketahanan Unduhan OTA/Installer",
+        "notes": [
+            "Perbaikan Race Condition ZimaOS App Management & Docker Compose Backend v1.4.5: Menghapus pemicu async POST /v2/app_management/compose yang balapan dengan docker compose up -d serta menambahkan pull_policy: if_not_present pada docker-compose.yml dan pembersihan kontainer konflik (docker rm -f myserver-backend), sehingga ZimaOS tidak lagi memunculkan dua ikon rusak (infinite loading GHCR pull & Installation failed). Mode update di install_zimaos.sh kini juga memakai cache Docker agar pembaruan selesai dalam hitungan detik.",
+            "Penghapusan Deadlock SSH Paramiko & Failover Cepat OTA: Menambahkan _exec_ssh_command_bounded (penyedotan aktif stdout/stderr + batas waktu keras pengganti recv_exit_status tanpa timeout), _download_stream_bounded dengan batas waktu total + pembersihan berkas parsial, timeout channel SFTP 30s, batas curl --connect-timeout 10 --max-time 30, serta skip cepat kandidat OTA yang gagal jaringan pada _verify_ota_jwt.",
+            "Sinkronisasi Timeout Tauri IPC & Pesan Error UI: Menaikkan read_timeout_ms call_core_api di lib.rs menjadi 300000 ms untuk server/backend_action dan 210000 ms untuk download_and_install_update / install_update_from_zip, serta mempertahankan pesan error string Tauri pada api.real.ts dan res.error di ServerView.tsx."
+        ],
+        "features": [
+            "Paket Backend v1.4.5 Bebas Race Condition ZimaOS App Management & pull_policy: if_not_present",
+            "Eksekusi SSH & Unduhan OTA/Installer Terbatas Waktu (Anti-Deadlock Paramiko & Rust IPC)",
+            "Mode Update install_zimaos.sh Ber-Cache Cepat & Pembersihan Kontainer Konflik Otomatis"
+        ]
+    },
+    {
         "version": "4.6.2",
         "channel": "Beta",
         "date": "2026-11-21",

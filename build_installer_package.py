@@ -22,7 +22,7 @@ import zipfile
 BASE_BETA = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(BASE_BETA, "dist")
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
-VERSION = "4.6.2"
+VERSION = "4.6.3"
 APP_NAME = "My-Server by algitha BETA"
 
 ZEROTIER_MSI_FILENAME = "ZeroTier One.msi"
@@ -182,7 +182,7 @@ def stage_zerotier_installer(
         try:
             req = urllib.request.Request(
                 msi_url,
-                headers={"User-Agent": "MyServer-Desktop-Beta-Packager/4.6.2"},
+                headers={"User-Agent": "MyServer-Desktop-Beta-Packager/4.6.3"},
             )
             with urllib.request.urlopen(req, timeout=60.0) as resp, open(tmp_part, "wb") as out_f:
                 while True:

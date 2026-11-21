@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.6.3 - Beta] - 2026-11-21
+
+- Perbaikan Race Condition ZimaOS App Management & Docker Compose Backend v1.4.5: Menghapus pemicu async POST /v2/app_management/compose yang balapan dengan docker compose up -d serta menambahkan pull_policy: if_not_present pada docker-compose.yml dan pembersihan kontainer konflik (docker rm -f myserver-backend), sehingga ZimaOS tidak lagi memunculkan dua ikon rusak (infinite loading GHCR pull & Installation failed). Mode update di install_zimaos.sh kini juga memakai cache Docker agar pembaruan selesai dalam hitungan detik.
+- Penghapusan Deadlock SSH Paramiko & Failover Cepat OTA: Menambahkan _exec_ssh_command_bounded (penyedotan aktif stdout/stderr + batas waktu keras pengganti recv_exit_status tanpa timeout), _download_stream_bounded dengan batas waktu total + pembersihan berkas parsial, timeout channel SFTP 30s, batas curl --connect-timeout 10 --max-time 30, serta skip cepat kandidat OTA yang gagal jaringan pada _verify_ota_jwt.
+- Sinkronisasi Timeout Tauri IPC & Pesan Error UI: Menaikkan read_timeout_ms call_core_api di lib.rs menjadi 300000 ms untuk server/backend_action dan 210000 ms untuk download_and_install_update / install_update_from_zip, serta mempertahankan pesan error string Tauri pada api.real.ts dan res.error di ServerView.tsx.
+
 ## [v4.6.2 - Beta] - 2026-11-21
 
 - Stabilitas SMB & Siklus Hidup Anti-Freeze File Explorer (Phase 7): Memperbaiki 10 akar masalah SMB tersendat dan Windows Explorer Not Responding melalui resolusi host LAN-first ber-cache 15s + fail-fast, soft_mode eviksi drive IP usang, scoped unmount khusus host MyServer, notifikasi Shell per-drive (SHCNE_DRIVEADD/DRIVEREMOVED), preflight TCP port 445 (< 0.8s) sebelum membuka Explorer, handler Win32 WM_POWERBROADCAST sleep/wake + NotifyAddrChange + 5-tick offline-streak, eliminasi GetDiskFreeSpaceExW/shutil.disk_usage/WNet pada polling latar belakang, dan client-first teardown saat beralih ZimaOS <-> Backend.

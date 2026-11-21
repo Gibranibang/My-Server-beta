@@ -207,6 +207,173 @@ class TestEasyTierManager(unittest.TestCase):
             # Server B TIDAK boleh mengambil 10.126.126.1 karena berada di jaringan terpisah
             self.assertIsNone(info_b)
 
+    def test_default_relay_peers_udp_first_and_china_wss_last(self):
+        peers = easytier_manager.DEFAULT_RELAY_PEERS
+        expected_udp = [
+            "udp://139.162.29.247:11010",
+            "udp://103.29.68.33:11010",
+            "udp://172.239.28.141:11010",
+        ]
+        self.assertEqual(peers[:3], expected_udp)
+        first_tcp_idx = next(i for i, p in enumerate(peers) if p.startswith("tcp://"))
+        last_udp_idx = max(i for i, p in enumerate(peers) if p.startswith("udp://"))
+        self.assertLess(last_udp_idx, first_tcp_idx)
+        self.assertEqual(
+            peers[-2:],
+            ["wss://39.96.54.49:443/", "wss://106.14.186.206:443/"],
+        )
+
+    def test_start_easytier_eager_p2p_default_udp_listener_first_and_opt_in_lazy_p2p(self):
+        with patch.object(self.mgr, "is_available", return_value=True), \
+             patch.object(self.mgr, "is_running", return_value=False), \
+             patch.object(self.mgr, "_kill_orphaned_daemon"), \
+             patch.object(self.mgr, "_is_rpc_reachable", return_value=True), \
+             patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_popen.return_value = mock_proc
+
+            ok, _ = self.mgr.start_easytier(remote_id="1a2b3c4d5e6f7089")
+            self.assertTrue(ok)
+            cmd_default = mock_popen.call_args[0][0]
+            self.assertNotIn("--lazy-p2p", cmd_default)
+            udp_idx = cmd_default.index("udp://0.0.0.0:0")
+            tcp_idx = cmd_default.index("tcp://0.0.0.0:0")
+            wss_idx = cmd_default.index("wss://0.0.0.0:0")
+            self.assertLess(udp_idx, tcp_idx)
+            self.assertLess(tcp_idx, wss_idx)
+
+            mock_popen.reset_mock()
+            ok2, _ = self.mgr.start_easytier(remote_id="1a2b3c4d5e6f7089", lazy_p2p=True)
+            self.assertTrue(ok2)
+            cmd_lazy = mock_popen.call_args[0][0]
+            self.assertIn("--lazy-p2p", cmd_lazy)
+
+    def test_rlock_no_tun_fallback_no_deadlock_and_state_flags(self):
+        import threading
+        import types
+
+        fake_shell32 = types.SimpleNamespace(
+            IsUserAnAdmin=MagicMock(return_value=0),
+            ShellExecuteW=MagicMock(return_value=42),
+        )
+        fake_windll = types.SimpleNamespace(shell32=fake_shell32)
+
+        # First start() with use_no_tun=False fails RPC reachability (all False),
+        # triggering recursive self.start(..., use_no_tun=True) which succeeds on RPC.
+        rpc_calls = {"count": 0}
+
+        def _fake_rpc():
+            rpc_calls["count"] += 1
+            # First call is self.is_running() at start of outer start(), then 60 checks + 1 post-loop check = 62 calls
+            # During inner use_no_tun=True start(), is_running() is False, then check loop succeeds immediately.
+            return rpc_calls["count"] >= 63
+
+        # 1. Normal TUN launch (use_no_tun=False, rpc reachable) -> tun_active=True, no_tun_fallback=False
+        with patch.object(self.mgr, "is_available", return_value=True), \
+             patch.object(self.mgr, "is_running", return_value=False), \
+             patch.object(self.mgr, "_kill_orphaned_daemon"), \
+             patch.object(self.mgr, "_is_rpc_reachable", return_value=True), \
+             patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_popen.return_value = mock_proc
+            ok_tun, _ = self.mgr.start(remote_id="1a2b3c4d5e6f7089")
+            self.assertTrue(ok_tun)
+            self.assertTrue(self.mgr.is_tun_active())
+            with patch.object(self.mgr, "is_running", return_value=True), \
+                 patch.object(self.mgr, "get_peers", return_value=[{"ipv4_addr": "10.126.126.1/24"}]), \
+                 patch.object(self.mgr, "get_node_info", return_value={"virtual_ipv4": "10.126.126.2", "uptime": 5}):
+                summary_tun = self.mgr.get_summary(force_refresh=True)
+            self.assertTrue(summary_tun["tun_active"])
+            self.assertFalse(summary_tun["no_tun_fallback"])
+            self.assertEqual(summary_tun["smb_warning"], "")
+
+        # 2. Simulate Windows non-admin TUN failure -> recursive --no-tun fallback inside self._lock
+        self.mgr.stop()
+        self.assertFalse(self.mgr._tun_active)
+        self.assertFalse(self.mgr._no_tun_fallback)
+
+        result_box = {}
+        rpc_calls["count"] = 0
+
+        def _run_start():
+            result_box["res"] = self.mgr.start(remote_id="1a2b3c4d5e6f7089")
+
+        with patch.object(self.mgr, "is_available", return_value=True), \
+             patch.object(self.mgr, "_kill_orphaned_daemon"), \
+             patch.object(self.mgr, "_is_rpc_reachable", side_effect=_fake_rpc), \
+             patch("easytier_manager.os.name", "nt"), \
+             patch("easytier_manager.ctypes.windll", fake_windll, create=True), \
+             patch("easytier_manager.time.sleep"), \
+             patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_popen.return_value = mock_proc
+
+            t = threading.Thread(target=_run_start, daemon=True)
+            t.start()
+            t.join(timeout=2.0)
+            self.assertFalse(t.is_alive(), "EasyTierManager.start() deadlocked on --no-tun fallback!")
+
+        ok_fb, _ = result_box["res"]
+        self.assertTrue(ok_fb)
+        self.assertFalse(self.mgr.is_tun_active())
+        with patch.object(self.mgr, "is_running", return_value=True), \
+             patch.object(self.mgr, "get_peers", return_value=[{"ipv4_addr": "10.126.126.1/24"}]), \
+             patch.object(self.mgr, "get_node_info", return_value={"virtual_ipv4": "10.126.126.2", "uptime": 3}):
+            summary_fb = self.mgr.get_summary(force_refresh=True)
+        self.assertTrue(summary_fb["running"])
+        self.assertFalse(summary_fb["tun_active"])
+        self.assertTrue(summary_fb["no_tun_fallback"])
+        self.assertTrue(len(summary_fb["smb_warning"]) > 0)
+        self.assertTrue(
+            any(k in summary_fb["smb_warning"] for k in ("Wintun", "Administrator", "UAC", "ZeroTier", "LAN"))
+        )
+
+        # stop() resets both flags to False
+        self.mgr.stop()
+        self.assertFalse(self.mgr._tun_active)
+        self.assertFalse(self.mgr._no_tun_fallback)
+
+    def test_get_summary_12s_ttl_cache_and_no_redundant_cli_forks(self):
+        self.assertEqual(easytier_manager.SUMMARY_CACHE_TTL_SEC, 12.0)
+        cli_responses = {
+            ("peer", "list"): ([{"peer_id": "1", "ipv4_addr": "10.126.126.1/24"}], None),
+            ("node", "info"): ({"virtual_ipv4": "10.126.126.2/24", "hostname": "Client", "peer_id": "2"}, None),
+        }
+        run_cli_calls = []
+
+        def _fake_run_cli(args, timeout=2.0):
+            run_cli_calls.append(tuple(args))
+            return cli_responses.get(tuple(args), (None, "unexpected"))
+
+        fake_now = [1000.0]
+        with patch.object(self.mgr, "is_running", return_value=True), \
+             patch.object(self.mgr, "run_cli", side_effect=_fake_run_cli), \
+             patch("easytier_manager.time.time", side_effect=lambda: fake_now[0]):
+            s1 = self.mgr.get_summary()
+            self.assertEqual(s1["server_peer_ip"], "10.126.126.1")
+            # Only peer list + node info (2 CLI calls), NOT extra get_node_info/get_routes/get_peers from get_peer_ip()
+            self.assertEqual(len(run_cli_calls), 2)
+
+            # Second call within 12s -> cache hit, zero additional run_cli calls
+            fake_now[0] = 1008.0
+            s2 = self.mgr.get_summary()
+            self.assertEqual(s2, s1)
+            self.assertEqual(len(run_cli_calls), 2)
+
+            # force_refresh=True refreshes immediately
+            s3 = self.mgr.get_summary(force_refresh=True)
+            self.assertEqual(s3["server_peer_ip"], "10.126.126.1")
+            self.assertEqual(len(run_cli_calls), 4)
+
+            # Advancing clock beyond 12.0s triggers refresh
+            fake_now[0] = 1021.0
+            s4 = self.mgr.get_summary()
+            self.assertEqual(s4["server_peer_ip"], "10.126.126.1")
+            self.assertEqual(len(run_cli_calls), 6)
+
 
 if __name__ == "__main__":
     unittest.main()

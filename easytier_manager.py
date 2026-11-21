@@ -26,20 +26,25 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-# Default public discovery/relay nodes (mencakup relay resmi IceWhale ZimaOS + EasyTier public relays)
+# Default public discovery/relay nodes (UDP-first regional relays before TCP; overseas WSS last)
 DEFAULT_RELAY_PEERS = [
-    "tcp://139.162.29.247:11010",
     "udp://139.162.29.247:11010",
-    "tcp://103.29.68.33:11010",
     "udp://103.29.68.33:11010",
-    "tcp://172.239.28.141:11010",
     "udp://172.239.28.141:11010",
+    "tcp://139.162.29.247:11010",
+    "tcp://103.29.68.33:11010",
+    "tcp://172.239.28.141:11010",
+    "tcp://public.easytier.top:11010",
     "wss://39.96.54.49:443/",
     "wss://106.14.186.206:443/",
-    "tcp://public.easytier.top:11010"
 ]
 
 DEFAULT_RPC_PORT = 15888
+SUMMARY_CACHE_TTL_SEC = 12.0
+NO_TUN_SMB_WARNING = (
+    "EasyTier berjalan dalam mode --no-tun (adapter Wintun tidak aktif). "
+    "Akses drive SMB via EasyTier memerlukan izin Administrator/UAC, atau gunakan LAN / ZeroTier."
+)
 
 
 def derive_easytier_params(remote_id: str):
@@ -99,7 +104,7 @@ class EasyTierManager:
     """Pengelola siklus hidup daemon EasyTier P2P Mesh."""
 
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._proc = None
         self._remote_id = None
         self._network_name = None
@@ -107,6 +112,8 @@ class EasyTierManager:
         self._ipv4 = None
         self._rpc_port = DEFAULT_RPC_PORT
         self._start_time = None
+        self._tun_active = False
+        self._no_tun_fallback = False
         self._binaries = find_easytier_binaries()
         self._cached_summary = None
         self._cached_summary_ts = 0.0
@@ -145,6 +152,12 @@ class EasyTierManager:
         """Memeriksa apakah daemon EasyTier saat ini aktif merespons RPC portal."""
         return self._is_rpc_reachable()
 
+    def is_tun_active(self):
+        """Mengembalikan True bila adapter Wintun aktif (atau daemon eksternal Admin), False saat --no-tun."""
+        if self._no_tun_fallback:
+            return False
+        return bool(self._tun_active if self._start_time is not None else True)
+
     def _is_rpc_reachable(self):
         """Cek cepat apakah RPC portal 127.0.0.1:port aktif merespons (short socket timeout 0.15s)."""
         try:
@@ -168,7 +181,7 @@ class EasyTierManager:
                 return False
         return False
 
-    def start(self, network_name=None, network_secret=None, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, use_no_tun=False, external_node=None):
+    def start(self, network_name=None, network_secret=None, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, use_no_tun=False, external_node=None, lazy_p2p=False, _from_tun_fallback=False):
         """
         Meluncurkan daemon easytier-core.exe secara headless di background.
         Mendukung peluncuran via remote_id ZimaOS (mengikuti standar Zima Client)
@@ -190,8 +203,8 @@ class EasyTierManager:
             if not target_net_name:
                 return False, "Parameter Remote ID atau Network Name wajib diisi."
 
-            if self.is_running():
-                if self._network_name == target_net_name and self._network_secret == target_net_secret:
+            if not _from_tun_fallback and self.is_running():
+                if self._network_name == target_net_name and self._network_secret == target_net_secret and self._tun_active == (not bool(use_no_tun)):
                     logger.info("EasyTier daemon sudah berjalan dengan konfigurasi yang sama.")
                     return True, "Daemon sudah aktif."
                 else:
@@ -214,11 +227,12 @@ class EasyTierManager:
                 "--network-name", self._network_name,
                 "--network-secret", self._network_secret,
                 "-r", f"127.0.0.1:{self._rpc_port}",
-                "-l", "wss://0.0.0.0:0",
-                "-l", "tcp://0.0.0.0:0",
                 "-l", "udp://0.0.0.0:0",
-                "--lazy-p2p",
+                "-l", "tcp://0.0.0.0:0",
+                "-l", "wss://0.0.0.0:0",
             ]
+            if lazy_p2p:
+                cmd.append("--lazy-p2p")
 
             if use_no_tun:
                 cmd.append("--no-tun")
@@ -294,18 +308,23 @@ class EasyTierManager:
 
                 self._start_time = time.time()
                 self._cached_summary = None
+                self._cached_summary_ts = 0.0
 
                 # Berikan waktu tunggu RPC responsif (hingga 12 detik jika lewat UAC, 4 detik jika child langsung)
                 max_checks = 60 if (not is_admin and not use_no_tun and os.name == "nt") else 20
                 for _ in range(max_checks):
                     time.sleep(0.2)
                     if self._is_rpc_reachable():
-                        logger.info("EasyTier daemon berhasil aktif dan RPC reachable.")
+                        self._tun_active = not bool(use_no_tun)
+                        self._no_tun_fallback = bool(use_no_tun or _from_tun_fallback)
+                        logger.info("EasyTier daemon berhasil aktif dan RPC reachable (tun_active=%s).", self._tun_active)
                         return True, "EasyTier aktif."
                     if self._proc is not None and self._proc.poll() is not None:
                         break
 
                 if self._is_rpc_reachable():
+                    self._tun_active = not bool(use_no_tun)
+                    self._no_tun_fallback = bool(use_no_tun or _from_tun_fallback)
                     return True, "EasyTier aktif."
 
                 # Jika UAC gagal atau TUN gagal dibuat, coba fallback otomatis ke mode --no-tun
@@ -319,7 +338,9 @@ class EasyTierManager:
                         rpc_port=rpc_port,
                         remote_id=remote_id,
                         use_no_tun=True,
-                        external_node=external_node
+                        external_node=external_node,
+                        lazy_p2p=lazy_p2p,
+                        _from_tun_fallback=True,
                     )
 
                 logger.warning("EasyTier RPC portal belum merespons setelah inisialisasi.")
@@ -350,7 +371,10 @@ class EasyTierManager:
                 self._proc = None
 
         self._start_time = None
+        self._tun_active = False
+        self._no_tun_fallback = False
         self._cached_summary = None
+        self._cached_summary_ts = 0.0
         self._kill_orphaned_daemon()
         return True, "EasyTier daemon berhasil dihentikan."
 
@@ -573,11 +597,26 @@ class EasyTierManager:
             pass
         return False
 
-    def get_summary(self):
-        """Mengambil ringkasan telemetri komprehensif untuk antarmuka UI dengan short caching 1.2s."""
+    def _extract_peer_ip_from_entries(self, entries, local_ip=""):
+        """Menarik IP peer non-lokal pertama langsung dari daftar peers/routes tanpa fork CLI tambahan."""
+        local_ips = {"127.0.0.1", "0.0.0.0"}
+        clean_local = str(local_ip or "").split("/")[0].strip()
+        if clean_local:
+            local_ips.add(clean_local)
+        for item in entries or []:
+            if isinstance(item, dict):
+                ipv4 = item.get("ipv4_addr") or item.get("ipv4") or item.get("ip") or item.get("peer_ipv4")
+                if ipv4:
+                    clean = str(ipv4).split("/")[0].strip()
+                    if clean and clean not in local_ips and not clean.startswith("127."):
+                        return clean
+        return None
+
+    def get_summary(self, force_refresh=False):
+        """Mengambil ringkasan telemetri komprehensif untuk antarmuka UI dengan TTL cache 12s."""
         now = time.time()
         with self._lock:
-            if self._cached_summary and (now - self._cached_summary_ts) < 1.2:
+            if not force_refresh and self._cached_summary and (now - self._cached_summary_ts) < SUMMARY_CACHE_TTL_SEC:
                 return self._cached_summary
 
         running = self.is_running()
@@ -590,7 +629,10 @@ class EasyTierManager:
                 "virtual_ipv4": None,
                 "virtual_ip": None,
                 "peers_count": 0,
-                "peers": []
+                "peers": [],
+                "tun_active": False,
+                "no_tun_fallback": False,
+                "smb_warning": "",
             }
             with self._lock:
                 self._cached_summary = res
@@ -600,6 +642,10 @@ class EasyTierManager:
         peers = self.get_peers()
         node_info = self.get_node_info()
         vip = node_info.get("virtual_ipv4") or (str(self._ipv4).split("/")[0].strip() if self._ipv4 else "10.126.126.2")
+        tun_active = self.is_tun_active()
+        server_peer_ip = self._extract_peer_ip_from_entries(peers, local_ip=vip)
+        if not server_peer_ip:
+            server_peer_ip = self.get_peer_ip()
         res = {
             "running": True,
             "available": True,
@@ -610,18 +656,21 @@ class EasyTierManager:
             "uptime": node_info.get("uptime", 0),
             "peers_count": len(peers),
             "peers": peers,
-            "server_peer_ip": self.get_peer_ip()
+            "server_peer_ip": server_peer_ip,
+            "tun_active": tun_active,
+            "no_tun_fallback": bool(self._no_tun_fallback),
+            "smb_warning": ("" if tun_active else NO_TUN_SMB_WARNING),
         }
         with self._lock:
             self._cached_summary = res
             self._cached_summary_ts = now
         return res
 
-    def get_status_overview(self):
+    def get_status_overview(self, force_refresh=False):
         """Alias untuk get_summary() demi kompatibilitas penuh."""
-        return self.get_summary()
+        return self.get_summary(force_refresh=force_refresh)
 
-    def start_easytier(self, network_name=None, network_secret=None, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None):
+    def start_easytier(self, network_name=None, network_secret=None, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, lazy_p2p=False):
         """Alias untuk start() dengan parameter fleksibel."""
         return self.start(
             network_name=network_name,
@@ -631,16 +680,17 @@ class EasyTierManager:
             rpc_port=rpc_port,
             remote_id=remote_id,
             use_no_tun=use_no_tun,
-            external_node=external_node
+            external_node=external_node,
+            lazy_p2p=lazy_p2p,
         )
 
     def stop_easytier(self):
         """Alias untuk stop() demi kompatibilitas penuh."""
         return self.stop()
 
-    def get_full_status(self):
+    def get_full_status(self, force_refresh=False):
         """Alias untuk get_summary() demi kompatibilitas penuh."""
-        return self.get_summary()
+        return self.get_summary(force_refresh=force_refresh)
 
 
 # Global Singleton

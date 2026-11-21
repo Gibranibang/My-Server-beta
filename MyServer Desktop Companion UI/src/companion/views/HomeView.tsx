@@ -324,7 +324,7 @@ export default function HomeView({ go }: ViewProps) {
               className="h-[20.16px] shrink-0 justify-center rounded-full bg-white border border-[#DDD] px-[6.39px] flex items-center gap-[3.36px] cursor-pointer hover:bg-slate-50 transition outline-none relative select-none"
               title={t("switch_route_title", "Ganti Rute Akses")}
             >
-              <Globe className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#047857]" : "text-[#2D2D2D]")} strokeWidth={1.8} />
+              <currentRouteMeta.icon className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#047857]" : "text-[#2D2D2D]")} strokeWidth={1.8} />
               <span className={cx("text-[8.4px] font-semibold leading-[11.76px] whitespace-nowrap", isOnline ? "text-[#047857]" : "text-[#CCCCCC]")}>
                 {currentRouteMeta.label}
               </span>

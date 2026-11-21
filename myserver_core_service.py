@@ -7113,6 +7113,431 @@ def get_active_resolved_route(cfg=None, force_refresh=False):
 
 
 
+_auto_route_smb_lock = threading.Lock()
+_auto_route_smb_tracker = {
+    "server_id": None,
+    "mounted_host": "",
+    "pending_host": "",
+    "pending_since_ts": 0.0,
+}
+AUTO_ROUTE_SMB_DEBOUNCE_SEC = 5.0
+
+_shutdown_daemons_lock = threading.Lock()
+_shutdown_daemons_done = False
+
+WM_POWERBROADCAST = 0x0218
+PBT_APMSUSPEND = 0x0004
+PBT_APMRESUMESUSPEND = 0x0007
+PBT_APMRESUMEAUTOMATIC = 0x0012
+DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000
+POWER_RESUME_DEDUP_SEC = 5.0
+POWER_RESUME_REBIND_DELAY_SEC = 2.5
+SMB_OFFLINE_UNMOUNT_THRESHOLD = 5
+
+_power_resume_lock = threading.Lock()
+_last_power_resume_ts = 0.0
+_active_power_wndproc_ref = None
+
+
+def _collect_myserver_smb_hosts(cfg=None, server=None, include_all_servers=False):
+    """Mengumpulkan seluruh host/IP resmi server MyServer agar unmount SMB strictly tidak menyentuh drive asing."""
+    hosts = set()
+    try:
+        if cfg is None and config_manager is not None:
+            cfg = config_manager.load_or_create_config()
+    except Exception:
+        cfg = None
+
+    targets = []
+    if include_all_servers and isinstance(cfg, dict):
+        targets = [s for s in (cfg.get("servers") or []) if isinstance(s, dict)]
+    elif isinstance(server, dict):
+        targets = [server]
+    elif isinstance(cfg, dict) and config_manager is not None:
+        try:
+            act = config_manager.get_active_server(cfg)
+            if isinstance(act, dict):
+                targets = [act]
+        except Exception:
+            pass
+
+    for srv in targets:
+        for conn in (srv.get("connections") or []):
+            if isinstance(conn, dict) and conn.get("url"):
+                ch = _extract_host_from_url(conn.get("url", ""))
+                if ch:
+                    hosts.add(ch.strip().lower())
+        for key in ("host", "zerotier_virtual_ip", "easytier_virtual_ip"):
+            val = (srv.get(key) or "").strip().lower()
+            if val:
+                hosts.add(val)
+        srv_name = (srv.get("name") or "").strip()
+        if srv_name and re.match(r"^[a-zA-Z0-9][a-zA-Z0-9\-.]{1,}$", srv_name):
+            hosts.add(srv_name.lower())
+
+    try:
+        if isinstance(cfg, dict):
+            act_u, _ = get_active_resolved_route(cfg)
+            act_h = _extract_host_from_url(act_u) if act_u else ""
+            if act_h:
+                hosts.add(act_h.strip().lower())
+    except Exception:
+        pass
+
+    try:
+        alias_fn = getattr(smb_mount_manager, "get_active_1219_aliases", None)
+        aliases = alias_fn() if callable(alias_fn) else {}
+        for av in (aliases or {}).values():
+            if av and str(av).strip():
+                hosts.add(str(av).strip().lower())
+    except Exception:
+        pass
+
+    return hosts
+
+
+def _unmount_myserver_smb_drives(
+    reason="lifecycle",
+    cfg=None,
+    server=None,
+    include_all_servers=False,
+    include_easytier_subnet=False,
+    easytier_only=False,
+):
+    """Melepaskan hanya drive SMB milik MyServer dengan allowlist host ketat."""
+    hosts = set()
+    if easytier_only:
+        try:
+            if cfg is None and config_manager is not None:
+                cfg = config_manager.load_or_create_config()
+            srv_list = (cfg.get("servers") or []) if isinstance(cfg, dict) else []
+            for s in srv_list:
+                if isinstance(s, dict) and s.get("easytier_virtual_ip"):
+                    hosts.add(str(s["easytier_virtual_ip"]).strip().lower())
+        except Exception:
+            pass
+        prefixes = ("10.126.126.",)
+    else:
+        hosts = _collect_myserver_smb_hosts(
+            cfg=cfg,
+            server=server,
+            include_all_servers=include_all_servers,
+        )
+        prefixes = ("10.126.126.",) if include_easytier_subnet else None
+
+    try:
+        unmounted = smb_mount_manager.unmount_all_smb_shares(
+            allowed_hosts=hosts,
+            allowed_prefixes=prefixes,
+        )
+        logger_manager.log_info(
+            f"[SMB Lifecycle] Unmount terarah ({reason}): {unmounted} drive dilepaskan (hosts={len(hosts)})."
+        )
+        return unmounted
+    except Exception as e:
+        logger_manager.log_warning(f"[SMB Lifecycle] Gagal unmount terarah ({reason}): {e}")
+        return 0
+
+
+def _evaluate_auto_route_smb_transition(server_id, effective_host, now_ts=None, debounce_sec=AUTO_ROUTE_SMB_DEBOUNCE_SEC):
+    """Mengevaluasi transisi host SMB efektif dengan debounce anti-flapping."""
+    clean_host = (effective_host or "").strip().lower()
+    if not clean_host:
+        return False, ""
+    now = float(now_ts if now_ts is not None else time.time())
+    with _auto_route_smb_lock:
+        if server_id != _auto_route_smb_tracker["server_id"]:
+            _auto_route_smb_tracker["server_id"] = server_id
+            _auto_route_smb_tracker["mounted_host"] = clean_host
+            _auto_route_smb_tracker["pending_host"] = ""
+            _auto_route_smb_tracker["pending_since_ts"] = 0.0
+            return False, ""
+        if not _auto_route_smb_tracker["mounted_host"]:
+            _auto_route_smb_tracker["mounted_host"] = clean_host
+            _auto_route_smb_tracker["pending_host"] = ""
+            _auto_route_smb_tracker["pending_since_ts"] = 0.0
+            return False, ""
+        if clean_host == _auto_route_smb_tracker["mounted_host"]:
+            _auto_route_smb_tracker["pending_host"] = ""
+            _auto_route_smb_tracker["pending_since_ts"] = 0.0
+            return False, ""
+        if clean_host != _auto_route_smb_tracker["pending_host"]:
+            _auto_route_smb_tracker["pending_host"] = clean_host
+            _auto_route_smb_tracker["pending_since_ts"] = now
+            return False, ""
+        if (now - float(_auto_route_smb_tracker["pending_since_ts"])) >= float(debounce_sec):
+            _auto_route_smb_tracker["mounted_host"] = clean_host
+            _auto_route_smb_tracker["pending_host"] = ""
+            _auto_route_smb_tracker["pending_since_ts"] = 0.0
+            return True, clean_host
+        return False, ""
+
+
+def _record_mounted_smb_host(server_id, host_val):
+    """Mencatat host SMB terbaru yang berhasil di-mount agar tracker auto-route sinkron."""
+    clean_host = (host_val or "").strip().lower()
+    if not clean_host:
+        return
+    with _auto_route_smb_lock:
+        _auto_route_smb_tracker["server_id"] = server_id
+        _auto_route_smb_tracker["mounted_host"] = clean_host
+        _auto_route_smb_tracker["pending_host"] = ""
+        _auto_route_smb_tracker["pending_since_ts"] = 0.0
+
+
+def _check_effective_smb_host_transition_for_server(
+    srv,
+    active_url,
+    auto_mount_enabled=True,
+    is_online=True,
+    now_ts=None,
+    spawn_async=True,
+):
+    """Menguji apakah host SMB efektif berpindah (rute auto atau Domain LAN<->VPN) dan memicu rebind ter-debounce."""
+    if not srv or not active_url or not auto_mount_enabled or not is_online:
+        return False, ""
+    host_p, is_dom_p, zt_p = _resolve_smb_route_params(srv, active_url)
+    eff_host = smb_mount_manager.resolve_smb_host(
+        host_p,
+        srv.get("connections", []),
+        is_dom_p,
+        zt_p,
+        max_age_seconds=15,
+    )
+    should_rebind, new_host = _evaluate_auto_route_smb_transition(
+        srv.get("id"),
+        eff_host,
+        now_ts=now_ts,
+    )
+    if should_rebind:
+        logger_manager.log_info(
+            f"[SMB Lifecycle] Transisi host SMB efektif terdeteksi stabil -> '{new_host}'; memicu rebind_storage_pipeline('auto_route_changed')."
+        )
+        if spawn_async:
+            threading.Thread(
+                target=rebind_storage_pipeline,
+                args=("auto_route_changed",),
+                daemon=True,
+            ).start()
+        else:
+            rebind_storage_pipeline("auto_route_changed")
+        return True, new_host
+    return False, ""
+
+
+def _should_unmount_on_offline_streak(
+    raw_on,
+    offline_streak,
+    already_unmounted,
+    threshold=SMB_OFFLINE_UNMOUNT_THRESHOLD,
+):
+    """Menentukan apakah drive MyServer harus di-unmount satu kali setelah server offline beruntun."""
+    return bool((not raw_on) and (offline_streak >= threshold) and (not already_unmounted))
+
+
+def _handle_windows_power_event(event_type, now_ts=None, spawn_async=True):
+    """Menangani event WM_POWERBROADCAST Windows (suspend -> unmount, resume -> dedup 5s + rebind 2.5s)."""
+    global _last_power_resume_ts
+    if event_type == PBT_APMSUSPEND:
+        _unmount_myserver_smb_drives(
+            reason="power_suspend",
+            include_all_servers=True,
+            include_easytier_subnet=True,
+        )
+        smb_mount_manager.invalidate_smb_host_cache()
+        return "suspended"
+
+    if event_type in (PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND):
+        now = float(now_ts if now_ts is not None else time.time())
+        with _power_resume_lock:
+            if (now - float(_last_power_resume_ts)) < POWER_RESUME_DEDUP_SEC:
+                return "resume_deduped"
+            _last_power_resume_ts = now
+
+        smb_mount_manager.invalidate_smb_host_cache()
+        try:
+            with _cached_active_route["lock"]:
+                _cached_active_route["last_check"] = 0.0
+        except Exception:
+            pass
+
+        def _delayed_resume_rebind():
+            try:
+                if spawn_async:
+                    time.sleep(POWER_RESUME_REBIND_DELAY_SEC)
+                cfg_now = config_manager.load_or_create_config()
+                if bool(cfg_now.get("auto_mount_smb", True)):
+                    rebind_storage_pipeline("power_resume")
+            except Exception as _res_err:
+                logger_manager.log_warning(f"[PowerMonitor] Gagal rebind pasca-resume: {_res_err}")
+
+        if spawn_async:
+            threading.Thread(target=_delayed_resume_rebind, daemon=True).start()
+        else:
+            _delayed_resume_rebind()
+        return "resume_scheduled"
+
+    return "ignored"
+
+
+def _get_local_ipv4_snapshot():
+    """Mengambil snapshot alamat IPv4 lokal antarmuka jaringan secara non-blocking."""
+    ips = set()
+    try:
+        hostname = socket.gethostname()
+        _, _, addr_list = socket.gethostbyname_ex(hostname)
+        for ip in addr_list:
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+    except Exception:
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(("10.255.255.255", 1))
+        local_ip = s.getsockname()[0]
+        if local_ip and not local_ip.startswith("127."):
+            ips.add(local_ip)
+        s.close()
+    except Exception:
+        pass
+    return sorted(ips)
+
+
+def _handle_local_network_change(prev_ips, cur_ips):
+    """Memvalidasi ulang cache host SMB dan rute aktif ketika himpunan IPv4 lokal berubah."""
+    if set(prev_ips or ()) == set(cur_ips or ()):
+        return False
+    smb_mount_manager.invalidate_smb_host_cache()
+    try:
+        with _cached_active_route["lock"]:
+            _cached_active_route["last_check"] = 0.0
+    except Exception:
+        pass
+    logger_manager.log_info(
+        f"[NetworkMonitor] Perubahan antarmuka jaringan terdeteksi ({len(prev_ips or [])} -> {len(cur_ips or [])} IP); cache rute & host SMB direset."
+    )
+    return True
+
+
+def windows_power_monitor_loop():
+    """Mendengarkan WM_POWERBROADCAST (termasuk Modern Standby S0ix) lewat hidden top-level window Win32."""
+    global _active_power_wndproc_ref
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes.wintypes as wintypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        LRESULT = ctypes.c_ssize_t
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.DefWindowProcW.restype = LRESULT
+
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.HWND,
+            wintypes.HMENU,
+            wintypes.HINSTANCE,
+            wintypes.LPVOID,
+        ]
+        user32.CreateWindowExW.restype = wintypes.HWND
+
+        class WNDCLASSEXW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("style", wintypes.UINT),
+                ("lpfnWndProc", WNDPROC),
+                ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HANDLE),
+                ("hCursor", wintypes.HANDLE),
+                ("hbrBackground", wintypes.HANDLE),
+                ("lpszMenuName", wintypes.LPCWSTR),
+                ("lpszClassName", wintypes.LPCWSTR),
+                ("hIconSm", wintypes.HANDLE),
+            ]
+
+        user32.RegisterClassExW.argtypes = [ctypes.POINTER(WNDCLASSEXW)]
+        user32.RegisterClassExW.restype = wintypes.ATOM
+
+        def _wnd_proc(hwnd, msg, wparam, lparam):
+            if msg == WM_POWERBROADCAST:
+                try:
+                    _handle_windows_power_event(int(wparam))
+                except Exception:
+                    pass
+                return 1
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        _active_power_wndproc_ref = WNDPROC(_wnd_proc)
+        h_inst = kernel32.GetModuleHandleW(None)
+        cls_name = "MyServerPowerMonitorHiddenWindow"
+
+        wc = WNDCLASSEXW()
+        wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
+        wc.lpfnWndProc = _active_power_wndproc_ref
+        wc.hInstance = h_inst
+        wc.lpszClassName = cls_name
+        user32.RegisterClassExW(ctypes.byref(wc))
+
+        # Hidden top-level window (hwndParent=None, dwStyle=0)
+        hwnd = user32.CreateWindowExW(0, cls_name, cls_name, 0, 0, 0, 0, 0, None, None, h_inst, None)
+        if not hwnd:
+            return
+
+        reg_suspend_fn = getattr(user32, "RegisterSuspendResumeNotification", None)
+        if reg_suspend_fn is not None:
+            try:
+                reg_suspend_fn(hwnd, DEVICE_NOTIFY_WINDOW_HANDLE)
+            except Exception:
+                pass
+
+        msg_struct = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg_struct), hwnd, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg_struct))
+            user32.DispatchMessageW(ctypes.byref(msg_struct))
+    except Exception as e:
+        logger_manager.log_debug(f"[PowerMonitor] Loop berhenti: {e}")
+
+
+def windows_network_change_monitor_loop():
+    """Memantau perubahan alamat IPv4 lokal via Win32 NotifyAddrChange untuk invalidasi cepat."""
+    if sys.platform != "win32":
+        return
+    prev_ips = _get_local_ipv4_snapshot()
+    while True:
+        try:
+            iphlpapi = ctypes.windll.iphlpapi
+            notify_fn = getattr(iphlpapi, "NotifyAddrChange", None)
+            if callable(notify_fn):
+                notify_fn(None, None)
+                time.sleep(1.5)
+            else:
+                time.sleep(5.0)
+        except Exception:
+            time.sleep(5.0)
+        try:
+            cur_ips = _get_local_ipv4_snapshot()
+            if _handle_local_network_change(prev_ips, cur_ips):
+                prev_ips = cur_ips
+        except Exception:
+            pass
+
 def update_route_resolver_loop():
 
 
@@ -7193,127 +7618,39 @@ def update_route_resolver_loop():
 
 
 
+            eff_url_for_smb = ""
             if srv and srv.get("active_connection", "auto") == "auto":
-
-
-
-
-
-
-
                 url, lbl = config_manager.resolve_target_connection(cfg, check_network=True, target_server=srv)
-
-
-
-
-
-
-
+                eff_url_for_smb = url or ""
                 with _cached_active_route["lock"]:
-
-
-
-
-
-
-
                     _cached_active_route["url"] = url
-
-
-
-
-
-
-
                     _cached_active_route["label"] = lbl
-
-
-
-
-
-
-
                     _cached_active_route["last_check"] = time.time()
-
-
-
-
-
-
-
                     _cached_active_route["server_id"] = srv.get("id")
-
-
-
-
-
-
-
                     _cached_active_route["active_conn"] = srv.get("active_connection", "auto")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                 parsed = urllib.parse.urlparse(url)
-
-
-
-
-
-
-
                 ip_str = parsed.hostname or ""
-
-
-
-
-
-
-
+                route_url_shifted = False
                 with _state_lock:
-
-
-
-
-
-
-
                     if _cached_state.get("ip") != ip_str or _cached_state.get("server_url") != url.rstrip("/"):
-
-
-
-
-
-
-
+                        route_url_shifted = True
                         _cached_state["ip"] = ip_str
-
-
-
-
-
-
-
                         _cached_state["server_url"] = url.rstrip("/")
-
-
-
-
-
-
-
                         _cached_state["route_name"] = "LAN Fisik" if "LAN" in lbl else ("ZeroTier P2P" if "ZeroTier" in lbl else "Domain / Internet")
+                if route_url_shifted:
+                    smb_mount_manager.invalidate_smb_host_cache()
+            elif srv:
+                eff_url_for_smb, _ = get_active_resolved_route(cfg)
+
+            if srv and eff_url_for_smb:
+                with _state_lock:
+                    cur_on_smb = bool(_cached_state.get("is_online"))
+                _check_effective_smb_host_transition_for_server(
+                    srv,
+                    eff_url_for_smb,
+                    auto_mount_enabled=bool(cfg.get("auto_mount_smb", True)),
+                    is_online=cur_on_smb,
+                )
 
 
 
@@ -15528,14 +15865,7 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
 
 
 
-            unmounted_count = smb_mount_manager.unmount_all_smb_shares()
-
-
-
-
-
-
-
+            unmounted_count = _unmount_myserver_smb_drives(reason=f"pipeline:{reason}", include_easytier_subnet=True)
             logger_manager.log_info(f"[SMB Pipeline] Berhasil melepaskan {unmounted_count} drive lama.")
 
 
@@ -18913,18 +19243,10 @@ def update_metrics_loop():
 
 
     offline_streak = 0
-
-
-
-
-
-
-
+    smb_offline_unmounted = False
     last_srv_id = None
-
-
-
     last_conn_id = None
+    last_resolved_url = None
 
 
 
@@ -18996,47 +19318,22 @@ def update_metrics_loop():
 
 
 
-            if cur_srv_id != last_srv_id or cur_conn_id != last_conn_id:
-
-
-
-
-
-
-
-                offline_streak = 0
-
-
-
-
-
-
-
-                srv_changed = (cur_srv_id != last_srv_id)
-
-
-
-                route_changed = (cur_conn_id != last_conn_id)
-
-
-
-
-
-
-
-                last_srv_id = cur_srv_id
-
-
-
-                last_conn_id = cur_conn_id
-
-
-
-
-
-
-
             active_u, ind_text = get_active_resolved_route(cfg)
+            norm_active_u = (active_u or "").strip().rstrip("/")
+            resolved_url_changed = bool(last_resolved_url and norm_active_u and norm_active_u != last_resolved_url)
+
+            if cur_srv_id != last_srv_id or cur_conn_id != last_conn_id or resolved_url_changed:
+                offline_streak = 0
+                smb_offline_unmounted = False
+                srv_changed = (cur_srv_id != last_srv_id)
+                route_changed = (cur_conn_id != last_conn_id or resolved_url_changed)
+                last_srv_id = cur_srv_id
+                last_conn_id = cur_conn_id
+                if resolved_url_changed:
+                    smb_mount_manager.invalidate_smb_host_cache()
+
+            if norm_active_u:
+                last_resolved_url = norm_active_u
 
 
 
@@ -19201,62 +19498,34 @@ def update_metrics_loop():
 
 
             if raw_on:
-
-
-
-
-
-
-
                 offline_streak = 0
-
-
-
-
-
-
-
+                smb_offline_unmounted = False
                 is_on = True
-
-
-
-
-
-
-
             else:
-
-
-
-
-
-
-
                 offline_streak += 1
-
-
-
-
-
-
-
-                # Toleransi kegagalan berturut-turut: 1 timeout sesaat tidak menjatuhkan status Online
-
-
-
-                # Jika server atau rute baru saja dialihkan secara manual, jangan pertahankan status online rute lama
-
-
-
                 held_online = was_online and not srv_changed and not route_changed and offline_streak < OFFLINE_FAIL_THRESHOLD
-
-
-
-
-
-
-
                 is_on = held_online
+                if _should_unmount_on_offline_streak(raw_on, offline_streak, smb_offline_unmounted):
+                    smb_offline_unmounted = True
+                    _offline_cfg = cfg
+                    _offline_srv = s
+                    def _do_offline_unmount(c_arg=_offline_cfg, s_arg=_offline_srv):
+                        _unmount_myserver_smb_drives(
+                            reason="server_offline_streak",
+                            cfg=c_arg,
+                            server=s_arg,
+                            include_easytier_subnet=True,
+                        )
+                        smb_mount_manager.invalidate_smb_host_cache()
+                    threading.Thread(target=_do_offline_unmount, daemon=True).start()
+
+            if is_on and s and bool(cfg.get("auto_mount_smb", True)):
+                _check_effective_smb_host_transition_for_server(
+                    s,
+                    active_u,
+                    auto_mount_enabled=True,
+                    is_online=True,
+                )
 
 
 
@@ -24460,7 +24729,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                        smb_mount_manager.unmount_all_smb_shares()
+                        _unmount_myserver_smb_drives(reason="server_power_action", include_easytier_subnet=True)
 
 
 
@@ -24744,7 +25013,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                        smb_mount_manager.unmount_all_smb_shares()
+                        _unmount_myserver_smb_drives(reason="server_power_action", include_easytier_subnet=True)
 
 
 
@@ -25372,7 +25641,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                smb_mount_manager.unmount_all_smb_shares()
+                _unmount_myserver_smb_drives(reason="manual_unmount_all", include_all_servers=True, include_easytier_subnet=True)
 
 
 
@@ -31608,8 +31877,19 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 if "easytier" in cfg:
                     cfg["easytier"]["enabled"] = False
                     config_manager.save_config(cfg)
+                _unmount_myserver_smb_drives(
+                    reason="easytier_stop",
+                    cfg=cfg,
+                    include_easytier_subnet=True,
+                    easytier_only=True,
+                )
+                smb_mount_manager.invalidate_smb_host_cache()
                 mgr = easytier_manager.get_easytier_manager()
                 ok, msg = mgr.stop_easytier()
+                try:
+                    refresh_drives_cache_immediately()
+                except Exception:
+                    pass
                 self._send_json({"success": ok, "message": msg, "status": mgr.get_status_overview()})
             else:
                 self._send_json({"success": False, "message": "easytier_manager tidak tersedia"})
@@ -33610,10 +33890,30 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 mode = "auto"
             cfg = config_manager.load_or_create_config()
             srv = config_manager.get_active_server(cfg)
+            prev_mode = (srv.get("remote_mode") if isinstance(srv, dict) else None) or cfg.get("remote_mode", "auto")
             if srv:
                 srv["remote_mode"] = mode
             cfg["remote_mode"] = mode
             config_manager.save_config(cfg)
+            if mode != prev_mode:
+                _unmount_myserver_smb_drives(
+                    reason="remote_mode_changed",
+                    cfg=cfg,
+                    server=srv,
+                    include_easytier_subnet=True,
+                )
+                smb_mount_manager.invalidate_smb_host_cache()
+                try:
+                    with _cached_active_route["lock"]:
+                        _cached_active_route["last_check"] = 0.0
+                except Exception:
+                    pass
+                if bool(cfg.get("auto_mount_smb", True)):
+                    threading.Thread(
+                        target=rebind_storage_pipeline,
+                        args=("remote_mode_changed",),
+                        daemon=True,
+                    ).start()
             self._send_json({"success": True, "remote_mode": mode})
             return
 
@@ -34334,7 +34634,23 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 def shutdown_background_daemons():
-    """Menghentikan daemon EasyTier dan Syncthing lokal secara teratur sebelum proses berhenti."""
+    """Melepaskan drive SMB MyServer terlebih dahulu lalu menghentikan EasyTier dan Syncthing lokal."""
+    global _shutdown_daemons_done
+    with _shutdown_daemons_lock:
+        if _shutdown_daemons_done:
+            return
+        _shutdown_daemons_done = True
+
+    try:
+        _unmount_myserver_smb_drives(
+            reason="app_shutdown",
+            include_all_servers=True,
+            include_easytier_subnet=True,
+        )
+        smb_mount_manager.invalidate_smb_host_cache()
+    except Exception as _smb_err:
+        logger_manager.log_error(f"[CoreService] Gagal unmount SMB saat shutdown: {_smb_err}")
+
     try:
         if easytier_manager is not None:
             easytier_manager.get_easytier_manager().stop()
@@ -35409,6 +35725,10 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
     t_vm_daemon = threading.Thread(target=vm_power_scheduler_loop, daemon=True)
     t_vm_daemon.start()
 
+    if sys.platform == "win32":
+        threading.Thread(target=windows_power_monitor_loop, daemon=True).start()
+        threading.Thread(target=windows_network_change_monitor_loop, daemon=True).start()
+
 
 
 
@@ -35456,13 +35776,10 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
     finally:
-
-
-
-
-
-
-
+        try:
+            shutdown_background_daemons()
+        except Exception:
+            pass
         server.server_close()
 
 

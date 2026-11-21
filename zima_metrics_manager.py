@@ -978,14 +978,6 @@ class ZimaMetricsClient:
                 if res_ip[0]:
                     known_ips.add(res_ip[0].strip().lower())
 
-        for ip_cand in list(known_ips):
-            try:
-                nb_name = socket.gethostbyaddr(ip_cand)[0]
-                if nb_name and nb_name.strip():
-                    known_hosts.add(nb_name.strip().lower())
-            except Exception:
-                pass
-
         identities = {
             "hosts": known_hosts,
             "ips": known_ips,
@@ -1068,8 +1060,21 @@ class ZimaMetricsClient:
             if user_allowed_shares is None and not self.is_admin:
                 user_allowed_shares = self.get_user_authorized_shares()
 
+            logical_bitmask = 0xFFFFFFFF
+            get_drives_fn = getattr(kernel32, "GetLogicalDrives", None)
+            if callable(get_drives_fn):
+                try:
+                    raw_mask = get_drives_fn()
+                    if isinstance(raw_mask, int) and not isinstance(raw_mask, bool):
+                        logical_bitmask = raw_mask
+                except Exception:
+                    logical_bitmask = 0xFFFFFFFF
+
             seen_net_shares = set()
             for letter in reversed(string.ascii_uppercase):
+                bit_idx = ord(letter) - 65
+                if not (logical_bitmask & (1 << bit_idx)):
+                    continue
                 drive_root = f"{letter}:\\"
                 # 4 = DRIVE_REMOTE
                 try:
@@ -1095,13 +1100,6 @@ class ZimaMetricsClient:
                                 is_zimaos = True
                             elif any(h in unc_host or unc_host in h for h in known_hosts if len(h) >= 3):
                                 is_zimaos = True
-                            else:
-                                try:
-                                    unc_ip = socket.gethostbyname(unc_host)
-                                    if unc_ip.lower().strip() in known_ips:
-                                        is_zimaos = True
-                                except Exception:
-                                    pass
 
                         # Tolak jika drive ini milik aplikasi, PC, atau NAS lain
                         if not is_zimaos:
@@ -1137,58 +1135,18 @@ class ZimaMetricsClient:
                                 or self.detailed_partitions_map.get(f"/media/{share_name}")
                                 or self.detailed_partitions_map.get(f"/media/{share_name.lower()}")
                             )
-                            if (
+                            if not (
                                 existing_m
                                 and isinstance(existing_m, dict)
                                 and existing_m.get("total_bytes", 0) > 0
                                 and not existing_m.get("is_network_drive")
                             ):
-                                u_tot = int(existing_m.get("total_bytes", 0))
-                                u_used = int(existing_m.get("used_bytes", 0))
-                                u_avail = int(existing_m.get("avail_bytes", max(u_tot - u_used, 0)))
-                                existing_fs = existing_m.get("fs_type", "")
-                            else:
-                                existing_fs = existing_m.get("fs_type", "") if isinstance(existing_m, dict) else ""
-                                cache_k = (letter, remote_unc)
-                                now_ts = time.time()
-                                with _du_inflight_lock:
-                                    cached_entry = _du_cached_usage.get(cache_k)
-                                if (
-                                    cached_entry
-                                    and isinstance(cached_entry, tuple)
-                                    and len(cached_entry) == 2
-                                    and (now_ts - cached_entry[1]) < 30.0
-                                ):
-                                    usage = cached_entry[0]
-                                else:
-                                    usage_box = [None]
-                                    with _du_inflight_lock:
-                                        already_running = (letter in _du_inflight_drives)
-                                        if not already_running:
-                                            _du_inflight_drives.add(letter)
-                                    if not already_running:
-                                        def _read_du(dr=drive_root, d_let=letter, ck=cache_k):
-                                            try:
-                                                u_res = shutil.disk_usage(dr)
-                                                usage_box[0] = u_res
-                                                with _du_inflight_lock:
-                                                    _du_cached_usage[ck] = (u_res, time.time())
-                                            except Exception:
-                                                pass
-                                            finally:
-                                                with _du_inflight_lock:
-                                                    _du_inflight_drives.discard(d_let)
-                                        t_du = threading.Thread(target=_read_du, daemon=True)
-                                        t_du.start()
-                                        t_du.join(timeout=0.5)
-                                    with _du_inflight_lock:
-                                        c_ent = _du_cached_usage.get(cache_k)
-                                        usage = usage_box[0] or (c_ent[0] if isinstance(c_ent, tuple) else c_ent)
-                                if usage is None:
-                                    continue
-                                u_tot = usage.total
-                                u_used = usage.used
-                                u_avail = usage.free
+                                continue
+
+                            u_tot = int(existing_m.get("total_bytes", 0))
+                            u_used = int(existing_m.get("used_bytes", 0))
+                            u_avail = int(existing_m.get("avail_bytes", max(u_tot - u_used, 0)))
+                            existing_fs = existing_m.get("fs_type", "")
 
                             u_pct = round((u_used / u_tot * 100.0), 1) if u_tot > 0 else 0.0
                             fmt_str = f"{format_dynamic_bytes(u_used)} / {format_dynamic_bytes(u_tot)} ({u_pct:.1f}%)"
@@ -1210,13 +1168,8 @@ class ZimaMetricsClient:
                             seen_net_shares.add(dedup_key)
                             discovered.append(drive_data)
 
-                            # Daftarkan ke detailed_partitions_map dengan berbagai variasi key
-                            if c_key:
-                                self.detailed_partitions_map[c_key] = drive_data
-                            self.detailed_partitions_map[share_name] = drive_data
-                            self.detailed_partitions_map[share_name.lower()] = drive_data
-                            self.detailed_partitions_map[f"/media/{share_name}"] = drive_data
-                            self.detailed_partitions_map[f"/media/{share_name.lower()}"] = drive_data
+                            # Annotate drive letter in-place on REST record without overwriting it
+                            existing_m["drive_letter"] = f"{letter}:"
                         except Exception:
                             pass
         except Exception:

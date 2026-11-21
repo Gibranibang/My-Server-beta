@@ -104,7 +104,7 @@ class TestBackendDetection(unittest.TestCase):
         core._remote_backend_manifest_cache["version"] = ""
 
     def test_real_workspace_resources_bundled_and_git_tracked(self):
-        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.4.5")
+        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.4.6")
         zip_pkg, tar_pkg = core._get_bundled_backend_packages()
         self.assertIsNotNone(zip_pkg)
         self.assertIsNotNone(tar_pkg)
@@ -942,7 +942,7 @@ class TestBackendDetection(unittest.TestCase):
             lib_src = f.read()
         self.assertIn("download_and_install_update", lib_src)
         self.assertIn("210000", lib_src)
-        self.assertIn("300000", lib_src)
+        self.assertIn("420000", lib_src)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.6.4 - Beta] - 2026-11-21
+
+- Perbaikan Startup Crash FastAPI Backend v1.4.6: Mengganti parameter path @router.delete("/shares/{token}") menjadi {share_token} di app/routers/storage.py agar tidak bertabrakan dengan query param token pada Depends(get_current_user) (AssertionError: Cannot use Query for path param 'token'), lengkap dengan uji boot nyata Uvicorn/FastAPI di container Docker dan penjaga AST di test_public_shares.py.
+- Pull GHCR Prioritas & Cache Layer Dockerfile: Memperbarui install_zimaos.sh agar selalu menarik pre-built multi-arch image ghcr.io/gibranibang/myserver-backend:latest terlebih dahulu sebelum fallback ke docker build lokal, serta memindahkan COPY Dockerfile docker-compose.yml ke sesudah RUN pip install di Dockerfile agar 7+ mount partisi kustom pengguna tidak pernah membatalkan cache pip install PyPI.
+- Peningkatan Toleransi Timeout Deploy SSH/Tauri: Menaikkan batas eksekusi install_zimaos.sh pada _exec_ssh_command_bounded menjadi 360s dan timeout call_core_api untuk server/backend_action di lib.rs menjadi 420000 ms.
+
 ## [v4.6.3 - Beta] - 2026-11-21
 
 - Perbaikan Race Condition ZimaOS App Management & Docker Compose Backend v1.4.5: Menghapus pemicu async POST /v2/app_management/compose yang balapan dengan docker compose up -d serta menambahkan pull_policy: if_not_present pada docker-compose.yml dan pembersihan kontainer konflik (docker rm -f myserver-backend), sehingga ZimaOS tidak lagi memunculkan dua ikon rusak (infinite loading GHCR pull & Installation failed). Mode update di install_zimaos.sh kini juga memakai cache Docker agar pembaruan selesai dalam hitungan detik.

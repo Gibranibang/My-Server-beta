@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.3"
+APP_VERSION_NUMBER = "4.6.4"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -5854,10 +5854,10 @@ def handle_remote_backend_action(body):
                         "message": "Paket installer backend tidak dapat diunggah via SFTP maupun diunduh dari GitHub."
                     })
 
-            # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo (bounded 210s agar tidak deadlock di recv_exit_status)
+            # 5. Eksekusi unpacking dan install_zimaos.sh dengan sudo (bounded 360s agar tidak deadlock di recv_exit_status)
             logger_manager.log_info("[handle_remote_backend_action] Menjalankan install_zimaos.sh dengan sudo...")
             exec_script = f"cd {shlex.quote(deploy_dir)} && tar -xzf backend.tar.gz && printf '%s\\n' {shlex.quote(pwd)} | sudo -S bash install_zimaos.sh"
-            exec_exit, exec_out_raw, exec_err_raw = _exec_ssh_command_bounded(ssh_client, exec_script, timeout=210.0)
+            exec_exit, exec_out_raw, exec_err_raw = _exec_ssh_command_bounded(ssh_client, exec_script, timeout=360.0)
             exec_out_text = _mask_secret(exec_out_raw.decode("utf-8", errors="replace") if isinstance(exec_out_raw, bytes) else str(exec_out_raw), pwd)
             exec_err_text = _mask_secret(exec_err_raw.decode("utf-8", errors="replace") if isinstance(exec_err_raw, bytes) else str(exec_err_raw), pwd)
             logger_manager.log_info(f"[handle_remote_backend_action] Output instalasi (exit={exec_exit}): {exec_out_text[-500:]}")

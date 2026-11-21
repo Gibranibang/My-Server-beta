@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.4",
+        "channel": "Beta",
+        "date": "2026-11-21",
+        "title": "Fix Crash Startup FastAPI Share Router, Pull GHCR Otomatis & Cache Layer Dockerfile Backend v1.4.6",
+        "notes": [
+            "Perbaikan Startup Crash FastAPI Backend v1.4.6: Mengganti parameter path @router.delete(\"/shares/{token}\") menjadi {share_token} di app/routers/storage.py agar tidak bertabrakan dengan query param token pada Depends(get_current_user) (AssertionError: Cannot use Query for path param 'token'), lengkap dengan uji boot nyata Uvicorn/FastAPI di container Docker dan penjaga AST di test_public_shares.py.",
+            "Pull GHCR Prioritas & Cache Layer Dockerfile: Memperbarui install_zimaos.sh agar selalu menarik pre-built multi-arch image ghcr.io/gibranibang/myserver-backend:latest terlebih dahulu sebelum fallback ke docker build lokal, serta memindahkan COPY Dockerfile docker-compose.yml ke sesudah RUN pip install di Dockerfile agar 7+ mount partisi kustom pengguna tidak pernah membatalkan cache pip install PyPI.",
+            "Peningkatan Toleransi Timeout Deploy SSH/Tauri: Menaikkan batas eksekusi install_zimaos.sh pada _exec_ssh_command_bounded menjadi 360s dan timeout call_core_api untuk server/backend_action di lib.rs menjadi 420000 ms."
+        ],
+        "features": [
+            "Perbaikan FastAPI Path Param {share_token} (Bebas Crash Restarting (1) Saat Boot)",
+            "Prioritas Pull Image GHCR di install_zimaos.sh Tanpa Re-Install PyPI Lambat di NAS",
+            "Isolasi Cache Layer pip install Terhadap Custom Storage Mounts & Timeout SSH 360s"
+        ]
+    },
+    {
         "version": "4.6.3",
         "channel": "Beta",
         "date": "2026-11-21",

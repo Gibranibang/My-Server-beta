@@ -18,9 +18,31 @@ import type {
   VirtualMachine,
   FileManagerSourceStatus,
   FileManagerSourcePayload,
+  ExplorerOpenResult,
 } from "./types"
 
 
+
+function normalizeExplorerOpenResult(res: any): ExplorerOpenResult {
+  if (res && typeof res === "object") {
+    const errMsg =
+      typeof res.error === "string"
+        ? res.error
+        : typeof res.message === "string"
+          ? res.message
+          : undefined
+    return {
+      success: res.success !== undefined ? Boolean(res.success) : true,
+      error: errMsg,
+      message: typeof res.message === "string" ? res.message : undefined,
+      drive: typeof res.drive === "string" ? res.drive : undefined,
+      host: typeof res.host === "string" ? res.host : undefined,
+      unc: typeof res.unc === "string" ? res.unc : undefined,
+      target: typeof res.target === "string" ? res.target : undefined,
+    }
+  }
+  return { success: true }
+}
 
 const round1 = (v: number) => Math.round(v * 10) / 10
 
@@ -1305,14 +1327,18 @@ export function createRealApi(): CompanionApi {
       await this.openUrl(url, title)
     },
 
-    async openFileExplorer() {
+    async openFileExplorer(): Promise<ExplorerOpenResult> {
       try {
         const api = await getPyApi()
         if (api && api.open_file_explorer) {
-          await api.open_file_explorer()
+          const res = await api.open_file_explorer()
+          return normalizeExplorerOpenResult(res)
         }
+        return { success: false, error: "Core API unavailable" }
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
         console.error("[RealApi] Open File Explorer error:", err)
+        return { success: false, error: errMsg }
       }
     },
 
@@ -1384,27 +1410,20 @@ export function createRealApi(): CompanionApi {
       }
     },
 
-    async openFileManager() {
-
+    async openFileManager(): Promise<ExplorerOpenResult> {
       try {
-
         const api = await getPyApi()
-
         if (api && api.open_file_manager) {
-
-          await api.open_file_manager()
-
+          const res = await api.open_file_manager()
+          return normalizeExplorerOpenResult(res)
         }
-
+        return { success: false, error: "Core API unavailable" }
       } catch (err) {
-
+        const errMsg = err instanceof Error ? err.message : String(err)
         console.error("[RealApi] Open File Manager error:", err)
-
+        return { success: false, error: errMsg }
       }
-
     },
-
-
 
     async openPeerDrop() {
 
@@ -1428,49 +1447,35 @@ export function createRealApi(): CompanionApi {
 
 
 
-    async openUnc() {
-
+    async openUnc(): Promise<ExplorerOpenResult> {
       try {
-
         const api = await getPyApi()
-
         if (api && api.open_unc) {
-
-          await api.open_unc()
-
+          const res = await api.open_unc()
+          return normalizeExplorerOpenResult(res)
         }
-
+        return { success: false, error: "Core API unavailable" }
       } catch (err) {
-
+        const errMsg = err instanceof Error ? err.message : String(err)
         console.error("[RealApi] Open UNC error:", err)
-
+        return { success: false, error: errMsg }
       }
-
     },
 
-
-
-    async openDrive(letter: string) {
-
+    async openDrive(letter: string): Promise<ExplorerOpenResult> {
       try {
-
         const api = await getPyApi()
-
         if (api && api.open_drive) {
-
-          await api.open_drive(letter)
-
+          const res = await api.open_drive(letter)
+          return normalizeExplorerOpenResult(res)
         }
-
+        return { success: false, error: "Core API unavailable" }
       } catch (err) {
-
+        const errMsg = err instanceof Error ? err.message : String(err)
         console.error("[RealApi] Open drive error:", err)
-
+        return { success: false, error: errMsg }
       }
-
     },
-
-
 
     async openLogFile() {
 

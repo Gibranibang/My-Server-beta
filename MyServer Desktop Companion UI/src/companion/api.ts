@@ -17,6 +17,7 @@ import type {
   SyncthingAutoDetectResult,
   FileManagerSourceStatus,
   FileManagerSourcePayload,
+  ExplorerOpenResult,
 } from "./types"
 
 import { APP_VERSION, APP_CHANNEL } from "./version"
@@ -173,9 +174,9 @@ export interface CompanionApi {
 
   openVmWindow?(vmId: string, title: string, url: string): Promise<void>
 
-  openFileManager(): Promise<void>
+  openFileManager(): Promise<ExplorerOpenResult | void>
 
-  openFileExplorer(): Promise<void>
+  openFileExplorer(): Promise<ExplorerOpenResult | void>
 
   openZimaFileManager(): Promise<void>
 
@@ -187,9 +188,9 @@ export interface CompanionApi {
 
   openPeerDrop(): Promise<void>
 
-  openUnc(): Promise<void>
+  openUnc(): Promise<ExplorerOpenResult | void>
 
-  openDrive(letter: string): Promise<void>
+  openDrive(letter: string): Promise<ExplorerOpenResult | void>
 
   openLogFile(): Promise<void>
 
@@ -889,9 +890,9 @@ export function createMockApi(): CompanionApi {
       await this.openUrl(url, title)
     },
 
-    async openFileManager() {},
+    async openFileManager() { return { success: true } },
 
-    async openFileExplorer() {},
+    async openFileExplorer() { return { success: true } },
 
     async openZimaFileManager() {},
 
@@ -958,9 +959,9 @@ export function createMockApi(): CompanionApi {
 
     async openPeerDrop() {},
 
-    async openUnc() {},
+    async openUnc() { return { success: true } },
 
-    async openDrive() {},
+    async openDrive() { return { success: true } },
 
     async openLogFile() {},
 

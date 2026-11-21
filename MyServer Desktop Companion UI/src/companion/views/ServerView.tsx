@@ -782,7 +782,7 @@ export default function ServerView({ go }: ViewProps) {
                         icon={Network}
                         tone={
                           details?.easyTier?.running
-                            ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
+                            ? ((details?.easyTier?.peers_count ?? 0) > 0 ? "success" : "warning")
                             : "neutral"
                         }
                         size="sm"
@@ -795,8 +795,8 @@ export default function ServerView({ go }: ViewProps) {
                           {t("status_label", "Status:")}{" "}
                           <span className="font-semibold text-ink-muted">
                             {details?.easyTier?.running
-                              ? (details?.easyTier?.peers_count > 0
-                                  ? t("easytier_peer_count", "{count} Node Peer Aktif").replace("{count}", String(details.easyTier.peers_count))
+                              ? ((details?.easyTier?.peers_count ?? 0) > 0
+                                  ? t("easytier_peer_count", "{count} Node Peer Aktif").replace("{count}", String(details?.easyTier?.peers_count ?? 0))
                                   : t("easytier_connecting_relay", "Menghubungkan Relay..."))
                               : t("easytier_status_disconnected", "Terputus")}
                           </span>
@@ -807,19 +807,19 @@ export default function ServerView({ go }: ViewProps) {
                       className="shrink-0 flex items-center justify-center p-1.5 rounded-full bg-surface-muted/60 border border-line"
                       title={
                         details?.easyTier?.running
-                          ? (details?.easyTier?.peers_count > 0 ? "Direct P2P" : "Relay")
+                          ? ((details?.easyTier?.peers_count ?? 0) > 0 ? "Direct P2P" : "Relay")
                           : t("status_disabled_zt", "Nonaktif")
                       }
                       aria-label={
                         details?.easyTier?.running
-                          ? (details?.easyTier?.peers_count > 0 ? "Direct P2P" : "Relay")
+                          ? ((details?.easyTier?.peers_count ?? 0) > 0 ? "Direct P2P" : "Relay")
                           : t("status_disabled_zt", "Nonaktif")
                       }
                     >
                       <StatusDot
                         tone={
                           details?.easyTier?.running
-                            ? (details?.easyTier?.peers_count > 0 ? "success" : "warning")
+                            ? ((details?.easyTier?.peers_count ?? 0) > 0 ? "success" : "warning")
                             : "neutral"
                         }
                       />

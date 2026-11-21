@@ -131,6 +131,16 @@ export interface Drive {
 
 export type SmbSourceMode = "zimaos" | "backend"
 
+export interface ExplorerOpenResult {
+  success?: boolean
+  error?: string
+  message?: string
+  drive?: string
+  host?: string
+  unc?: string
+  target?: string
+}
+
 export interface FileManagerSourceStatus {
   success?: boolean
   source: SmbSourceMode
@@ -145,6 +155,9 @@ export interface FileManagerSourceStatus {
   needsAuth?: boolean
   warning?: string
   drives?: Drive[]
+  easytierNoTun?: boolean
+  tunActive?: boolean
+  smbWarning?: string
 }
 
 export interface FileManagerSourcePayload {
@@ -214,13 +227,31 @@ export interface ZeroTierInfo {
   serverVirtualIp?: string
 }
 
+export interface EasyTierInfo {
+  running?: boolean
+  available?: boolean
+  remote_id?: string | null
+  network_name?: string | null
+  virtual_ipv4?: string | null
+  virtual_ip?: string | null
+  server_peer_ip?: string
+  peers_count?: number
+  peers?: any[]
+  uptime?: number
+  tun_active?: boolean
+  no_tun_fallback?: boolean
+  smb_warning?: string
+}
+
 export interface ServerDetails {
   serverId?: string
   serverName: string
+  activeId: string
+  activeName: string
   activeHost?: string
   servers?: ServerItem[]
   zeroTier?: ZeroTierInfo
-  easyTier?: any
+  easyTier?: EasyTierInfo
   remoteMode?: string
   activeRemoteEngine?: string
   activeRemoteIp?: string

@@ -1,6 +1,6 @@
 import { getTranslation } from "../i18n"
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
-import { Folder, FolderOpen, HardDrive, Send, Server, ShieldCheck, Unplug } from "lucide-react"
+import { AlertTriangle, Folder, FolderOpen, HardDrive, Send, Server, ShieldCheck, Unplug } from "lucide-react"
 import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { useAsyncAction, useCompanion, useNotice } from "../store"
 import { getCompanionApi } from "../api"
@@ -16,6 +16,10 @@ import {
 } from "../ui"
 import type { Drive, FileManagerSourceStatus, SmbSourceMode, Tone } from "../types"
 import { LaunchTile, ViewBody } from "./shared"
+
+export const BACKEND_SOURCE_POLL_MS = 25_000
+export const DRIVES_REFRESH_POLL_MS = 10_000
+const VISIBILITY_REFRESH_MIN_GAP_MS = 5_000
 
 const STORAGE_DOT_COLS = 42
 const STORAGE_DOT_ROWS = 3
@@ -157,33 +161,71 @@ export default function FilesView() {
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false)
   const userTouchedSourceRef = useRef(false)
   const backendPassInputRef = useRef<HTMLInputElement | null>(null)
+  const lastPollRef = useRef<number>(Date.now())
+  const lastSourcePollRef = useRef<number>(Date.now())
 
   useEffect(() => {
+    lastPollRef.current = Date.now()
+    lastSourcePollRef.current = Date.now()
     void refreshDrives?.()
-    const timer = setInterval(() => {
+
+    const pollBackendSource = () => {
       if (
-        smbSource === "backend" &&
-        !isSwitchingSource &&
-        !isSubmittingAuth &&
-        !editingBackendAuth &&
-        typeof api.getFileManagerSource === "function"
+        smbSource !== "backend" ||
+        isSwitchingSource ||
+        isSubmittingAuth ||
+        editingBackendAuth ||
+        typeof api.getFileManagerSource !== "function"
       ) {
-        void api
-          .getFileManagerSource()
-          .then((res) => {
-            if (res && res.source === "backend") {
-              setSourceStatus((prev) => ({ ...(prev ?? { source: "backend" }), ...res }))
-            }
-          })
-          .catch(() => {})
-          .finally(() => {
-            void refreshDrives?.()
-          })
-      } else {
-        void refreshDrives?.()
+        return
       }
-    }, 3000)
-    return () => clearInterval(timer)
+      lastSourcePollRef.current = Date.now()
+      void api
+        .getFileManagerSource()
+        .then((res) => {
+          if (res && res.source === "backend") {
+            setSourceStatus((prev) => ({ ...(prev ?? { source: "backend" }), ...res }))
+          }
+        })
+        .catch(() => {})
+    }
+
+    const drivesTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return
+      lastPollRef.current = Date.now()
+      void refreshDrives?.()
+    }, DRIVES_REFRESH_POLL_MS)
+
+    const sourceTimer =
+      smbSource === "backend"
+        ? setInterval(() => {
+            if (typeof document !== "undefined" && document.hidden) return
+            pollBackendSource()
+          }, BACKEND_SOURCE_POLL_MS)
+        : null
+
+    const onVisibilityChange = () => {
+      if (typeof document === "undefined" || document.hidden) return
+      const nowTs = Date.now()
+      if (nowTs - lastPollRef.current < VISIBILITY_REFRESH_MIN_GAP_MS) return
+      lastPollRef.current = nowTs
+      void refreshDrives?.()
+      if (smbSource === "backend") {
+        pollBackendSource()
+      }
+    }
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange)
+    }
+
+    return () => {
+      clearInterval(drivesTimer)
+      if (sourceTimer) clearInterval(sourceTimer)
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange)
+      }
+    }
   }, [api, editingBackendAuth, isSubmittingAuth, isSwitchingSource, refreshDrives, smbSource])
 
   useEffect(() => {
@@ -615,9 +657,16 @@ export default function FilesView() {
               title="File Explorer"
               caption={t("open_smb_explorer_caption", "Open SMB in File Explorer")}
               disabled={!isOnline}
-              onClick={() => {
-                api.openFileExplorer()
-                notify(t("opening_explorer_notice", "Opening Windows File Explorer to SMB disk..."), "info")
+              onClick={async () => {
+                const res = await api.openFileExplorer()
+                if (res && res.success === false) {
+                  notify(
+                    res.error || t("smb_preflight_unreachable", "Port 445 SMB server tidak merespons. Pembukaan File Explorer dibatalkan agar tidak hang."),
+                    "danger",
+                  )
+                } else {
+                  notify(t("opening_explorer_notice", "Opening Windows File Explorer to SMB disk..."), "info")
+                }
               }}
             />
           )}
@@ -634,6 +683,26 @@ export default function FilesView() {
           />
         </div>
 
+        {sourceStatus?.easytierNoTun && (
+          <div data-testid="easytier-no-tun-warning" role="status">
+            <Card className="flex items-start gap-2.5 p-2.5 border-warning/40 bg-warning/5">
+              <IconBadge icon={AlertTriangle} tone="warning" size="sm" />
+              <div className="min-w-0 flex-1">
+                <div className="text-micro font-semibold text-ink">
+                  {t("easytier_no_tun_warning_title", "Adapter Wintun EasyTier Tidak Aktif (--no-tun)")}
+                </div>
+                <p className="text-nano text-ink-muted leading-snug mt-0.5">
+                  {sourceStatus.smbWarning ||
+                    t(
+                      "easytier_no_tun_warning_desc",
+                      "Akses drive SMB via EasyTier memerlukan izin Administrator/UAC untuk adapter Wintun. Jalankan ulang sebagai Admin atau gunakan rute LAN / ZeroTier.",
+                    )}
+                </p>
+              </div>
+            </Card>
+          </div>
+        )}
+
         <section
           aria-label="Network Drive (SMB)"
           className="flex flex-col gap-2"
@@ -646,9 +715,16 @@ export default function FilesView() {
               key={drive.letter}
               drive={drive}
               online={isOnline}
-              onOpen={(letter) => {
-                api.openDrive(letter)
-                notify(t("opening_explorer_notice", "Opening Windows File Explorer to SMB disk..."), "info")
+              onOpen={async (letter) => {
+                const res = await api.openDrive(letter)
+                if (res && res.success === false) {
+                  notify(
+                    res.error || t("smb_preflight_unreachable", "Port 445 SMB server tidak merespons. Pembukaan File Explorer dibatalkan agar tidak hang."),
+                    "danger",
+                  )
+                } else {
+                  notify(t("opening_explorer_notice", "Opening Windows File Explorer to SMB disk..."), "info")
+                }
               }}
             />
           ))}
@@ -706,9 +782,16 @@ export default function FilesView() {
             </TrayChip>
             <TrayChip
               icon={FolderOpen}
-              onClick={() => {
-                api.openUnc()
-                notify(`Membuka root ${uncHost} di Explorer`, "info")
+              onClick={async () => {
+                const res = await api.openUnc()
+                if (res && res.success === false) {
+                  notify(
+                    res.error || t("smb_preflight_unreachable", "Port 445 SMB server tidak merespons. Pembukaan File Explorer dibatalkan agar tidak hang."),
+                    "danger",
+                  )
+                } else {
+                  notify(`Membuka root ${uncHost} di Explorer`, "info")
+                }
               }}
               title={`Open Root UNC ${uncHost}`}
             >{t("open_unc_chip", "Open UNC")}</TrayChip>

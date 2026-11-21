@@ -1,11 +1,12 @@
 import React from "react"
 import "@testing-library/jest-dom/vitest"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { createMockApi, setCompanionApi, type CompanionApi } from "../api"
 import { createRealApi } from "../api.real"
 import { CompanionStoreProvider, NoticeProvider, useNotice } from "../store"
 import FilesView from "../views/FilesView"
+import HomeView from "../views/HomeView"
 import type { Drive, FileManagerSourcePayload, FileManagerSourceStatus } from "../types"
 
 function NoticeSpy() {
@@ -468,5 +469,259 @@ describe("FilesView SMB source toggle & Backend login (D-06, SMB-05)", () => {
     } finally {
       delete (window as any).pywebview
     }
+  })
+})
+
+describe("Phase 07 SMB stability, adaptive polling, preflight & --no-tun (SMBS-02, SMBS-03, SMBS-06)", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    cleanup()
+    vi.restoreAllMocks()
+    localStorage.clear()
+    try {
+      Object.defineProperty(document, "hidden", { configurable: true, value: false })
+    } catch {}
+  })
+
+  it("polls Backend source at 25s (not 3s), pauses when document.hidden, and refreshes on visibilitychange", async () => {
+    vi.useFakeTimers()
+    let isHidden = false
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => isHidden,
+    })
+
+    const { api } = setupFilesView({
+      language: "id",
+      initialSource: {
+        success: true,
+        source: "backend",
+        username: "admin",
+        role: "admin",
+        allowedDisks: ["DATA"],
+        hasCredentials: true,
+        needsAuth: false,
+        backendOnline: true,
+      },
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50)
+    })
+
+    const getSourceSpy = api.getFileManagerSource as ReturnType<typeof vi.fn>
+    const listDrivesSpy = api.listDrives as ReturnType<typeof vi.fn>
+    const sourceCountAfterMount = getSourceSpy.mock.calls.length
+    expect(sourceCountAfterMount).toBe(1)
+
+    // Advancing 10s must trigger 0 Backend source polls (not 3s!), 1 drive refresh
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+    expect(getSourceSpy.mock.calls.length).toBe(1)
+
+    // Advancing to 25s triggers 1 Backend source poll
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(getSourceSpy.mock.calls.length).toBe(2)
+
+    // While hidden, advancing 60s triggers 0 source polls and 0 drive polls
+    isHidden = true
+    const hiddenSourceBaseline = getSourceSpy.mock.calls.length
+    const hiddenDrivesBaseline = listDrivesSpy.mock.calls.length
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(getSourceSpy.mock.calls.length).toBe(hiddenSourceBaseline)
+    expect(listDrivesSpy.mock.calls.length).toBe(hiddenDrivesBaseline)
+
+    // Returning visible triggers immediate catch-up refresh
+    isHidden = false
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"))
+      await Promise.resolve()
+    })
+    expect(getSourceSpy.mock.calls.length).toBe(hiddenSourceBaseline + 1)
+    expect(listDrivesSpy.mock.calls.length).toBe(hiddenDrivesBaseline + 1)
+  })
+
+  it("shows danger preflight toast on FilesView, HomeView onOpenExplorer, and realApi failure", async () => {
+    const errMsg = "Host SMB (10.126.126.1:445) tidak merespons"
+    const { api } = setupFilesView({
+      language: "id",
+      fileManagerClickTarget: "zimaos",
+      initialDrives: [{ letter: "Z", name: "DATA", free: "10 GB", total: "100 GB", usedPct: 90, mounted: true }],
+    })
+
+    api.openDrive = vi.fn(async () => ({ success: false, error: errMsg }))
+    api.openUnc = vi.fn(async () => ({ success: false, error: errMsg }))
+    api.openFileExplorer = vi.fn(async () => ({ success: false, error: errMsg }))
+
+    const driveCard = await screen.findByText("Drive Z:")
+    fireEvent.click(driveCard)
+    await waitFor(() => {
+      expect(screen.getByTestId("notice-spy")).toHaveTextContent(`danger:${errMsg}`)
+    })
+    expect(screen.getByTestId("notice-spy")).not.toHaveTextContent("Membuka Windows File Explorer")
+
+    const uncBtn = screen.getByTitle(/Open Root UNC/i)
+    fireEvent.click(uncBtn)
+    await waitFor(() => {
+      expect(screen.getByTestId("notice-spy")).toHaveTextContent(`danger:${errMsg}`)
+    })
+
+    const feTile = screen.getByText("File Explorer").closest("button")!
+    fireEvent.click(feTile)
+    await waitFor(() => {
+      expect(screen.getByTestId("notice-spy")).toHaveTextContent(`danger:${errMsg}`)
+    })
+
+    // Also verify HomeView onOpenExplorer (api.openFileManager)
+    cleanup()
+    const homeApi = createMockApi()
+    const baseHomeLoad = homeApi.loadSettings.bind(homeApi)
+    homeApi.loadSettings = vi.fn(async () => ({ ...(await baseHomeLoad()), firstRunSetup: false, language: "id" as const }))
+    homeApi.subscribeMetrics = vi.fn(() => () => {}) as unknown as CompanionApi["subscribeMetrics"]
+    homeApi.subscribePower = vi.fn((cb) => {
+      cb("online")
+      return () => {}
+    }) as unknown as CompanionApi["subscribePower"]
+    homeApi.openFileManager = vi.fn(async () => ({ success: false, error: errMsg }))
+    setCompanionApi(homeApi)
+
+    render(
+      <NoticeProvider>
+        <CompanionStoreProvider>
+          <NoticeSpy />
+          <HomeView {...({ go: vi.fn() } as any)} />
+        </CompanionStoreProvider>
+      </NoticeProvider>,
+    )
+
+    const explorerBtn = await screen.findByTitle(/Kelola partisi disk & storage SMB/i, {}, { timeout: 2500 })
+    fireEvent.click(explorerBtn)
+    await waitFor(() => {
+      expect(screen.getByTestId("notice-spy")).toHaveTextContent(`danger:${errMsg}`)
+    })
+
+    // Verify realApi propagates { success: false, error } from pywebview API
+    ;(window as any).pywebview = {
+      api: {
+        open_drive: vi.fn(async () => ({ success: false, error: errMsg })),
+        open_unc: vi.fn(async () => ({ success: false, error: errMsg })),
+        open_file_manager: vi.fn(async () => ({ success: false, error: errMsg })),
+      },
+    }
+    try {
+      const realApi = createRealApi()
+      expect(await realApi.openDrive("Z:")).toMatchObject({ success: false, error: errMsg })
+      expect(await realApi.openUnc()).toMatchObject({ success: false, error: errMsg })
+      expect(await realApi.openFileManager()).toMatchObject({ success: false, error: errMsg })
+    } finally {
+      delete (window as any).pywebview
+    }
+  })
+
+  it("renders compact Zero-Overhaul --no-tun warning Card only when easytierNoTun is true", async () => {
+    setupFilesView({
+      language: "id",
+      initialSource: {
+        success: true,
+        source: "zimaos",
+        hasCredentials: false,
+        easytierNoTun: true,
+        tunActive: false,
+        smbWarning: "EasyTier berjalan dalam mode --no-tun (adapter Wintun tidak aktif).",
+      },
+    })
+
+    const warnCard = await screen.findByTestId("easytier-no-tun-warning")
+    expect(warnCard).toHaveTextContent(/Wintun|--no-tun/i)
+
+    cleanup()
+    setupFilesView({
+      language: "id",
+      initialSource: {
+        success: true,
+        source: "zimaos",
+        hasCredentials: false,
+        easytierNoTun: false,
+        tunActive: true,
+      },
+    })
+    await screen.findByText("ZimaOS Files")
+    expect(screen.queryByTestId("easytier-no-tun-warning")).not.toBeInTheDocument()
+  })
+
+  it("throttles getServerDetails in store.tsx to >=12s & skips hidden tab while keeping 4s Syncthing milestone cadence", async () => {
+    vi.useFakeTimers()
+    let isHidden = false
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => isHidden,
+    })
+
+    const storeApi = createMockApi()
+    const baseLoad = storeApi.loadSettings.bind(storeApi)
+    storeApi.loadSettings = vi.fn(async () => ({ ...(await baseLoad()), firstRunSetup: false, language: "id" as const }))
+    storeApi.subscribeMetrics = vi.fn(() => () => {}) as unknown as CompanionApi["subscribeMetrics"]
+    storeApi.subscribePower = vi.fn((cb) => {
+      cb("online")
+      return () => {}
+    }) as unknown as CompanionApi["subscribePower"]
+
+    const getDetailsSpy = vi.fn(async () => ({
+      activeId: "srv_1",
+      activeName: "Server",
+      activeRoute: "lan",
+      routes: [{ id: "lan", name: "LAN", url: "http://127.0.0.1:80", active: true }],
+      activeProfile: "Admin",
+      profiles: ["Admin"],
+      uptimeStr: "1d",
+    }))
+    const getSyncthingSpy = vi.fn(async () => [])
+    storeApi.getServerDetails = getDetailsSpy as unknown as CompanionApi["getServerDetails"]
+    storeApi.getSyncthingTasks = getSyncthingSpy as unknown as CompanionApi["getSyncthingTasks"]
+
+    setCompanionApi(storeApi)
+    render(
+      <NoticeProvider>
+        <CompanionStoreProvider>
+          <div data-testid="store-mounted" />
+        </CompanionStoreProvider>
+      </NoticeProvider>,
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    expect(getDetailsSpy).toHaveBeenCalledTimes(1)
+
+    // 8s later (2 ticks of 4s): Syncthing tasks run twice, getServerDetails stays throttled at 1!
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000)
+    })
+    expect(getSyncthingSpy).toHaveBeenCalledTimes(2)
+    expect(getDetailsSpy).toHaveBeenCalledTimes(1)
+
+    // At 12s (3rd tick of 4s): getServerDetails fires once more (total 2), Syncthing fires 3rd time
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000)
+    })
+    expect(getSyncthingSpy).toHaveBeenCalledTimes(3)
+    expect(getDetailsSpy).toHaveBeenCalledTimes(2)
+
+    // Hidden tab skips getServerDetails even across 16s, while Syncthing milestone continues
+    isHidden = true
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16_000)
+    })
+    expect(getDetailsSpy).toHaveBeenCalledTimes(2)
+    expect(getSyncthingSpy.mock.calls.length).toBeGreaterThanOrEqual(7)
   })
 })

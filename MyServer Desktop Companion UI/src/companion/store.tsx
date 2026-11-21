@@ -332,9 +332,11 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     })
 
     // Monitoring notifikasi berkala: Syncthing milestones (25%, 50%, 90%, 100%) & perubahan rute
+    const SERVER_DETAILS_POLL_MIN_MS = 12_000
     const lastMilestones = new Map<string, Set<number>>()
     let isInitialSyncthingCheck = true
     let prevActiveRouteId: string | null = null
+    let lastServerDetailsPollTs = Date.now()
 
     const checkMilestonesAndRoutes = async () => {
       try {
@@ -383,16 +385,21 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       } catch {}
 
       try {
-        const details = await api.getServerDetails()
-        const activeRoute = details?.routes?.find((r: any) => r.active)
-        const currentId = activeRoute?.id || (activeRoute?.url ?? null)
-        if (prevActiveRouteId !== null && currentId && currentId !== prevActiveRouteId) {
-          const routeName = activeRoute?.name || activeRoute?.url || "Rute Baru"
-          window.dispatchEvent(new CustomEvent("myserver:notify", {
-            detail: { text: `Status Rute: Terhubung (${routeName})`, tone: "success" }
-          }))
+        const isDocHidden = typeof document !== "undefined" && document.hidden === true
+        const nowTs = Date.now()
+        if (!isDocHidden && (nowTs - lastServerDetailsPollTs) >= SERVER_DETAILS_POLL_MIN_MS) {
+          lastServerDetailsPollTs = nowTs
+          const details = await api.getServerDetails()
+          const activeRoute = details?.routes?.find((r: any) => r.active)
+          const currentId = activeRoute?.id || (activeRoute?.url ?? null)
+          if (prevActiveRouteId !== null && currentId && currentId !== prevActiveRouteId) {
+            const routeName = activeRoute?.name || activeRoute?.url || "Rute Baru"
+            window.dispatchEvent(new CustomEvent("myserver:notify", {
+              detail: { text: `Status Rute: Terhubung (${routeName})`, tone: "success" }
+            }))
+          }
+          if (currentId) prevActiveRouteId = currentId
         }
-        if (currentId) prevActiveRouteId = currentId
       } catch {}
     }
 

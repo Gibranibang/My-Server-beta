@@ -122,23 +122,20 @@ describe("HomeView dynamic footer route pill icon (RPI-01, D-04, 06-UI-SPEC Surf
     expect(lanSvgHtml).not.toBe(remoteSvgHtml)
   })
 
-  it("Test 4 (Strict 1-line isolation, D-04, T-06-07): verifies HomeView.tsx line 327 uses <currentRouteMeta.icon with 639 total lines and lines 296-299 untouched", () => {
+  it("Test 4 (Isolation with Phase 7): verifies HomeView.tsx preserves Phase 6 <currentRouteMeta.icon /> while allowing Phase 7 onOpenExplorer preflight", () => {
     const homeViewPath = path.resolve(__dirname, "../views/HomeView.tsx")
     const raw = fs.readFileSync(homeViewPath, "utf-8")
     const lines = raw.split(/\r?\n/)
-    // File ends with trailing newline -> 640 lines before final empty split element (or 640 lines)
-    const nonTrailingLines = lines[lines.length - 1] === "" ? lines.slice(0, -1) : lines
-    expect(nonTrailingLines.length).toBe(639)
 
-    // 1-indexed line 327 -> 0-indexed lines[326]
-    expect(lines[326].trim()).toBe(
-      '<currentRouteMeta.icon className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#047857]" : "text-[#2D2D2D]")} strokeWidth={1.8} />',
-    )
+    expect(
+      lines.some(
+        (ln) =>
+          ln.trim() ===
+          '<currentRouteMeta.icon className={cx("size-[10.07px] shrink-0", isOnline ? "text-[#047857]" : "text-[#2D2D2D]")} strokeWidth={1.8} />',
+      ),
+    ).toBe(true)
 
-    // Verify lines 296-299 (onOpenExplorer) remain 100% untouched for Phase 7 orthogonality
-    expect(lines[295].trim()).toBe("onOpenExplorer={() => {")
-    expect(lines[296].trim()).toBe("api.openFileManager()")
-    expect(lines[297].trim()).toBe('notify("Membuka Windows File Explorer...", "info")')
-    expect(lines[298].trim()).toBe("}}")
+    expect(raw).toContain("const res = await api.openFileManager()")
+    expect(raw).toContain("smb_preflight_unreachable")
   })
 })

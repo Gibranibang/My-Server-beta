@@ -293,9 +293,20 @@ export default function HomeView({ go }: ViewProps) {
         <SkeuoMatrixGrid
           isOnline={isOnline}
           go={go}
-          onOpenExplorer={() => {
-            api.openFileManager()
-            notify("Membuka Windows File Explorer...", "info")
+          onOpenExplorer={async () => {
+            const res = await api.openFileManager()
+            if (res && res.success === false) {
+              notify(
+                res.error ||
+                  t(
+                    "smb_preflight_unreachable",
+                    "Port 445 SMB server tidak merespons. Pembukaan File Explorer dibatalkan agar tidak hang.",
+                  ),
+                "danger",
+              )
+            } else {
+              notify("Membuka Windows File Explorer...", "info")
+            }
           }}
           safeT={safeT}
         />

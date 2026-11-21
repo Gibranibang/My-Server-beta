@@ -214,6 +214,7 @@ export interface ServerItem {
   id: string
   name: string
   active: boolean
+  sshUser?: string
 }
 
 export interface ZeroTierInfo {
@@ -249,6 +250,7 @@ export interface ServerDetails {
   activeId: string
   activeName: string
   activeHost?: string
+  sshUser?: string
   servers?: ServerItem[]
   zeroTier?: ZeroTierInfo
   easyTier?: EasyTierInfo

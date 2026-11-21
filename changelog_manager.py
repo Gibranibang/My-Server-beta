@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.5",
+        "channel": "Beta",
+        "date": "2026-11-21",
+        "title": "Dialog Input Username & Port SSH Terminal (Anti Mismatch Profil Desktop)",
+        "notes": [
+            "Modal Input SSH Terminal di ServerView: Klik tombol Terminal SSH kini membuka dialog input terlebih dahulu untuk meninjau atau mengubah Username SSH, Host/IP (dengan failover otomatis ke Virtual IP Remote P2P), serta Port SSH (default 22) lengkap dengan pratinjau perintah real-time sebelum terminal diluncurkan.",
+            "Persistensi Username SSH Per Server: Username SSH yang dimasukkan pengguna kini disimpan di config server (`ssh_user`) dan localStorage serta diekspos melalui `get_server_details_data`, sehingga user OS Linux/ZimaOS yang berbeda penulisan atau berbeda nama dengan profil MyServer Desktop tetap bisa login lancar.",
+            "Validasi Input & Perlindungan Shell Injection: Endpoint `/api/server/ssh_terminal` kini memvalidasi format username, host, dan rentang port (`1-65535`) dengan regex ketat serta mendukung flag `-p <port>` saat memakai port kustom."
+        ],
+        "features": [
+            "Dialog Input Username, Host & Port Sebelum Membuka Terminal SSH",
+            "Memori Username SSH Tersimpan Per Server (Independen dari Profil MyServer Desktop)",
+            "Validasi Input Ketat & Dukungan Port SSH Kustom"
+        ]
+    },
+    {
         "version": "4.6.4",
         "channel": "Beta",
         "date": "2026-11-21",

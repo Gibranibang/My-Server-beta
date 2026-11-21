@@ -1234,7 +1234,7 @@ export function createRealApi(): CompanionApi {
       }
     },
 
-    async openSshTerminal(params?: { host?: string; user?: string; port?: number }) {
+    async openSshTerminal(params?: { host?: string; user?: string; port?: number; serverId?: string; saveSshUser?: boolean }) {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         try {
           const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke

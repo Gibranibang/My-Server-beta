@@ -106,7 +106,12 @@ export default function ServerView({ go }: ViewProps) {
     return () => document.removeEventListener("mousedown", onMouseDown)
   }, [routeMenuOpenId])
 
-  const handleOpenSshTerminal = async () => {
+  const getSshStorageKey = (d: ServerDetails | null) => {
+    const sid = d?.serverId || d?.activeId || d?.servers?.find((s) => s.active)?.id || d?.serverName || "default"
+    return `myserver_ssh_user_${sid}`
+  }
+
+  const handleOpenSshTerminal = () => {
     if (!details) return
     const activeRouteObj = details.routes?.find(r => r.active) || details.routes?.find(r => r.id === details.activeRoute) || details.routes?.[0]
     let host = details.activeHost || "127.0.0.1"
@@ -120,36 +125,30 @@ export default function ServerView({ go }: ViewProps) {
     }
     // v4.5.2 Beta: Jika rute aktif adalah WAN / Domain publik, alihkan target SSH ke Virtual IP Remote P2P
     const isWanOrDomain = host && !host.endsWith(".local") && !host.endsWith(".lan") && host !== "127.0.0.1" && host !== "localhost" && isNaN(Number(host.replace(/\./g, "")))
-    const activeRemoteIp = (details as any)?.activeRemoteIp || details?.zeroTier?.serverVirtualIp || (details as any)?.easyTier?.server_virtual_ip || ""
+    const activeRemoteIp = (details as any)?.activeRemoteIp || details?.zeroTier?.serverVirtualIp || (details as any)?.easyTier?.server_peer_ip || (details as any)?.easyTier?.server_virtual_ip || ""
     if (isWanOrDomain && activeRemoteIp) {
       host = activeRemoteIp
     }
-    // v4.5.1 Beta: Deteksi username dinamis dari profil aktif server pengguna
+    // v4.6.5 Beta: Prioritaskan SSH username tersimpan per server; buka modal agar user dapat meninjau & mengubah username SSH sebelum koneksi dibuka
+    let savedLocalUser = ""
+    try {
+      savedLocalUser = localStorage.getItem(getSshStorageKey(details))?.trim() || ""
+    } catch {}
+    const activeSrvSshUser = details.servers?.find((s) => s.active)?.sshUser?.trim() || ""
     const activeProfile = details?.activeProfile || ""
-    const credUsername = (details as any)?.credentials?.[activeProfile]?.username
-    const user = credUsername || details?.accountStatus?.username || (activeProfile && activeProfile !== "Admin" ? activeProfile.toLowerCase() : "casaos")
-    let sshCmd = `ssh ${user}@${host}`
-    
-    if (api.openSshTerminal) {
-      try {
-        const res: any = await api.openSshTerminal({
-          host,
-          user,
-          port: 22,
-          serverId: (details as any)?.serverId || (details as any)?.id || "",
-        } as any)
-        if (res && res.command) {
-          sshCmd = res.command
-        }
-      } catch (e) {
-        console.warn("[ServerView] openSshTerminal error:", e)
-      }
-    }
+    const credUsername = (details as any)?.credentials?.[activeProfile]?.username?.trim() || ""
+    const defaultUser =
+      details.sshUser?.trim() ||
+      activeSrvSshUser ||
+      savedLocalUser ||
+      credUsername ||
+      details?.accountStatus?.username?.trim() ||
+      (activeProfile && activeProfile !== "Admin" ? activeProfile.toLowerCase() : "casaos")
 
-    // Copy command
-    await copyText(sshCmd, t("server_ssh_terminal_btn", "Terminal SSH"))
-    setCopiedSsh(true)
-    setTimeout(() => setCopiedSsh(false), 2000)
+    setFormUser(defaultUser)
+    setFormUrl(host)
+    setFormSshPort("22")
+    setModalMode("sshTerminal")
   }
 
   const handleBackendAction = async (action: "install" | "update") => {
@@ -270,7 +269,7 @@ export default function ServerView({ go }: ViewProps) {
   // ============================================================================
   // REACT MODALS STATE & HANDLERS (Pengganti Native WinForms)
   // ============================================================================
-  const [modalMode, setModalMode] = useState<null | "addServer" | "editServer" | "deleteServer" | "addRoute" | "editRoute" | "deleteRoute" | "addProfile" | "editProfile" | "deleteProfile" | "credentials" | "joinZeroTier" | "joinEasyTier">(null)
+  const [modalMode, setModalMode] = useState<null | "addServer" | "editServer" | "deleteServer" | "addRoute" | "editRoute" | "deleteRoute" | "addProfile" | "editProfile" | "deleteProfile" | "credentials" | "joinZeroTier" | "joinEasyTier" | "sshTerminal">(null)
   const [activeItem, setActiveItem] = useState<any>(null)
   const [formName, setFormName] = useState("")
   const [formUrl, setFormUrl] = useState("")
@@ -278,6 +277,7 @@ export default function ServerView({ go }: ViewProps) {
   const [formPass, setFormPass] = useState("")
   const [formNwid, setFormNwid] = useState("")
   const [formVip, setFormVip] = useState("")
+  const [formSshPort, setFormSshPort] = useState("22")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
 
@@ -537,6 +537,44 @@ export default function ServerView({ go }: ViewProps) {
           } catch (_) {}
         }
         notify(t("zt_join_sent_notice", "Perintah sambung Remote ID berhasil dikirim"), "success")
+      } else if (modalMode === "sshTerminal") {
+        const sshUser = formUser.trim()
+        const sshHost = formUrl.trim()
+        const portNum = parseInt((formSshPort || "22").trim(), 10)
+        if (!sshUser || !/^[A-Za-z0-9._-]+$/.test(sshUser)) {
+          throw new Error(t("server_ssh_invalid_user", "Username SSH hanya boleh berisi huruf, angka, titik (.), garis bawah (_), atau tanda hubung (-)."))
+        }
+        if (!sshHost || !/^[A-Za-z0-9._:-]+$/.test(sshHost)) {
+          throw new Error(t("server_ssh_invalid_host", "Host / IP SSH tidak valid."))
+        }
+        if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+          throw new Error(t("server_ssh_invalid_port", "Port SSH harus di antara 1 sampai 65535."))
+        }
+
+        const serverId = details?.serverId || details?.activeId || details?.servers?.find((s) => s.active)?.id || ""
+        let sshCmd = portNum !== 22 ? `ssh -p ${portNum} ${sshUser}@${sshHost}` : `ssh ${sshUser}@${sshHost}`
+        if (api.openSshTerminal) {
+          const res: any = await api.openSshTerminal({
+            host: sshHost,
+            user: sshUser,
+            port: portNum,
+            serverId,
+            saveSshUser: true,
+          })
+          if (!res || res.success === false || res.status === "error") {
+            throw new Error(res?.error || t("error_notice", "Gagal membuka Terminal SSH"))
+          }
+          if (res.command) {
+            sshCmd = res.command
+          }
+        }
+        try {
+          localStorage.setItem(getSshStorageKey(details), sshUser)
+        } catch {}
+        await copyText(sshCmd, t("server_ssh_terminal_btn", "Terminal SSH"))
+        setCopiedSsh(true)
+        setTimeout(() => setCopiedSsh(false), 2000)
+        notify(t("server_ssh_launched", "Terminal SSH dibuka & perintah disalin!"), "success")
       }
       closeModal()
       loadDetails()
@@ -1345,6 +1383,7 @@ export default function ServerView({ go }: ViewProps) {
                 {modalMode.includes("Route") && <Network className="size-4 text-brand" />}
                 {(modalMode.includes("Profile") || modalMode === "credentials") && <User className="size-4 text-info" />}
                 {(modalMode === "joinZeroTier" || modalMode === "joinEasyTier") && <Network className="size-4 text-brand" />}
+                {modalMode === "sshTerminal" && <Terminal className="size-4 text-brand" />}
                 {modalMode === "addServer" && t("add_server_modal_title", "Tambah Server Baru")}
                 {modalMode === "editServer" && t("edit_server_modal_title", "Ubah Server")}
                 {modalMode === "deleteServer" && t("confirm_delete_title", "Konfirmasi Hapus")}
@@ -1357,6 +1396,7 @@ export default function ServerView({ go }: ViewProps) {
                 {modalMode === "credentials" && t("profile_creds_modal_title", "Kelola Kredensial Akun")}
                 {modalMode === "joinZeroTier" && t("edit_zt_id_title", "Ubah Network ID ZeroTier")}
                 {modalMode === "joinEasyTier" && t("edit_remote_id_title", "Ubah Remote ID EasyTier")}
+                {modalMode === "sshTerminal" && t("server_ssh_modal_title", "Buka Terminal SSH")}
               </span>
               <button
                 type="button"
@@ -1547,13 +1587,87 @@ export default function ServerView({ go }: ViewProps) {
                   </div>
                 )}
 
+                {/* SSH Terminal Modal Fields */}
+                {modalMode === "sshTerminal" && (
+                  <>
+                    <p className="text-micro text-ink-subtle">
+                      {t(
+                        "server_ssh_modal_hint",
+                        "Masukkan username OS Linux / ZimaOS yang aktif (tidak harus sama dengan nama profil MyServer Desktop)."
+                      )}
+                    </p>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="ssh-username-input" className="text-micro font-semibold text-ink-subtle">
+                        {t("server_ssh_user_label", "Username SSH")}
+                      </label>
+                      <input
+                        id="ssh-username-input"
+                        type="text"
+                        required
+                        autoFocus
+                        value={formUser}
+                        onChange={(e) => setFormUser(e.target.value)}
+                        placeholder="zimaos / root"
+                        className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-caption font-mono text-ink focus:border-brand focus:outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2 flex flex-col gap-1">
+                        <label htmlFor="ssh-host-input" className="text-micro font-semibold text-ink-subtle">
+                          {t("server_ssh_host_label", "Host / IP SSH")}
+                        </label>
+                        <input
+                          id="ssh-host-input"
+                          type="text"
+                          required
+                          value={formUrl}
+                          onChange={(e) => setFormUrl(e.target.value)}
+                          placeholder="zimaos.local"
+                          className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-caption font-mono text-ink focus:border-brand focus:outline-none"
+                        />
+                      </div>
+                      <div className="col-span-1 flex flex-col gap-1">
+                        <label htmlFor="ssh-port-input" className="text-micro font-semibold text-ink-subtle">
+                          {t("server_ssh_port_label", "Port SSH")}
+                        </label>
+                        <input
+                          id="ssh-port-input"
+                          type="text"
+                          inputMode="numeric"
+                          value={formSshPort}
+                          onChange={(e) => setFormSshPort(e.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="22"
+                          className="rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-caption font-mono text-ink focus:border-brand focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div className="rounded-control border border-line bg-surface-sunken px-2.5 py-2 flex flex-col gap-0.5">
+                      <span className="text-[11px] font-semibold text-ink-subtle">
+                        {t("server_ssh_preview_label", "Pratinjau Perintah")}
+                      </span>
+                      <code data-testid="ssh-command-preview" className="text-caption font-mono text-brand break-all">
+                        {(() => {
+                          const u = formUser.trim() || "<user>"
+                          const h = formUrl.trim() || "<host>"
+                          const p = parseInt((formSshPort || "22").trim(), 10)
+                          return p && p !== 22 ? `ssh -p ${p} ${u}@${h}` : `ssh ${u}@${h}`
+                        })()}
+                      </code>
+                    </div>
+                  </>
+                )}
+
                 {/* Form Action Buttons */}
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-line">
                   <Button size="sm" variant="soft" onClick={closeModal} type="button">
                     {t("cancel_btn", "Batal")}
                   </Button>
                   <Button size="sm" variant="primary" type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? t("saving_btn", "Menyimpan...") : t("save_btn", "Simpan")}
+                    {modalMode === "sshTerminal" && !isSubmitting
+                      ? t("server_ssh_connect_btn", "Buka Terminal SSH")
+                      : isSubmitting
+                        ? t("saving_btn", "Menyimpan...")
+                        : t("save_btn", "Simpan")}
                   </Button>
                 </div>
               </form>

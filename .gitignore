@@ -90,6 +90,9 @@ tests/test_run_*.py
 *.crt
 *.key
 *.pem
+google_oauth_client_secret*.json
+client_secret*.json
+secrets/
 
 # OS / Editor generated files
 Thumbs.db

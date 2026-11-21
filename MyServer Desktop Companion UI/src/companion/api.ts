@@ -170,7 +170,7 @@ export interface CompanionApi {
 
   migrateVm?(vmId: string, targetScope: "server" | "local", vm?: Partial<VirtualMachine>): Promise<any>
 
-  openSshTerminal?(params?: { host?: string; user?: string; port?: number }): Promise<any>
+  openSshTerminal?(params?: { host?: string; user?: string; port?: number; serverId?: string; saveSshUser?: boolean }): Promise<any>
 
   openVmWindow?(vmId: string, title: string, url: string): Promise<void>
 
@@ -882,8 +882,12 @@ export function createMockApi(): CompanionApi {
       return { status: "ok", success: true }
     },
 
-    async openSshTerminal() {
-      return { status: "ok", success: true }
+    async openSshTerminal(params?: { host?: string; user?: string; port?: number; serverId?: string; saveSshUser?: boolean }) {
+      const user = (params?.user || "casaos").trim()
+      const host = (params?.host || "zimaos.local").trim()
+      const port = Number(params?.port || 22)
+      const command = port !== 22 ? `ssh -p ${port} ${user}@${host}` : `ssh ${user}@${host}`
+      return { status: "ok", success: true, command, user, host, port, launched: true }
     },
 
     async openVmWindow(_vmId: string, title: string, url: string) {

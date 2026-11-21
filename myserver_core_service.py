@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.4"
+APP_VERSION_NUMBER = "4.6.5"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -17895,6 +17895,7 @@ def get_server_details_data(cfg=None):
 
 
                 "active": (s.get("id") == active_srv_id),
+                "sshUser": (s.get("ssh_user") or "").strip(),
                 "remote_id": s.get("remote_id") or s.get("zerotier_network_id") or "",
                 "easytier_virtual_ip": s.get("easytier_virtual_ip") or "",
                 "zerotier_network_id": s.get("zerotier_network_id") or "",
@@ -18304,6 +18305,14 @@ def get_server_details_data(cfg=None):
 
 
         "activeHost": active_host,
+
+
+
+
+
+
+
+        "sshUser": (srv.get("ssh_user") or "").strip(),
 
 
 
@@ -31102,6 +31111,22 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             default_host = (urllib.parse.urlparse(url).hostname or "zimaos.local").strip()
             host = req_host if req_host else default_host
 
+            raw_port = body.get("port", 22)
+            try:
+                port = int(raw_port) if raw_port not in (None, "") else 22
+            except (TypeError, ValueError):
+                self._send_json(
+                    {"status": "error", "success": False, "error": "Port SSH tidak valid (harus angka 1-65535)."},
+                    status=400,
+                )
+                return
+            if port < 1 or port > 65535:
+                self._send_json(
+                    {"status": "error", "success": False, "error": "Port SSH harus di antara 1 sampai 65535."},
+                    status=400,
+                )
+                return
+
             # v4.5.2 Beta: Failover otomatis WAN/Domain publik -> Remote Virtual IP P2P (ZeroTier / EasyTier)
             from smb_mount_manager import _is_domain_or_wan_host
             if _is_domain_or_wan_host(host) and srv:
@@ -31110,38 +31135,65 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 if not rem_ip:
                     rem_ip = (srv.get("easytier_virtual_ip") or srv.get("zerotier_virtual_ip") or "").strip()
                 if rem_ip:
-                    logger_manager.log_info(f"[api/server/ssh_terminal] Host WAN/Domain '{host}' terdeteksi -> Failover target SSH dialihkan ke Remote Virtual IP ({rem_ip}:22)")
+                    logger_manager.log_info(f"[api/server/ssh_terminal] Host WAN/Domain '{host}' terdeteksi -> Failover target SSH dialihkan ke Remote Virtual IP ({rem_ip}:{port})")
                     host = rem_ip
 
-            # v4.5.1 Beta: Resolusi akun dinamis (Anti-Hardcoding)
+            # v4.5.1 / v4.6.5 Beta: Resolusi akun SSH eksplisit > tersimpan per server > kredensial profil aktif
             req_user = (body.get("user") or "").strip()
             user = ""
             if req_user:
                 user = req_user
             elif srv:
-                active_p = srv.get("active_profile", "")
-                creds = srv.get("credentials", {})
-                if active_p and isinstance(creds, dict) and active_p in creds:
-                    user = creds[active_p].get("username", "")
+                user = (srv.get("ssh_user") or "").strip()
                 if not user:
-                    user = srv.get("default_user") or srv.get("username") or ""
+                    active_p = srv.get("active_profile", "")
+                    creds = srv.get("credentials", {})
+                    if active_p and isinstance(creds, dict) and active_p in creds:
+                        user = (creds[active_p].get("username") or "").strip()
+                if not user:
+                    user = (srv.get("default_user") or srv.get("username") or "").strip()
             if not user:
                 user = "casaos"
 
-            ssh_cmd = f"ssh {user}@{host}"
+            import re as _re
+            if not _re.match(r"^[A-Za-z0-9._-]+$", user):
+                self._send_json(
+                    {
+                        "status": "error",
+                        "success": False,
+                        "error": "Username SSH hanya boleh berisi huruf, angka, titik (.), garis bawah (_), atau tanda hubung (-).",
+                    },
+                    status=400,
+                )
+                return
+
+            if not host or not _re.match(r"^[A-Za-z0-9._:-]+$", host):
+                self._send_json(
+                    {"status": "error", "success": False, "error": "Host / IP SSH tidak valid."},
+                    status=400,
+                )
+                return
+
+            save_ssh_user = bool(body.get("saveSshUser", True))
+            if srv is not None and req_user and save_ssh_user:
+                if (srv.get("ssh_user") or "").strip() != user:
+                    srv["ssh_user"] = user
+                    config_manager.save_config(cfg)
+
+            ssh_cmd = f"ssh -p {port} {user}@{host}" if port != 22 else f"ssh {user}@{host}"
             launched = False
             try:
                 ps_cmd = [
                     "powershell.exe",
                     "-NoExit",
                     "-Command",
-                    f'Write-Host "Menghubungkan Terminal SSH ke Server ({user}@{host})..." -ForegroundColor Green; ssh {user}@{host}'
+                    f'Write-Host "Menghubungkan Terminal SSH ke Server ({user}@{host}:{port})..." -ForegroundColor Green; {ssh_cmd}'
                 ]
                 subprocess.Popen(ps_cmd)
                 launched = True
             except Exception as te:
                 logger_manager.log_debug(f"[api/server/ssh_terminal] Gagal meluncurkan terminal: {te}")
-            self._send_json({"status": "ok", "success": True, "command": ssh_cmd, "host": host, "user": user, "launched": launched})
+            self._send_json({"status": "ok", "success": True, "command": ssh_cmd, "host": host, "user": user, "port": port, "launched": launched})
             return
 
         if path == "/api/vm/open_window":

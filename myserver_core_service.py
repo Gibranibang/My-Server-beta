@@ -13892,6 +13892,40 @@ def get_network_speeds():
 
 
 
+_backend_disks_usage_lock = threading.Lock()
+_cached_backend_disks_usage = {}
+
+
+def _update_backend_disks_usage_cache(server_id, disks_list):
+    """Menyimpan cache kapasitas REST (/api/v1/storage/disks) untuk _scan_live_drives_now() tanpa probe Win32 SMB."""
+    if not disks_list or not isinstance(disks_list, list):
+        return
+    now_ts = time.time()
+    sid = str(server_id or "").strip()
+    with _backend_disks_usage_lock:
+        for d in disks_list:
+            if not isinstance(d, dict):
+                continue
+            d_name = str(d.get("name") or "").strip().lower()
+            if not d_name:
+                continue
+            tot_b = int(d.get("total_bytes", 0) or 0)
+            used_b = int(d.get("used_bytes", 0) or 0)
+            raw_free = d.get("free_bytes", None)
+            free_b = int(raw_free) if raw_free is not None else max(tot_b - used_b, 0)
+            if tot_b > 0:
+                _cached_backend_disks_usage[(sid, d_name)] = (tot_b, max(free_b, 0), now_ts)
+
+
+def _unpack_explorer_result(res):
+    """Menormalkan kembalian open_drive_in_explorer / open_unc_root_in_explorer menjadi tuple (ok, msg)."""
+    if isinstance(res, tuple):
+        ok = bool(res[0]) if len(res) > 0 else False
+        msg = str(res[1] or "") if len(res) > 1 else ""
+        return ok, msg
+    return bool(res), ""
+
+
 def _scan_live_drives_now():
 
 
@@ -14118,41 +14152,32 @@ def _scan_live_drives_now():
 
 
         except Exception as e:
-
-
-
             logger_manager.log_debug(f"[LiveDrives] Gagal mengumpulkan identitas server: {e}")
 
+        try:
+            alias_fn = getattr(smb_mount_manager, "get_active_1219_aliases", None)
+            aliases_1219 = alias_fn() if callable(alias_fn) else {}
+            for av in (aliases_1219 or {}).values():
+                if av and str(av).strip():
+                    active_server_identities.add(str(av).strip().lower())
+        except Exception:
+            pass
 
-
-
-
-
+        logical_bitmask = 0xFFFFFFFF
+        try:
+            get_drv_fn = getattr(ctypes.windll.kernel32, "GetLogicalDrives", None)
+            if callable(get_drv_fn):
+                raw_mask = get_drv_fn()
+                if isinstance(raw_mask, int) and not isinstance(raw_mask, bool):
+                    logical_bitmask = raw_mask
+        except Exception:
+            logical_bitmask = 0xFFFFFFFF
 
         for i in range(25, 2, -1):
-
-
-
-
-
-
-
+            if not (logical_bitmask & (1 << i)):
+                continue
             d = f"{chr(65 + i)}:"
-
-
-
-
-
-
-
             try:
-
-
-
-
-
-
-
                 if ctypes.windll.kernel32.GetDriveTypeW(d + "\\") == 4:
 
 
@@ -14278,14 +14303,14 @@ def _scan_live_drives_now():
 
 
                     tot = 0
-
-
-
                     fr = 0
-
-
-
-                    if smb_cfg_scan.get("source") != "backend":
+                    if smb_cfg_scan.get("source") == "backend":
+                        scan_srv_id = str((srv_scan or {}).get("id") or "").strip()
+                        with _backend_disks_usage_lock:
+                            b_ent = _cached_backend_disks_usage.get((scan_srv_id, share_key))
+                            if b_ent and len(b_ent) >= 2:
+                                tot, fr = int(b_ent[0]), int(b_ent[1])
+                    else:
                         for cp in cached_parts:
                             if not isinstance(cp, dict):
                                 continue
@@ -14296,174 +14321,6 @@ def _scan_live_drives_now():
                                 used_b = int(cp.get("used_bytes", 0))
                                 fr = max(tot - used_b, 0)
                                 break
-
-
-
-
-
-
-
-                    if tot == 0:
-
-
-
-                        free_bytes = ctypes.c_ulonglong(0)
-
-
-
-                        total_bytes = ctypes.c_ulonglong(0)
-
-
-
-                        total_free = ctypes.c_ulonglong(0)
-
-
-
-                        pipeline_busy = _smb_pipeline_lock.locked()
-
-
-
-                        now_ts = time.time()
-
-
-
-                        with _drives_cache_lock:
-
-
-
-                            c_space = _cached_live_drive_space.get(d)
-
-
-
-                        if c_space and len(c_space) == 3 and (now_ts - c_space[2]) < 30.0:
-
-
-
-                            tot, fr = c_space[0], c_space[1]
-
-
-
-                        elif srv_online and not pipeline_busy:
-
-
-
-                            with _drives_cache_lock:
-
-
-
-                                drv_busy = (d in _inflight_live_drives)
-
-
-
-                                if not drv_busy:
-
-
-
-                                    _inflight_live_drives.add(d)
-
-
-
-                            if not drv_busy:
-
-
-
-                                def _query_space(drv_key=d, drv_path=d + "\\", fb=free_bytes, tb=total_bytes, tf=total_free):
-
-
-
-                                    try:
-
-
-
-                                        ctypes.windll.kernel32.GetDiskFreeSpaceExW(
-
-
-
-                                            drv_path,
-
-
-
-                                            ctypes.byref(fb),
-
-
-
-                                            ctypes.byref(tb),
-
-
-
-                                            ctypes.byref(tf)
-
-
-
-                                        )
-
-
-
-                                        if tb.value > 0:
-
-
-
-                                            with _drives_cache_lock:
-
-
-
-                                                _cached_live_drive_space[drv_key] = (tb.value, fb.value, time.time())
-
-
-
-                                    except Exception:
-
-
-
-                                        pass
-
-
-
-                                    finally:
-
-
-
-                                        with _drives_cache_lock:
-
-
-
-                                            _inflight_live_drives.discard(drv_key)
-
-
-
-                                t_sp = threading.Thread(target=_query_space, daemon=True)
-
-
-
-                                t_sp.start()
-
-
-
-                                t_sp.join(timeout=0.5)
-
-
-
-                            tot = total_bytes.value
-
-
-
-                            fr = free_bytes.value
-
-
-
-                            if tot == 0:
-
-
-
-                                with _drives_cache_lock:
-
-
-
-                                    c_fb = _cached_live_drive_space.get(d, (0, 0, 0))
-
-
-
-                                    tot, fr = c_fb[0], c_fb[1]
 
 
 
@@ -15721,7 +15578,7 @@ def _resolve_smb_route_params(srv, active_u):
 
 
 
-def rebind_storage_pipeline(reason="manual", force_refresh=True):
+def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=False):
 
 
 
@@ -15842,29 +15699,8 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
 
 
         if soft_mode:
-
-
-
-
-
-
-
             logger_manager.log_info("[SMB Pipeline] Mode non-destruktif: drive sehat dipertahankan, hanya melengkapi yang belum terpasang.")
-
-
-
-
-
-
-
-        else:
-
-
-
-
-
-
-
+        elif not pre_unmounted:
             unmounted_count = _unmount_myserver_smb_drives(reason=f"pipeline:{reason}", include_easytier_subnet=True)
             logger_manager.log_info(f"[SMB Pipeline] Berhasil melepaskan {unmounted_count} drive lama.")
 
@@ -15924,7 +15760,7 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
 
         active_u, _ = get_active_resolved_route(cfg)
 
-        if not soft_mode:
+        if not soft_mode and not pre_unmounted:
             all_hosts = set()
             for c in srv.get("connections", []):
                 if isinstance(c, dict) and c.get("url"):
@@ -15941,7 +15777,7 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
                     all_hosts.add(active_h)
 
             smb_mount_manager.clear_smb_share_cache()
-            smb_mount_manager.purge_smb_sessions(all_hosts)
+            smb_mount_manager.purge_smb_sessions(all_hosts, notify_explorer=False)
             time.sleep(0.5)
 
 
@@ -15963,8 +15799,8 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
         conns = srv.get("connections", [])
         host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
         backend_url = ""
+        resolved_b_host = ""
         on_token_refreshed_cb = None
-
         if smb_source == "backend":
             u_val = smb_cfg.get("username", "")
             p_val = smb_cfg.get("password", "")
@@ -16017,6 +15853,7 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
                 pass
             host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
 
+        known_srv_hosts = _collect_myserver_smb_hosts(cfg, srv, include_all_servers=True)
         res = smb_mount_manager.mount_all_smb_shares(
             host=host,
             username=u_val,
@@ -16030,15 +15867,16 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True):
             smb_source=smb_source,
             backend_url=backend_url,
             on_token_refreshed=on_token_refreshed_cb,
+            known_server_hosts=known_srv_hosts,
         )
-
-
-
-
-
-
-
         logger_manager.log_info(f"[SMB Pipeline] Hasil pemasangan ulang ({reason}): {res}")
+        if isinstance(res, tuple) and res[0]:
+            mounted_host = (
+                (getattr(smb_mount_manager, "_cached_resolved_smb_host", {}) or {}).get("resolved")
+                or resolved_b_host
+                or host
+            )
+            _record_mounted_smb_host(srv.get("id"), mounted_host)
 
         if smb_source == "backend" and config_manager:
             try:
@@ -16355,8 +16193,68 @@ def _backend_authenticated_request(backend_url, endpoint, smb_cfg, srv_id, metho
     return status_code, {"raw": _mask_secret(_mask_secret(str(data), pwd), token)}, token
 
 
+_BACKEND_ACL_REBIND_DEBOUNCE_SEC = 2.0
+_acl_rebind_lock = threading.Lock()
+_acl_rebind_timer = None
+_acl_rebind_done_event = threading.Event()
+_acl_rebind_done_event.set()
+
+
+def _get_easytier_smb_status_fields():
+    """Mengembalikan status adapter Wintun/TUN EasyTier untuk banner peringatan UI."""
+    try:
+        if easytier_manager is None:
+            return {"easytierNoTun": False, "tunActive": True, "smbWarning": ""}
+        st = easytier_manager.get_easytier_manager().get_status_overview() or {}
+        running = bool(st.get("running", False))
+        tun_active = bool(st.get("tun_active", True)) if running else True
+        no_tun = bool(running and (st.get("no_tun_fallback") or not tun_active))
+        return {
+            "easytierNoTun": no_tun,
+            "tunActive": tun_active,
+            "smbWarning": str(st.get("smb_warning") or "") if no_tun else "",
+        }
+    except Exception:
+        return {"easytierNoTun": False, "tunActive": True, "smbWarning": ""}
+
+
+def _schedule_debounced_acl_rebind(reason="backend_acl_changed", delay_sec=None):
+    """Menjadwalkan rebind ACL secara asinkron & ter-debounce agar GET /api/smb/source tidak memblokir UI."""
+    global _acl_rebind_timer
+    eff_delay = float(_BACKEND_ACL_REBIND_DEBOUNCE_SEC if delay_sec is None else delay_sec)
+
+    def _run_acl_rebind():
+        global _cached_live_drives
+        try:
+            rebind_storage_pipeline(reason)
+            fresh_drives = _scan_live_drives_now()
+            with _drives_cache_lock:
+                _cached_live_drives = fresh_drives
+        except Exception as _acl_err:
+            logger_manager.log_warning(f"[SMB ACL] Gagal menjalankan debounced rebind: {_acl_err}")
+        finally:
+            _acl_rebind_done_event.set()
+
+    with _acl_rebind_lock:
+        if _acl_rebind_timer is not None:
+            try:
+                _acl_rebind_timer.cancel()
+            except Exception:
+                pass
+        _acl_rebind_done_event.clear()
+        timer = threading.Timer(max(eff_delay, 0.0), _run_acl_rebind)
+        timer.daemon = True
+        _acl_rebind_timer = timer
+        timer.start()
+
+
+def _flush_pending_acl_rebind_for_test(timeout=3.0):
+    """Menunggu timer debounced ACL selesai (khusus helper unit test deterministik)."""
+    return bool(_acl_rebind_done_event.wait(timeout=float(timeout)))
+
+
 def _handle_smb_source_request(body=None):
-    """Menangani GET/POST /api/smb/source untuk membaca atau mengalihkan sumber SMB ZimaOS <-> Backend."""
+    """Menangani GET/POST /api/smb/source dengan validasi kredensial dahulu, client-first teardown, async ACL debounce, dan status --no-tun."""
     global _cached_live_drives
 
     body = body if isinstance(body, dict) else {}
@@ -16364,7 +16262,7 @@ def _handle_smb_source_request(body=None):
     cfg = config_manager.load_or_create_config() if config_manager else {}
     srv = _select_target_server(cfg, target_server_id=req_server_id)
     if not srv:
-        return 400, {"success": False, "source": "zimaos", "error": "Server aktif tidak ditemukan."}
+        return 400, {"success": False, "source": "zimaos", "error": "Server aktif tidak ditemukan.", **_get_easytier_smb_status_fields()}
 
     srv_id = srv.get("id") or "default"
     smb_cfg = config_manager.get_server_smb_source_config(srv)
@@ -16378,25 +16276,7 @@ def _handle_smb_source_request(body=None):
         action = "get"
 
     def _collect_hosts(target_srv, target_cfg):
-        hosts = set()
-        for c in (target_srv.get("connections") or []):
-            if isinstance(c, dict) and c.get("url"):
-                ch = _extract_host_from_url(c["url"])
-                if ch:
-                    hosts.add(ch)
-        for k in ("zerotier_virtual_ip", "easytier_virtual_ip"):
-            val = str(target_srv.get(k) or "").strip()
-            if val:
-                hosts.add(val)
-        try:
-            au, _ = get_active_resolved_route(target_cfg)
-            if au:
-                ah = _extract_host_from_url(au)
-                if ah:
-                    hosts.add(ah)
-        except Exception:
-            pass
-        return hosts
+        return _collect_myserver_smb_hosts(cfg=target_cfg, server=target_srv, include_all_servers=False)
 
     def _resolve_backend_url(target_cfg, target_srv):
         raw_url = _get_active_server_backend_url(target_cfg, target_server_id=target_srv.get("id")) or ""
@@ -16421,7 +16301,7 @@ def _handle_smb_source_request(body=None):
         needs_auth = False
 
         if backend_url:
-            h_ok, h_data, h_code = _backend_http_request(
+            h_ok, h_data, _ = _backend_http_request(
                 f"{backend_url.rstrip('/')}/health", method="GET", timeout=2.0, retries=0
             )
             backend_online = bool(h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok")
@@ -16439,6 +16319,7 @@ def _handle_smb_source_request(body=None):
                             backend_url, "/api/v1/storage/disks", smb_cfg, srv_id, method="GET"
                         )
                         if d_code == 200 and isinstance(d_data, dict):
+                            _update_backend_disks_usage_cache(srv_id, d_data.get("disks") or [])
                             fresh_permitted = []
                             for disk_item in (d_data.get("disks") or []):
                                 if (
@@ -16464,10 +16345,10 @@ def _handle_smb_source_request(body=None):
                                     allowed_disks=fresh_permitted,
                                 )
                                 smb_mount_manager.clear_smb_share_cache()
-                                rebind_storage_pipeline("backend_acl_changed")
                                 fresh_drives = _scan_live_drives_now()
                                 with _drives_cache_lock:
                                     _cached_live_drives = fresh_drives
+                                _schedule_debounced_acl_rebind("backend_acl_changed")
                                 cfg = config_manager.load_or_create_config()
                                 srv = _select_target_server(cfg, target_server_id=srv_id) or srv
                                 smb_cfg = config_manager.get_server_smb_source_config(srv)
@@ -16488,6 +16369,7 @@ def _handle_smb_source_request(body=None):
             "smbMode": smb_mode,
             "needsAuth": bool(needs_auth),
             "drives": get_live_drives_list(),
+            **_get_easytier_smb_status_fields(),
         }
 
     # action == "set"
@@ -16523,6 +16405,7 @@ def _handle_smb_source_request(body=None):
                     "needsAuth": True,
                     "error": "Username dan password akun Backend wajib diisi.",
                 }
+            # Step 1 (Auth validation FIRST - before any unmount/purge!)
             v_status, v_data = _verify_backend_account(backend_url, uname, pwd)
             if v_status != 200:
                 err_msg = _mask_secret((v_data or {}).get("error") or "Login akun Backend gagal.", pwd)
@@ -16533,9 +16416,21 @@ def _handle_smb_source_request(body=None):
                     "error": err_msg,
                 }
             active_token = str((v_data or {}).get("access_token") or "").strip()
-            role = config_manager._normalize_smb_role((v_data or {}).get("role")) if hasattr(config_manager, "_normalize_smb_role") else ("admin" if str((v_data or {}).get("role") or "").strip().lower() == "admin" else ("root" if str((v_data or {}).get("role") or "").strip().lower() == "root" else "user"))
+            role = (
+                config_manager._normalize_smb_role((v_data or {}).get("role"))
+                if hasattr(config_manager, "_normalize_smb_role")
+                else ("admin" if str((v_data or {}).get("role") or "").strip().lower() == "admin" else ("root" if str((v_data or {}).get("role") or "").strip().lower() == "root" else "user"))
+            )
             allowed_from_auth = (v_data or {}).get("allowed_disks") or []
 
+            # Step 2 (Client-first Windows teardown BEFORE POST /api/v1/smb/mode!)
+            server_hosts = _collect_hosts(srv, cfg)
+            smb_mount_manager.clear_smb_share_cache()
+            smb_mount_manager.unmount_all_smb_shares(allowed_hosts=server_hosts)
+            smb_mount_manager.purge_smb_sessions(server_hosts, notify_explorer=False)
+            time.sleep(0.3)
+
+            # Step 3 (Server switch & disks fetch)
             m_ok, m_data, m_status = _backend_http_request(
                 f"{backend_url.rstrip('/')}/api/v1/smb/mode",
                 method="POST",
@@ -16585,6 +16480,30 @@ def _handle_smb_source_request(body=None):
             role = smb_cfg.get("role", "user")
             allowed_from_auth = smb_cfg.get("allowed_disks", [])
 
+            # Step 1 (Auth validation FIRST using stored token/credentials before any unmount/purge!)
+            pre_status, pre_data, _ = _backend_authenticated_request(
+                backend_url, "/api/v1/smb/status", smb_cfg, srv_id, method="GET"
+            )
+            if pre_status == 401 or (isinstance(pre_data, dict) and pre_data.get("needsAuth")):
+                return 401, {
+                    "success": False,
+                    "source": smb_cfg["source"],
+                    "needsAuth": True,
+                    "error": _mask_secret((pre_data or {}).get("error") or "Login akun Backend diperlukan.", pwd),
+                }
+            cfg = config_manager.load_or_create_config()
+            srv = _select_target_server(cfg, target_server_id=srv_id) or srv
+            smb_cfg = config_manager.get_server_smb_source_config(srv)
+            role = smb_cfg.get("role", role)
+
+            # Step 2 (Client-first Windows teardown BEFORE POST /api/v1/smb/mode!)
+            server_hosts = _collect_hosts(srv, cfg)
+            smb_mount_manager.clear_smb_share_cache()
+            smb_mount_manager.unmount_all_smb_shares(allowed_hosts=server_hosts)
+            smb_mount_manager.purge_smb_sessions(server_hosts, notify_explorer=False)
+            time.sleep(0.3)
+
+            # Step 3 (Server switch & disks fetch)
             m_status, m_data, active_token = _backend_authenticated_request(
                 backend_url,
                 "/api/v1/smb/mode",
@@ -16631,6 +16550,7 @@ def _handle_smb_source_request(body=None):
 
         permitted_disks = []
         if d_status == 200 and isinstance(d_data, dict):
+            _update_backend_disks_usage_cache(srv_id, d_data.get("disks") or [])
             for disk_item in (d_data.get("disks") or []):
                 if (
                     isinstance(disk_item, dict)
@@ -16644,6 +16564,7 @@ def _handle_smb_source_request(body=None):
         elif isinstance(allowed_from_auth, list):
             permitted_disks = [str(x).strip() for x in allowed_from_auth if str(x).strip()]
 
+        # Step 4 (Persist & mount with pre_unmounted=True)
         cfg = config_manager.load_or_create_config()
         config_manager.save_server_smb_source_config(
             cfg,
@@ -16656,12 +16577,8 @@ def _handle_smb_source_request(body=None):
             access_token=active_token,
         )
 
-        smb_mount_manager.clear_smb_share_cache()
         if auto_mount:
-            rebind_storage_pipeline("switch_source_backend")
-        else:
-            smb_mount_manager.unmount_all_smb_shares()
-            smb_mount_manager.purge_smb_sessions(_collect_hosts(srv, cfg))
+            rebind_storage_pipeline("switch_source_backend", pre_unmounted=True)
 
         fresh_drives = _scan_live_drives_now()
         with _drives_cache_lock:
@@ -16679,9 +16596,18 @@ def _handle_smb_source_request(body=None):
             "smbMode": "backend",
             "needsAuth": False,
             "drives": fresh_drives,
+            **_get_easytier_smb_status_fields(),
         }
 
     # target_source == "zimaos"
+    # Step 1 (Client-first Windows teardown BEFORE POST /api/v1/smb/mode!)
+    server_hosts = _collect_hosts(srv, cfg)
+    smb_mount_manager.clear_smb_share_cache()
+    smb_mount_manager.unmount_all_smb_shares(allowed_hosts=server_hosts)
+    smb_mount_manager.purge_smb_sessions(server_hosts, notify_explorer=False)
+    time.sleep(0.3)
+
+    # Step 2 (Server switch best-effort)
     backend_online = False
     warning_msg = ""
     if backend_url and (smb_cfg.get("access_token") or smb_cfg.get("hasCredentials")):
@@ -16706,15 +16632,12 @@ def _handle_smb_source_request(body=None):
             )
             warning_msg = "Mode SMB dialihkan ke ZimaOS; layanan SMB Backend tidak merespons."
 
+    # Step 3 (Persist & mount with pre_unmounted=True)
     cfg = config_manager.load_or_create_config()
     config_manager.save_server_smb_source_config(cfg, srv_id, "zimaos")
 
-    smb_mount_manager.clear_smb_share_cache()
     if auto_mount:
-        rebind_storage_pipeline("switch_source_zimaos")
-    else:
-        smb_mount_manager.unmount_all_smb_shares()
-        smb_mount_manager.purge_smb_sessions(_collect_hosts(srv, cfg))
+        rebind_storage_pipeline("switch_source_zimaos", pre_unmounted=True)
 
     fresh_drives = _scan_live_drives_now()
     with _drives_cache_lock:
@@ -16736,31 +16659,11 @@ def _handle_smb_source_request(body=None):
         "smbMode": "zimaos",
         "needsAuth": False,
         "drives": fresh_drives,
+        **_get_easytier_smb_status_fields(),
     }
     if warning_msg:
         resp["warning"] = warning_msg
     return 200, resp
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 _compose_apps_lock = threading.Lock()
@@ -25721,15 +25624,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                smb_mount_manager.open_drive_in_explorer(clean_letter)
-
-
-
-
-
-
-
-                self._send_json({"success": True, "drive": clean_letter})
+                ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_drive_in_explorer(clean_letter))
+                if ok_open:
+                    self._send_json({"success": True, "drive": clean_letter})
+                else:
+                    self._send_json({"success": False, "error": msg_open or f"Gagal membuka {clean_letter} di Explorer", "drive": clean_letter})
 
 
 
@@ -25786,22 +25685,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
             if d_letter:
-
-
-
-
-
-
-
-                smb_mount_manager.open_drive_in_explorer(d_letter)
-
-
-
-
-
-
-
-                self._send_json({"success": True, "drive": d_letter})
+                ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_drive_in_explorer(d_letter))
+                if ok_open:
+                    self._send_json({"success": True, "drive": d_letter})
+                else:
+                    self._send_json({"success": False, "error": msg_open or f"Gagal membuka {d_letter} di Explorer", "drive": d_letter})
 
 
 
@@ -25850,22 +25738,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 if d_letter:
-
-
-
-
-
-
-
-                    smb_mount_manager.open_drive_in_explorer(d_letter)
-
-
-
-
-
-
-
-                    self._send_json({"success": True, "drive": d_letter})
+                    ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_drive_in_explorer(d_letter))
+                    if ok_open:
+                        self._send_json({"success": True, "drive": d_letter})
+                    else:
+                        self._send_json({"success": False, "error": msg_open or f"Gagal membuka {d_letter} di Explorer", "drive": d_letter})
 
 
 
@@ -25953,55 +25830,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-            smb_mount_manager.open_unc_root_in_explorer(
-
-
-
-
-
-
-
+            ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_unc_root_in_explorer(
                 host,
-
-
-
-
-
-
-
                 server_connections=conns,
-
-
-
-
-
-
-
                 is_domain_route=is_domain,
-
-
-
-
-
-
-
                 zerotier_ip=zt_ip,
-
-
-
-
-
-
-
-            )
-
-
-
-
-
-
-
-            self._send_json({"success": True, "host": host})
+            ))
+            if ok_open:
+                self._send_json({"success": True, "host": host})
+            else:
+                self._send_json({"success": False, "error": msg_open or f"Host SMB ({host}:445) tidak merespons", "host": host})
 
 
 
@@ -26038,66 +25876,27 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
             if d_letter:
-
-
-
-                smb_mount_manager.open_drive_in_explorer(d_letter)
-
-
-
-                self._send_json({"success": True, "drive": d_letter})
-
-
-
+                ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_drive_in_explorer(d_letter))
+                if ok_open:
+                    self._send_json({"success": True, "drive": d_letter})
+                else:
+                    self._send_json({"success": False, "error": msg_open or f"Gagal membuka {d_letter} di Explorer", "drive": d_letter})
             else:
-
-
-
                 cfg = config_manager.load_or_create_config()
-
-
-
                 srv = config_manager.get_active_server(cfg)
-
-
-
                 active_u, _ = get_active_resolved_route(cfg)
-
-
-
                 conns = srv.get("connections", []) if srv else []
-
-
-
                 host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
-
-
-
-                smb_mount_manager.open_unc_root_in_explorer(
-
-
-
+                ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_unc_root_in_explorer(
                     host,
-
-
-
                     server_connections=conns,
-
-
-
                     is_domain_route=is_domain,
-
-
-
                     zerotier_ip=zt_ip,
-
-
-
-                )
-
-
-
-                self._send_json({"success": True, "unc": host})
+                ))
+                if ok_open:
+                    self._send_json({"success": True, "unc": host})
+                else:
+                    self._send_json({"success": False, "error": msg_open or f"Host SMB ({host}:445) tidak merespons", "unc": host})
 
 
 
@@ -26238,62 +26037,26 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 if d_letter:
-
-
-
-                    smb_mount_manager.open_drive_in_explorer(d_letter)
-
-
-
-                    self._send_json({"success": True, "target": "explorer", "drive": d_letter})
-
-
-
+                    ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_drive_in_explorer(d_letter))
+                    if ok_open:
+                        self._send_json({"success": True, "target": "explorer", "drive": d_letter})
+                    else:
+                        self._send_json({"success": False, "target": "explorer", "error": msg_open or f"Gagal membuka {d_letter} di Explorer", "drive": d_letter})
                 else:
-
-
-
                     srv = config_manager.get_active_server(cfg)
-
-
-
                     active_u, _ = get_active_resolved_route(cfg)
-
-
-
                     conns = srv.get("connections", []) if srv else []
-
-
-
                     host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
-
-
-
-                    smb_mount_manager.open_unc_root_in_explorer(
-
-
-
+                    ok_open, msg_open = _unpack_explorer_result(smb_mount_manager.open_unc_root_in_explorer(
                         host,
-
-
-
                         server_connections=conns,
-
-
-
                         is_domain_route=is_domain,
-
-
-
                         zerotier_ip=zt_ip,
-
-
-
-                    )
-
-
-
-                    self._send_json({"success": True, "target": "explorer", "unc": host})
+                    ))
+                    if ok_open:
+                        self._send_json({"success": True, "target": "explorer", "unc": host})
+                    else:
+                        self._send_json({"success": False, "target": "explorer", "error": msg_open or f"Host SMB ({host}:445) tidak merespons", "unc": host})
 
 
 

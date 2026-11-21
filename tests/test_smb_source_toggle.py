@@ -1455,9 +1455,12 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
             state.valid_users["user_1"]["allowed_disks"] = ["Media"]
 
             with patch.object(core, "_get_active_server_backend_url", return_value=backend_url), \
+                 patch.object(core, "_BACKEND_ACL_REBIND_DEBOUNCE_SEC", 0.02), \
                  patch.object(core, "rebind_storage_pipeline", return_value=[]) as mock_rebind, \
                  patch.object(smb_mount_manager, "get_available_drive_letters", return_value=["Z:", "Y:"]):
                 st_get, res_get = self._req("GET", "/api/smb/source")
+                mock_rebind.assert_not_called()
+                self.assertTrue(core._flush_pending_acl_rebind_for_test(timeout=2.0))
 
             self.assertEqual(st_get, 200)
             self.assertIs(res_get.get("success"), True)

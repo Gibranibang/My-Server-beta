@@ -293,6 +293,7 @@ class TestSmbLifecycleTask1(unittest.TestCase):
         for streak in range(1, 5):
             self.assertFalse(core._should_unmount_on_offline_streak(False, streak, False))
         self.assertTrue(core._should_unmount_on_offline_streak(False, 5, False))
+        self.assertFalse(core._should_unmount_on_offline_streak(False, 5, False, smb_port_alive=True))
         self.assertFalse(core._should_unmount_on_offline_streak(False, 6, True))
         self.assertFalse(core._should_unmount_on_offline_streak(True, 5, False))
 

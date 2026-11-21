@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.7",
+        "channel": "Beta",
+        "date": "2026-11-21",
+        "title": "Perbaikan Anti-Freeze File Explorer pada Partisi Cloud/FUSE & Stabilitas SMB (Backend v1.4.7)",
+        "notes": [
+            "Hapus Crawl Penuh storage_root di Backend v1.4.7: Menghilangkan os.walk(storage_root) pada pembersihan berkas sementara berkala (cleanup_temp_storage tiap 30 menit) sehingga partisi FUSE/Google Drive ZimaOS maupun HDD besar tidak lagi di-scan penuh secara diam-diam dan memicu rate-limit/hang di File Explorer.",
+            "Tuning Samba 4 Ramah FUSE & Runtime TDB di RAM (tmpfs): Menetapkan deadtime = 0, kernel oplocks = no, smb2 leases = no, stat cache = yes, memindahkan direktori lock/cache TDB ke /dev/shm (tmpfs) pada container produksi, serta menerapkan parameter khusus share FUSE/rclone (oplocks = no, posix locking = no, use sendfile = no, aio read/write size = 0, strict sync = no, delete readonly = yes) guna mencegah freeze File Explorer saat hapus/edit berkas Google Drive.",
+            "Penjagaan Timeout statvfs & Guard Lifecycle SMB Desktop v4.6.7 Beta: Membatasi pemanggilan shutil.disk_usage() di storage.py & system.py dengan timeout non-blocking + TTL 60 detik untuk mount FUSE; pada sisi Desktop, alias Error 1219 kini dilarang mengalihkan IP LAN yang sehat ke tunnel VPN/ZeroTier dan offline-streak tidak lagi melakukan force-unmount SMB selama port 445 masih aktif."
+        ],
+        "features": [
+            "Penghapusan Crawl FUSE/Storage Berkala & Timeout Non-Blocking statvfs (Backend v1.4.7)",
+            "Konfigurasi Samba 4 Anti-Freeze Khusus Mount FUSE/Google Drive & Lock TDB di tmpfs RAM",
+            "Proteksi Error-1219 Anti-Redirect LAN ke VPN & Guard Port-445 Saat Offline Streak"
+        ]
+    },
+    {
         "version": "4.6.5",
         "channel": "Beta",
         "date": "2026-11-21",

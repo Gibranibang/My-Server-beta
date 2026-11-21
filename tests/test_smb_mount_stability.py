@@ -432,6 +432,17 @@ class TestSmbMountStabilityTask2(unittest.TestCase):
         self.assertEqual(aliases, ["192.168.1.51"])
         self.assertFalse(any("nip.io" in a or "sslip.io" in a for a in aliases))
 
+        # Reachable private LAN host must NEVER cross over to VPN/ZeroTier on Error 1219
+        with patch.object(smb_mount_manager, "_reverse_lookup_fast", return_value=""), \
+             patch.object(smb_mount_manager, "is_port_open", side_effect=lambda h, p=445, timeout=0.5: h in ("192.168.1.50", "192.168.1.51", "10.147.20.9")):
+            lan_aliases = smb_mount_manager._get_dynamic_host_aliases(
+                "192.168.1.50",
+                zerotier_ip="10.147.20.9",
+                alternate_local_hosts=["192.168.1.51"],
+            )
+        self.assertEqual(lan_aliases, ["192.168.1.51"])
+        self.assertNotIn("10.147.20.9", lan_aliases)
+
     def test_06_o1_drive_letter_helpers_never_call_wnet(self):
         """SMBS-03 / D-06.3: is_drive_letter_in_use / get_available_drive_letters / get_available_drive_letter never invoke _get_wnet_remote_unc."""
         class FakeK32:

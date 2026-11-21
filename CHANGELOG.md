@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.6.7 - Beta] - 2026-11-21
+
+- Hapus Crawl Penuh storage_root di Backend v1.4.7: Menghilangkan os.walk(storage_root) pada pembersihan berkas sementara berkala (cleanup_temp_storage tiap 30 menit) sehingga partisi FUSE/Google Drive ZimaOS maupun HDD besar tidak lagi di-scan penuh secara diam-diam dan memicu rate-limit/hang di File Explorer.
+- Tuning Samba 4 Ramah FUSE & Runtime TDB di RAM (tmpfs): Menetapkan deadtime = 0, kernel oplocks = no, smb2 leases = no, stat cache = yes, memindahkan direktori lock/cache TDB ke /dev/shm (tmpfs) pada container produksi, serta menerapkan parameter khusus share FUSE/rclone (oplocks = no, posix locking = no, use sendfile = no, aio read/write size = 0, strict sync = no, delete readonly = yes) guna mencegah freeze File Explorer saat hapus/edit berkas Google Drive.
+- Penjagaan Timeout statvfs & Guard Lifecycle SMB Desktop v4.6.7 Beta: Membatasi pemanggilan shutil.disk_usage() di storage.py & system.py dengan timeout non-blocking + TTL 60 detik untuk mount FUSE; pada sisi Desktop, alias Error 1219 kini dilarang mengalihkan IP LAN yang sehat ke tunnel VPN/ZeroTier dan offline-streak tidak lagi melakukan force-unmount SMB selama port 445 masih aktif.
+
 ## [v4.6.5 - Beta] - 2026-11-21
 
 - Modal Input SSH Terminal di ServerView: Klik tombol Terminal SSH kini membuka dialog input terlebih dahulu untuk meninjau atau mengubah Username SSH, Host/IP (dengan failover otomatis ke Virtual IP Remote P2P), serta Port SSH (default 22) lengkap dengan pratinjau perintah real-time sebelum terminal diluncurkan.

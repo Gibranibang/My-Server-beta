@@ -125,11 +125,31 @@ def _collect_configured_myserver_hosts():
     return hosts
 
 
-def _get_dynamic_host_aliases(clean_host, zerotier_ip=None, alternate_local_hosts=None, allow_public_dns_alias=False):
+def _is_reachable_private_lan_host(host: str, timeout: float = 0.45) -> bool:
+    """Return True if host is a reachable private LAN IP (non-EasyTier) with SMB port 445 open."""
+    clean = sanitize_input(host).strip() if host else ""
+    if not clean or _is_easytier_ip(clean):
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(clean)
+        if not ip_obj.is_private:
+            return False
+    except Exception:
+        return False
+    return bool(is_port_open(clean, 445, timeout=timeout))
+
+
+def _get_dynamic_host_aliases(
+    clean_host,
+    zerotier_ip=None,
+    alternate_local_hosts=None,
+    allow_public_dns_alias=False,
+    allow_vpn_alias=None,
+):
     """
     Menghasilkan kandidat alias host dinamis yang aman untuk LAN (NetBIOS/PTR lokal cepat,
-    alternate IP lokal, ZeroTier non-blocked; serta wildcard DNS publik hanya jika allow_public_dns_alias=True)
-    untuk memitigasi Windows Error 1219 lintas-sesi.
+    alternate IP lokal, ZeroTier non-blocked hanya jika bukan LAN sehat; serta wildcard DNS publik
+    hanya jika allow_public_dns_alias=True) untuk memitigasi Windows Error 1219 lintas-sesi.
     """
     aliases = []
     if not clean_host:
@@ -145,9 +165,10 @@ def _get_dynamic_host_aliases(clean_host, zerotier_ip=None, alternate_local_host
             if alt_c and alt_c.lower() != clean_host.lower() and alt_c not in aliases:
                 if is_port_open(alt_c, 445, timeout=0.5):
                     aliases.append(alt_c)
-    # 3. Kandidat ZeroTier / VPN IP jika tidak diblokir mode --no-tun EasyTier
+    # 3. Kandidat ZeroTier / VPN IP: jangan alihkan host LAN yang masih sehat ke VPN
+    use_vpn_alias = allow_vpn_alias if allow_vpn_alias is not None else (not _is_reachable_private_lan_host(clean_host))
     clean_zt = sanitize_input(zerotier_ip).strip() if zerotier_ip else ""
-    if clean_zt and clean_zt.lower() != clean_host.lower() and clean_zt not in aliases:
+    if use_vpn_alias and clean_zt and clean_zt.lower() != clean_host.lower() and clean_zt not in aliases:
         if not (_is_easytier_tun_disabled() and _is_easytier_ip(clean_zt)):
             if is_port_open(clean_zt, 445, timeout=0.8):
                 aliases.append(clean_zt)
@@ -1386,7 +1407,7 @@ def mount_smb_share(
             logger_manager.log_warning(f"[SMB Mount] Terdeteksi konflik sesi ({combined_out[:80]}). Menjalankan pembersihan otomatis ala Zima Client...")
             unmount_smb_share(target_drive, notify_explorer=False)
             purge_smb_sessions([clean_host], notify_explorer=False)
-            time.sleep(0.25)
+            time.sleep(0.45)
             if clean_user:
                 _register_windows_credential(clean_host, clean_user, clean_pass)
                 try:

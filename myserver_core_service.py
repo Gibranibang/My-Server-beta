@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.5"
+APP_VERSION_NUMBER = "4.6.7"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -7428,9 +7428,31 @@ def _should_unmount_on_offline_streak(
     offline_streak,
     already_unmounted,
     threshold=SMB_OFFLINE_UNMOUNT_THRESHOLD,
+    smb_port_alive=False,
 ):
     """Menentukan apakah drive MyServer harus di-unmount satu kali setelah server offline beruntun."""
-    return bool((not raw_on) and (offline_streak >= threshold) and (not already_unmounted))
+    return bool((not raw_on) and (offline_streak >= threshold) and (not already_unmounted) and (not smb_port_alive))
+
+
+def _is_server_smb_port_alive(cfg=None, server=None, timeout=0.6):
+    """Memeriksa apakah host SMB aktif untuk server masih melayani TCP port 445."""
+    hosts = []
+    with _auto_route_smb_lock:
+        if _auto_route_smb_tracker.get("mounted_host"):
+            hosts.append(str(_auto_route_smb_tracker["mounted_host"]).strip())
+    for h in _collect_myserver_smb_hosts(cfg=cfg, server=server, include_all_servers=False):
+        if h and h not in hosts:
+            hosts.append(h)
+    is_open_fn = getattr(smb_mount_manager, "is_port_open", None)
+    if not callable(is_open_fn):
+        return False
+    for h in hosts:
+        try:
+            if is_open_fn(h, 445, timeout=timeout):
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def _handle_windows_power_event(event_type, now_ts=None, spawn_async=True):
@@ -19520,6 +19542,11 @@ def update_metrics_loop():
                     _offline_cfg = cfg
                     _offline_srv = s
                     def _do_offline_unmount(c_arg=_offline_cfg, s_arg=_offline_srv):
+                        if _is_server_smb_port_alive(cfg=c_arg, server=s_arg):
+                            logger_manager.log_info(
+                                "[SMB Lifecycle] Metrik HTTP offline >=5 tick, namun SMB port 445 masih sehat; unmount dilewati agar Explorer tidak freeze."
+                            )
+                            return
                         _unmount_myserver_smb_drives(
                             reason="server_offline_streak",
                             cfg=c_arg,

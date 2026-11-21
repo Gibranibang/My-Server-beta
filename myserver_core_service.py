@@ -18289,6 +18289,11 @@ def get_cached_metrics_client(srv, active_u):
 
 
 
+    smb_cfg = config_manager.get_server_smb_source_config(srv) if (config_manager and hasattr(config_manager, "get_server_smb_source_config")) else {}
+    srv_smb_source = str((smb_cfg.get("source") if isinstance(smb_cfg, dict) else None) or srv.get("smb_source") or "zimaos").strip().lower()
+    if srv_smb_source not in ("zimaos", "backend"):
+        srv_smb_source = "zimaos"
+
     if _active_metrics_client is not None and _active_metrics_client_key == client_key:
 
 
@@ -18318,6 +18323,7 @@ def get_cached_metrics_client(srv, active_u):
 
 
         _active_metrics_client.allow_multi_route_failover = is_auto
+        _active_metrics_client.smb_source = srv_smb_source
 
 
 
@@ -18410,6 +18416,7 @@ def get_cached_metrics_client(srv, active_u):
 
 
             allow_multi_route_failover=is_auto,
+            smb_source=srv_smb_source,
 
 
 

@@ -148,6 +148,7 @@ class ZimaMetricsClient:
         server_name="",
         zerotier_ip="",
         allow_multi_route_failover=True,
+        smb_source="zimaos",
     ):
         if base_url:
             self.base_url = base_url.rstrip("/")
@@ -169,6 +170,7 @@ class ZimaMetricsClient:
         self.server_name = server_name or ""
         self.zerotier_ip = (zerotier_ip or "").strip()
         self.allow_multi_route_failover = bool(allow_multi_route_failover)
+        self.smb_source = str(smb_source or "zimaos").strip().lower()
 
         self._last_net_sample = None
         self.last_net_rates = {
@@ -1451,10 +1453,18 @@ class ZimaMetricsClient:
         user_allowed = self.get_user_authorized_shares() if not self.is_admin else None
 
         # Deteksi network drives Windows secara dinamis di seluruh partisi (A-Z) dan filter kepemilikan
-        network_drives = self._scan_windows_network_drives(
-            server_connections=self.server_connections,
-            user_allowed_shares=user_allowed,
-        )
+        is_backend_smb = str(getattr(self, "smb_source", "zimaos") or "zimaos").strip().lower() == "backend"
+        if is_backend_smb:
+            # Option A (DSK-01): DISK murni dari telemetri REST ZimaOS, abaikan drive SMB Backend.
+            network_drives = []
+            if self.detailed_partitions_map:
+                for _k in [k for k, v in self.detailed_partitions_map.items() if isinstance(v, dict) and v.get("is_network_drive")]:
+                    self.detailed_partitions_map.pop(_k, None)
+        else:
+            network_drives = self._scan_windows_network_drives(
+                server_connections=self.server_connections,
+                user_allowed_shares=user_allowed,
+            )
         net_drives_by_key = {}
         for nd in network_drives:
             r_name = nd.get("raw_name") or nd.get("name") or ""

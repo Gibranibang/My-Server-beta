@@ -330,34 +330,76 @@ def is_zerotier_installed():
     return False
 
 
+_OLE_CFBF_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def get_bundled_zerotier_msi_path():
+    """
+    Mencari paket installer resmi ZeroTier One.msi yang sudah dibundel lokal di
+    resources/deps/zerotier/ZeroTier One.msi dan memvalidasi header OLE CFBF.
+    Mengembalikan jalur absolut berkas jika ditemukan dan valid, atau "" jika tidak ada.
+    """
+    rel_msi = os.path.join("resources", "deps", "zerotier", "ZeroTier One.msi")
+    base_dirs = [
+        os.path.dirname(os.path.abspath(__file__)),
+        os.path.dirname(os.path.abspath(sys.executable)),
+        os.getcwd(),
+    ]
+    seen = set()
+    for b_dir in base_dirs:
+        if not b_dir:
+            continue
+        cand = os.path.abspath(os.path.join(b_dir, rel_msi))
+        if cand in seen:
+            continue
+        seen.add(cand)
+        if os.path.isfile(cand):
+            try:
+                if os.path.getsize(cand) >= 64:
+                    with open(cand, "rb") as f:
+                        if f.read(8) == _OLE_CFBF_MAGIC:
+                            return cand
+            except OSError:
+                pass
+    return ""
+
+
 def install_zerotier_silently(msi_url="https://download.zerotier.com/dist/ZeroTier%20One.msi", status_callback=None):
     """
-    Mengunduh berkas MSI resmi ZeroTier One dan menjalankan instalasi senyap (silent)
-    menggunakan msiexec /i /qn via elevasi UAC Windows (sama seperti Zima Client resmi).
+    Memasang paket MSI resmi ZeroTier One secara senyap (silent) menggunakan paket lokal
+    resources/deps/zerotier/ZeroTier One.msi bila tersedia, atau mengunduh dari msi_url
+    sebagai fallback, lalu mengeksekusi msiexec /i /qn via elevasi UAC Windows.
     """
-    if status_callback:
-        status_callback("Mengunduh komponen resmi ZeroTier One...")
+    bundled_msi = get_bundled_zerotier_msi_path()
+    cleanup_temp_msi = False
+    if bundled_msi:
+        target_msi = bundled_msi
+    else:
+        if status_callback:
+            status_callback("Mengunduh komponen resmi ZeroTier One...")
 
-    temp_msi = os.path.join(tempfile.gettempdir(), "ZeroTierOne_Setup.msi")
-    try:
-        req = urllib.request.Request(
-            msi_url,
-            headers={"User-Agent": "MyServer-Desktop-Beta/Installer"}
-        )
-        with urllib.request.urlopen(req, timeout=45.0) as resp, open(temp_msi, "wb") as out_f:
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                out_f.write(chunk)
-    except Exception as e:
-        return False, f"Gagal mengunduh berkas installer ZeroTier: {e}"
+        temp_msi = os.path.join(tempfile.gettempdir(), "ZeroTierOne_Setup.msi")
+        try:
+            req = urllib.request.Request(
+                msi_url,
+                headers={"User-Agent": "MyServer-Desktop-Beta/Installer"}
+            )
+            with urllib.request.urlopen(req, timeout=45.0) as resp, open(temp_msi, "wb") as out_f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out_f.write(chunk)
+        except Exception as e:
+            return False, f"Gagal mengunduh berkas installer ZeroTier: {e}"
+        target_msi = temp_msi
+        cleanup_temp_msi = True
 
     if status_callback:
         status_callback("Memasang layanan ZeroTier One secara senyap (Konfirmasi UAC)...")
 
     # Jalankan msiexec secara senyap dengan hak administrator via PowerShell Start-Process -Verb RunAs
-    ps_cmd = f"Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i \"{temp_msi}\" /qn /norestart' -Verb RunAs -Wait"
+    ps_cmd = f"Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i \"{target_msi}\" /qn /norestart' -Verb RunAs -Wait"
     creationflags = 0x08000000 if sys.platform == "win32" else 0
     try:
         res = subprocess.run(
@@ -381,11 +423,12 @@ def install_zerotier_silently(msi_url="https://download.zerotier.com/dist/ZeroTi
         time.sleep(1.0)
         running, _ = client.is_service_running()
         if running:
-            try:
-                if os.path.exists(temp_msi):
-                    os.remove(temp_msi)
-            except Exception:
-                pass
+            if cleanup_temp_msi:
+                try:
+                    if os.path.exists(target_msi):
+                        os.remove(target_msi)
+                except Exception:
+                    pass
             return True, "ZeroTier One berhasil dipasang dan aktif!"
 
     return True, "Instalasi selesai. Menunggu sinkronisasi service ZeroTier."
@@ -393,3 +436,4 @@ def install_zerotier_silently(msi_url="https://download.zerotier.com/dist/ZeroTi
 
 # Backward compatibility alias
 ZeroTierManager = ZeroTierClient
+

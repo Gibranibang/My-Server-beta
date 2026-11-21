@@ -170,7 +170,142 @@ class TestReleasePackaging(unittest.TestCase):
         # Ensure EasyTier download only targets canonical resources\deps\easytier path
         dl_section = wf_text.split("Download Syncthing and EasyTier Windows binaries")[1].split("Detect Windows Code Signing")[0]
         self.assertNotIn("bin\\easytier", dl_section)
+        self.assertIn("resources\\deps\\zerotier\\ZeroTier One.msi", dl_section)
+        self.assertIn("0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1", dl_section)
+        self.assertIn("dist\\staging_payload\\resources\\deps\\zerotier\\ZeroTier One.msi", wf_text)
+
+    def test_is_valid_msi_file_validates_ole_cfbf_magic_and_size(self):
+        import build_installer_package
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_path = os.path.join(tmp, "missing.msi")
+            self.assertFalse(build_installer_package.is_valid_msi_file(missing_path))
+
+            valid_msi = os.path.join(tmp, "ZeroTier One.msi")
+            with open(valid_msi, "wb") as f:
+                f.write(build_installer_package.OLE_CFBF_MAGIC + (b"\x00" * 128))
+            self.assertTrue(build_installer_package.is_valid_msi_file(valid_msi, min_bytes=64))
+            self.assertFalse(build_installer_package.is_valid_msi_file(valid_msi, min_bytes=1024))
+
+            bad_html = os.path.join(tmp, "error.msi")
+            with open(bad_html, "wb") as f:
+                f.write(b"<html>404 Not Found</html>" + (b" " * 128))
+            self.assertFalse(build_installer_package.is_valid_msi_file(bad_html, min_bytes=64))
+
+    def test_stage_zerotier_installer_uses_local_cache_or_downloads_with_validation(self):
+        import build_installer_package
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = os.path.join(tmp, "base")
+            staging_dir = os.path.join(tmp, "staging")
+            os.makedirs(base_dir, exist_ok=True)
+            os.makedirs(staging_dir, exist_ok=True)
+
+            # 1. Offline without local cache raises FileNotFoundError when allow_download=False
+            with self.assertRaises(FileNotFoundError):
+                build_installer_package.stage_zerotier_installer(
+                    base_dir, staging_dir, allow_download=False, min_bytes=64
+                )
+
+            # 2. Corrupt download (non-OLE header) is rejected and .part is cleaned up
+            bad_resp = mock.MagicMock()
+            bad_resp.read.side_effect = [b"<!DOCTYPE html>Bad Gateway", b""]
+            bad_resp.__enter__.return_value = bad_resp
+            bad_resp.__exit__.return_value = False
+            with mock.patch("urllib.request.urlopen", return_value=bad_resp):
+                with self.assertRaises(RuntimeError):
+                    build_installer_package.stage_zerotier_installer(
+                        base_dir, staging_dir, allow_download=True, min_bytes=16
+                    )
+            local_msi = os.path.join(base_dir, "resources", "deps", "zerotier", "ZeroTier One.msi")
+            self.assertFalse(os.path.exists(local_msi))
+            self.assertFalse(os.path.exists(local_msi + ".part"))
+
+            # 3. Valid download caches to base_dir and copies to staging_dir
+            valid_payload = build_installer_package.OLE_CFBF_MAGIC + (b"\x5a" * 256)
+            good_resp = mock.MagicMock()
+            good_resp.read.side_effect = [valid_payload, b""]
+            good_resp.__enter__.return_value = good_resp
+            good_resp.__exit__.return_value = False
+            with mock.patch("urllib.request.urlopen", return_value=good_resp) as m_open:
+                staged_path = build_installer_package.stage_zerotier_installer(
+                    base_dir, staging_dir, allow_download=True, min_bytes=64
+                )
+                self.assertEqual(m_open.call_count, 1)
+            self.assertTrue(os.path.isfile(local_msi))
+            self.assertTrue(os.path.isfile(staged_path))
+            self.assertEqual(
+                staged_path,
+                os.path.join(staging_dir, "resources", "deps", "zerotier", "ZeroTier One.msi"),
+            )
+
+            # 4. Subsequent call uses local cache without hitting network
+            staging_dir_2 = os.path.join(tmp, "staging2")
+            with mock.patch("urllib.request.urlopen", side_effect=AssertionError("Network should not be called")):
+                staged_path_2 = build_installer_package.stage_zerotier_installer(
+                    base_dir, staging_dir_2, allow_download=True, min_bytes=64
+                )
+            self.assertTrue(os.path.isfile(staged_path_2))
+
+    def test_installer_iss_bundles_zerotier_msi_and_keeps_version_4_6_1(self):
+        import build_installer_package
+
+        self.assertEqual(build_installer_package.VERSION, "4.6.1")
+        iss_text = _read_text(os.path.join(BETA_DIR, "installer.iss"))
+        self.assertIn('#define MyAppVersion "4.6.1"', iss_text)
+        self.assertIn(
+            r'Source: "dist\staging_payload\resources\deps\zerotier\ZeroTier One.msi"; DestDir: "{app}\resources\deps\zerotier"; Flags: ignoreversion',
+            iss_text,
+        )
+        self.assertIn(
+            r'Filename: "msiexec.exe"; Parameters: "/i ""{app}\resources\deps\zerotier\ZeroTier One.msi"" /qn /norestart"; StatusMsg: "Installing ZeroTier One service..."; Flags: runhidden waituntilterminated; Check: NeedsZeroTierInstall',
+            iss_text,
+        )
+        self.assertIn(
+            r'Filename: "{sys}\sc.exe"; Parameters: "config ZeroTierOneService start= auto"; Flags: runhidden waituntilterminated',
+            iss_text,
+        )
+        self.assertIn(
+            r'Filename: "{sys}\sc.exe"; Parameters: "start ZeroTierOneService"; Flags: runhidden waituntilterminated',
+            iss_text,
+        )
+        self.assertIn("function NeedsZeroTierInstall(): Boolean;", iss_text)
+        self.assertIn(r"SYSTEM\CurrentControlSet\Services\ZeroTierOneService", iss_text)
+        self.assertIn(r"{commonappdata}\ZeroTier\One\zerotier-one_x64.exe", iss_text)
+
+    def test_zerotier_manager_prefers_bundled_msi_over_network_download(self):
+        import build_installer_package
+        import zerotier_manager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bundled_dir = os.path.join(tmp, "resources", "deps", "zerotier")
+            os.makedirs(bundled_dir, exist_ok=True)
+            bundled_msi = os.path.join(bundled_dir, "ZeroTier One.msi")
+            with open(bundled_msi, "wb") as f:
+                f.write(build_installer_package.OLE_CFBF_MAGIC + (b"\x00" * 128))
+
+            with mock.patch("os.getcwd", return_value=tmp):
+                detected = zerotier_manager.get_bundled_zerotier_msi_path()
+                self.assertEqual(os.path.abspath(detected), os.path.abspath(bundled_msi))
+
+            mock_proc = mock.MagicMock(returncode=0, stdout="", stderr="")
+            mock_client = mock.MagicMock()
+            mock_client.is_service_running.return_value = (True, {"online": True})
+            with (
+                mock.patch.object(zerotier_manager, "get_bundled_zerotier_msi_path", return_value=bundled_msi),
+                mock.patch("urllib.request.urlopen", side_effect=AssertionError("Should not download when bundled")),
+                mock.patch("subprocess.run", return_value=mock_proc) as m_run,
+                mock.patch.object(zerotier_manager, "ZeroTierClient", return_value=mock_client),
+                mock.patch("time.sleep"),
+            ):
+                ok, msg = zerotier_manager.install_zerotier_silently()
+                self.assertTrue(ok)
+                self.assertIn("ZeroTier One", msg)
+                self.assertTrue(os.path.isfile(bundled_msi))
+                ps_command = m_run.call_args[0][0][-1]
+                self.assertIn(bundled_msi, ps_command)
 
 
 if __name__ == "__main__":
     unittest.main()
+

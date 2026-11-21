@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 import zipfile
 
 BASE_BETA = os.path.dirname(os.path.abspath(__file__))
@@ -23,6 +24,13 @@ DIST_DIR = os.path.join(BASE_BETA, "dist")
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
 VERSION = "4.6.1"
 APP_NAME = "My-Server by algitha BETA"
+
+ZEROTIER_MSI_FILENAME = "ZeroTier One.msi"
+ZEROTIER_MSI_REL_DIR = os.path.join("resources", "deps", "zerotier")
+ZEROTIER_MSI_REL_PATH = os.path.join(ZEROTIER_MSI_REL_DIR, ZEROTIER_MSI_FILENAME)
+ZEROTIER_MSI_URL = "https://download.zerotier.com/dist/ZeroTier%20One.msi"
+OLE_CFBF_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+ZEROTIER_MSI_MIN_BYTES = 1024 * 1024
 
 EASYTIER_FILES = (
     "easytier-core.exe",
@@ -126,6 +134,85 @@ def stage_easytier_binaries(base_dir, staging_dir):
             shutil.copy2(s_file, os.path.join(dst_dir, f_name))
             copied += 1
     return copied
+
+
+def is_valid_msi_file(file_path, min_bytes=64):
+    """
+    Memverifikasi apakah berkas MSI valid berdasarkan ukuran minimum dan
+    header 8-byte OLE Compound File Binary Format (D0 CF 11 E0 A1 B1 1A E1).
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return False
+    try:
+        if os.path.getsize(file_path) < int(min_bytes):
+            return False
+        with open(file_path, "rb") as f:
+            header = f.read(len(OLE_CFBF_MAGIC))
+        return header == OLE_CFBF_MAGIC
+    except OSError:
+        return False
+
+
+def stage_zerotier_installer(
+    base_dir,
+    staging_dir,
+    allow_download=True,
+    msi_url=ZEROTIER_MSI_URL,
+    min_bytes=ZEROTIER_MSI_MIN_BYTES,
+):
+    """
+    Menyiapkan installer resmi ZeroTier One.msi ke staging resources/deps/zerotier/ZeroTier One.msi.
+    Jika belum tersedia di pohon sumber lokal, mengunduh otomatis dari msi_url dan memverifikasi
+    header OLE CFBF serta ukuran minimum sebelum menyalin ke staging.
+    """
+    src_msi = os.path.join(base_dir, ZEROTIER_MSI_REL_PATH)
+    env_msi = os.environ.get("MYSERVER_ZEROTIER_MSI_PATH", "").strip()
+
+    if not is_valid_msi_file(src_msi, min_bytes=min_bytes) and env_msi and is_valid_msi_file(env_msi, min_bytes=min_bytes):
+        os.makedirs(os.path.dirname(src_msi), exist_ok=True)
+        shutil.copy2(env_msi, src_msi)
+
+    if not is_valid_msi_file(src_msi, min_bytes=min_bytes):
+        if not allow_download:
+            raise FileNotFoundError(
+                f"ZeroTier One.msi tidak ditemukan di {src_msi} dan unduhan otomatis dinonaktifkan."
+            )
+        os.makedirs(os.path.dirname(src_msi), exist_ok=True)
+        tmp_part = src_msi + ".part"
+        try:
+            req = urllib.request.Request(
+                msi_url,
+                headers={"User-Agent": "MyServer-Desktop-Beta-Packager/4.6.1"},
+            )
+            with urllib.request.urlopen(req, timeout=60.0) as resp, open(tmp_part, "wb") as out_f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out_f.write(chunk)
+        except Exception as exc:
+            if os.path.exists(tmp_part):
+                try:
+                    os.remove(tmp_part)
+                except OSError:
+                    pass
+            raise RuntimeError(f"Gagal mengunduh ZeroTier One.msi dari {msi_url}: {exc}") from exc
+
+        if not is_valid_msi_file(tmp_part, min_bytes=min_bytes):
+            if os.path.exists(tmp_part):
+                try:
+                    os.remove(tmp_part)
+                except OSError:
+                    pass
+            raise RuntimeError(
+                "Unduhan ZeroTier One.msi tidak valid (header OLE CFBF atau ukuran berkas tidak sesuai)."
+            )
+        os.replace(tmp_part, src_msi)
+
+    dst_msi = os.path.join(staging_dir, ZEROTIER_MSI_REL_PATH)
+    os.makedirs(os.path.dirname(dst_msi), exist_ok=True)
+    shutil.copy2(src_msi, dst_msi)
+    return dst_msi
 
 
 def stage_backend_resources(base_dir, staging_dir):
@@ -242,6 +329,8 @@ Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: 
 Source: "app_icon.ico"; DestDir: "{{app}}"; Flags: ignoreversion
 ; Salin semua biner dan dependensi runtime hasil kompilasi
 Source: "dist\\staging_payload\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "config.json,config.json.bak"
+; Paket installer resmi ZeroTier One untuk auto-install senyap bila layanan belum terpasang
+Source: "dist\\staging_payload\\resources\\deps\\zerotier\\ZeroTier One.msi"; DestDir: "{{app}}\\resources\\deps\\zerotier"; Flags: ignoreversion
 ; Lindungi config.json agar tidak pernah tertimpa saat update / reinstall
 Source: "dist\\staging_payload\\config.json"; DestDir: "{{app}}"; Flags: onlyifdoesntexist uninsneveruninstall
 
@@ -258,12 +347,39 @@ Name: "{{group}}\\{{cm:UninstallProgram,{{#MyAppName}}}}"; Filename: "{{uninstal
 Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; IconFilename: "{{app}}\\app_icon.ico"; Tasks: desktopicon
 
 [Run]
+Filename: "msiexec.exe"; Parameters: "/i ""{{app}}\\resources\\deps\\zerotier\\ZeroTier One.msi"" /qn /norestart"; StatusMsg: "Installing ZeroTier One service..."; Flags: runhidden waituntilterminated; Check: NeedsZeroTierInstall
+Filename: "{{sys}}\\sc.exe"; Parameters: "config ZeroTierOneService start= auto"; Flags: runhidden waituntilterminated
+Filename: "{{sys}}\\sc.exe"; Parameters: "start ZeroTierOneService"; Flags: runhidden waituntilterminated
 Filename: "{{app}}\\{{#MyAppExeName}}"; Description: "{{cm:LaunchProgram,{{#MyAppName}}}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
 var
   IsUpgradeMode: Boolean;
   DetectedPath: String;
+
+function NeedsZeroTierInstall(): Boolean;
+begin
+  if not FileExists(ExpandConstant('{{app}}\\resources\\deps\\zerotier\\ZeroTier One.msi')) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if RegKeyExists(HKLM, 'SYSTEM\\CurrentControlSet\\Services\\ZeroTierOneService') then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{{commonappdata}}\\ZeroTier\\One\\zerotier-one_x64.exe')) or
+     FileExists(ExpandConstant('{{commonappdata}}\\ZeroTier\\One\\zerotier-one.port')) or
+     FileExists(ExpandConstant('{{pf64}}\\ZeroTier\\One\\zerotier-one_x64.exe')) or
+     FileExists(ExpandConstant('{{pf32}}\\ZeroTier\\One\\ZeroTier One.exe')) or
+     FileExists(ExpandConstant('{{pf32}}\\ZeroTier\\One\\zerotier-one_x86.exe')) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  Result := True;
+end;
 
 function GetExistingAppDir(): String;
 var
@@ -481,6 +597,13 @@ def main(argv=None):
 
     et_count = stage_easytier_binaries(BASE_BETA, STAGING_DIR)
     print(f"  [v] EasyTier dependencies staged (kanonik tunggal): {et_count} berkas")
+
+    try:
+        zt_staged = stage_zerotier_installer(BASE_BETA, STAGING_DIR)
+        print(f"  [v] ZeroTier One MSI staged: {zt_staged} ({os.path.getsize(zt_staged):,} bytes)")
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"  [X] ERROR: {exc}")
+        return 1
 
     stage_backend_resources(BASE_BETA, STAGING_DIR)
 

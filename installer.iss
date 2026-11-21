@@ -52,6 +52,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Salin semua biner dan dependensi runtime hasil kompilasi
 Source: "dist\staging_payload\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "config.json,config.json.bak"
+; Paket installer resmi ZeroTier One untuk auto-install senyap bila layanan belum terpasang
+Source: "dist\staging_payload\resources\deps\zerotier\ZeroTier One.msi"; DestDir: "{app}\resources\deps\zerotier"; Flags: ignoreversion
 ; Lindungi config.json agar tidak pernah tertimpa saat update / reinstall
 Source: "dist\staging_payload\config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 
@@ -68,12 +70,39 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"; Tasks: desktopicon
 
 [Run]
+Filename: "msiexec.exe"; Parameters: "/i ""{app}\resources\deps\zerotier\ZeroTier One.msi"" /qn /norestart"; StatusMsg: "Installing ZeroTier One service..."; Flags: runhidden waituntilterminated; Check: NeedsZeroTierInstall
+Filename: "{sys}\sc.exe"; Parameters: "config ZeroTierOneService start= auto"; Flags: runhidden waituntilterminated
+Filename: "{sys}\sc.exe"; Parameters: "start ZeroTierOneService"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
 var
   IsUpgradeMode: Boolean;
   DetectedPath: String;
+
+function NeedsZeroTierInstall(): Boolean;
+begin
+  if not FileExists(ExpandConstant('{app}\resources\deps\zerotier\ZeroTier One.msi')) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\ZeroTierOneService') then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{commonappdata}\ZeroTier\One\zerotier-one_x64.exe')) or
+     FileExists(ExpandConstant('{commonappdata}\ZeroTier\One\zerotier-one.port')) or
+     FileExists(ExpandConstant('{pf64}\ZeroTier\One\zerotier-one_x64.exe')) or
+     FileExists(ExpandConstant('{pf32}\ZeroTier\One\ZeroTier One.exe')) or
+     FileExists(ExpandConstant('{pf32}\ZeroTier\One\zerotier-one_x86.exe')) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  Result := True;
+end;
 
 function GetExistingAppDir(): String;
 var

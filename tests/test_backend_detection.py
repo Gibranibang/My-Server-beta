@@ -104,7 +104,7 @@ class TestBackendDetection(unittest.TestCase):
         core._remote_backend_manifest_cache["version"] = ""
 
     def test_real_workspace_resources_bundled_and_git_tracked(self):
-        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.4.4")
+        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.4.5")
         zip_pkg, tar_pkg = core._get_bundled_backend_packages()
         self.assertIsNotNone(zip_pkg)
         self.assertIsNotNone(tar_pkg)
@@ -813,6 +813,136 @@ class TestBackendDetection(unittest.TestCase):
             self.assertTrue(res_curl["success"], res_curl)
             self.assertEqual(sftp_uploaded_versions, [])
             self.assertTrue(any("curl " in c and "MyServer-Backend-ZimaOS.tar.gz" in c for c in ssh_cmds_recorded))
+
+    def test_ssh_bounded_exec_drains_large_output_and_times_out_cleanly(self):
+        class _DrainChannel:
+            def __init__(self, chunks):
+                self._chunks = list(chunks)
+                self._idx = 0
+                self.timeout_set = None
+                self.closed = False
+
+            def settimeout(self, t):
+                self.timeout_set = t
+
+            def exit_status_ready(self):
+                return self._idx >= len(self._chunks)
+
+            def recv_ready(self):
+                return self._idx < len(self._chunks)
+
+            def recv(self, _n):
+                c = self._chunks[self._idx]
+                self._idx += 1
+                return c
+
+            def recv_stderr_ready(self):
+                return False
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                self.closed = True
+
+        chan = _DrainChannel([b"line1\n", b"line2\n"])
+        fake_client = types.SimpleNamespace(
+            exec_command=lambda cmd, timeout=None: (None, types.SimpleNamespace(channel=chan), types.SimpleNamespace(channel=chan))
+        )
+        code, out_b, err_b = core._exec_ssh_command_bounded(fake_client, "echo ok", timeout=5.0)
+        self.assertEqual(code, 0)
+        self.assertEqual(out_b, b"line1\nline2\n")
+        self.assertEqual(err_b, b"")
+        self.assertEqual(chan.timeout_set, 5.0)
+
+        # Verify hanging channel times out cleanly instead of blocking forever in recv_exit_status()
+        class _HangingChannel:
+            def __init__(self):
+                self.closed = False
+            def settimeout(self, _t):
+                pass
+            def exit_status_ready(self):
+                return False
+            def recv_ready(self):
+                return False
+            def recv_stderr_ready(self):
+                return False
+            def recv_exit_status(self):
+                raise AssertionError("recv_exit_status must not be called before exit_status_ready")
+            def close(self):
+                self.closed = True
+
+        hang_chan = _HangingChannel()
+        hang_client = types.SimpleNamespace(
+            exec_command=lambda cmd, timeout=None: (None, types.SimpleNamespace(channel=hang_chan), types.SimpleNamespace(channel=hang_chan))
+        )
+        with mock.patch("time.monotonic", side_effect=[0.0, 2.5]):
+            with self.assertRaises(TimeoutError):
+                core._exec_ssh_command_bounded(hang_client, "curl hang", timeout=1.0)
+        self.assertTrue(hang_chan.closed)
+
+    def test_ota_skips_upload_when_verify_jwt_unreachable_and_archive_download_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = os.path.join(tmp, "MyServer-Backend-ZimaOS.zip")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("app/config.py", 'SERVER_VERSION = "1.4.4"\n')
+
+            cfg = {
+                "active_server_id": "srv1",
+                "servers": [{
+                    "id": "srv1",
+                    "name": "Zima1",
+                    "connections": [{"id": "c1", "url": "http://192.0.2.1"}],
+                    "credentials": {"Admin": {"username": "nasadmin", "password": "pw"}},
+                }],
+            }
+            seen_urls = []
+
+            def _urlopen_unreachable(req, timeout=20):
+                seen_urls.append(req.full_url)
+                if req.full_url.endswith("/api/v1/auth/verify"):
+                    raise TimeoutError("timed out")
+                raise AssertionError(f"Should skip _send_ota_upload after verify TimeoutError, got {req.full_url}")
+
+            with (
+                mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg),
+                mock.patch.object(core.config_manager, "get_server_credentials", return_value={"username": "nasadmin", "password": "pw"}),
+                mock.patch.object(core, "_get_backend_url_candidates", return_value=["http://192.0.2.1:8080"]),
+                mock.patch.object(core, "_get_active_server_backend_url", return_value="http://192.0.2.1:8080"),
+                mock.patch.object(core, "_get_bundled_backend_version", return_value="1.4.4"),
+                mock.patch.object(core, "_get_bundled_backend_packages", return_value=(zip_path, None)),
+                mock.patch("urllib.request.urlopen", side_effect=_urlopen_unreachable),
+                mock.patch.dict(sys.modules, {"paramiko": types.SimpleNamespace(SSHClient=lambda: types.SimpleNamespace(set_missing_host_key_policy=lambda *a: None, connect=lambda *a, **k: (_ for _ in ()).throw(OSError("no ssh"))), AutoAddPolicy=lambda: object())}),
+            ):
+                res = core.handle_remote_backend_action({"action": "update", "serverId": "srv1"})
+
+            self.assertFalse(res["success"])
+            self.assertEqual(seen_urls, ["http://192.0.2.1:8080/api/v1/auth/verify"])
+            self.assertNotIn("srv1", core._ACTIVE_BACKEND_DEPLOYS)
+
+            # Verify slow trickle download hits wall-clock deadline and cleans temp file
+            class _SlowResp:
+                def read(self, _n=-1):
+                    return b"x" * 1024
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    return False
+
+            with (
+                mock.patch("urllib.request.urlopen", return_value=_SlowResp()),
+                mock.patch("time.monotonic", side_effect=[0.0, 999.0]),
+            ):
+                dl_res = core._download_remote_backend_archive("Gibranibang/My-Server-beta", "MyServer-Backend-ZimaOS.zip", ".zip", timeout=1.0)
+            self.assertIsNone(dl_res)
+
+    def test_tauri_core_api_timeout_covers_installer_and_backend_deploy(self):
+        lib_rs_path = os.path.join(BETA_DIR, "src-tauri", "src", "lib.rs")
+        with open(lib_rs_path, "r", encoding="utf-8") as f:
+            lib_src = f.read()
+        self.assertIn("download_and_install_update", lib_src)
+        self.assertIn("210000", lib_src)
+        self.assertIn("300000", lib_src)
 
 
 if __name__ == "__main__":

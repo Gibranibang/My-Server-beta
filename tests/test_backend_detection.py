@@ -104,7 +104,7 @@ class TestBackendDetection(unittest.TestCase):
         core._remote_backend_manifest_cache["version"] = ""
 
     def test_real_workspace_resources_bundled_and_git_tracked(self):
-        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.4.3")
+        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.4.4")
         zip_pkg, tar_pkg = core._get_bundled_backend_packages()
         self.assertIsNotNone(zip_pkg)
         self.assertIsNotNone(tar_pkg)
@@ -120,7 +120,8 @@ class TestBackendDetection(unittest.TestCase):
             tar_entries = sorted(m.name for m in tf.getmembers() if m.isfile())
             tar_sh_mode = tf.getmember("install_zimaos.sh").mode & 0o777
 
-        self.assertEqual(len(zip_entries), 24)
+        self.assertEqual(len(zip_entries), 25)
+        self.assertIn("app/routers/share.py", zip_entries)
         self.assertEqual(zip_entries, tar_entries)
         self.assertIn("app/services/smb_manager.py", zip_entries)
         self.assertIn("app/routers/smb.py", zip_entries)

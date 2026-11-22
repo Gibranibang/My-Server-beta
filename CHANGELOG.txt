@@ -1,3 +1,7 @@
+[v4.6.12 - Beta] - 2026-11-22
+- Backend v1.4.12: Helper `dfree_safe.py` berbatas 1.2s (anti-hang `This PC` "Working on it..."), tuning Samba `ea support = no`, `store dos attributes = no`, `getwd cache = yes`, dan deteksi `fuse3`/`rclone`/`overlay` + `change notify = no`.
+- Desktop v4.6.12: Cache bitmask `GetLogicalDrives()` di `_scan_windows_network_drives()` & `update_drives_cache_loop()` (kurangi kontensi lock MPR Explorer) serta `_run_subprocess_bounded()` untuk timeout keras `net.exe`.
+
 [v4.6.11 - Beta] - 2026-11-22
 - Anti-Stuck Drive SMB & Pembatalan Mid-Loop (Desktop): Epoch-fenced `mount_all_smb_shares()` + rollback, pembersihan ghost drive Red-X (`1201`), parallel unmount/purge, async EasyTier restart pada `/api/switch_server`, dan supresi kaskade `server_recovered`.
 - Perbaikan Kontrol Power & Progres Jam VM Manager (Desktop & Backend v1.4.11): Perbaikan `_resolve_backend_bearer_token_for_url()`, `InstaBoxManager.sync_vm_status()` (`machine`/`runStartedAt`), fallback `last_wake_time` di `inspect_and_sync_vm()`, dan bypass circuit breaker untuk aksi power control (`/resume`, `/suspend`, `activity-leases`).

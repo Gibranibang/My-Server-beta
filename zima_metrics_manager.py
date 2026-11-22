@@ -1100,24 +1100,44 @@ class ZimaMetricsClient:
                 except Exception:
                     logical_bitmask = 0xFFFFFFFF
 
-            seen_net_shares = set()
-            for letter in reversed(string.ascii_uppercase):
-                bit_idx = ord(letter) - 65
-                if not (logical_bitmask & (1 << bit_idx)):
-                    continue
-                drive_root = f"{letter}:\\"
-                # 4 = DRIVE_REMOTE
-                try:
-                    drive_type = kernel32.GetDriveTypeW(drive_root)
-                except Exception:
-                    continue
+            wnet_entries = None
+            now_mono = time.monotonic()
+            cached_wnet = getattr(self, "_wnet_scan_cache", None)
+            if (
+                isinstance(cached_wnet, dict)
+                and cached_wnet.get("bitmask") == logical_bitmask
+                and (now_mono - float(cached_wnet.get("ts") or 0.0)) < 15.0
+                and isinstance(cached_wnet.get("entries"), list)
+            ):
+                wnet_entries = cached_wnet["entries"]
+            else:
+                wnet_entries = []
+                for letter in reversed(string.ascii_uppercase):
+                    bit_idx = ord(letter) - 65
+                    if not (logical_bitmask & (1 << bit_idx)):
+                        continue
+                    drive_root = f"{letter}:\\"
+                    # 4 = DRIVE_REMOTE
+                    try:
+                        drive_type = kernel32.GetDriveTypeW(drive_root)
+                    except Exception:
+                        continue
+                    if drive_type == 4:
+                        buf = ctypes.create_unicode_buffer(512)
+                        buf_len = ctypes.c_ulong(512)
+                        res = mpr.WNetGetConnectionW(f"{letter}:", buf, ctypes.byref(buf_len))
+                        if res == 0 and buf.value:
+                            wnet_entries.append((letter, buf.value))
+                self._wnet_scan_cache = {
+                    "bitmask": logical_bitmask,
+                    "ts": now_mono,
+                    "entries": list(wnet_entries),
+                }
 
-                if drive_type == 4:
-                    buf = ctypes.create_unicode_buffer(512)
-                    buf_len = ctypes.c_ulong(512)
-                    res = mpr.WNetGetConnectionW(f"{letter}:", buf, ctypes.byref(buf_len))
-                    if res == 0:
-                        remote_unc = buf.value
+            seen_net_shares = set()
+            for letter, remote_unc in wnet_entries:
+                if remote_unc:
+                    if True:
                         unc_clean = remote_unc.strip("\\")
                         parts = unc_clean.split("\\")
                         unc_host = parts[0].lower().strip() if parts else ""

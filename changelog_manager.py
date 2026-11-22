@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.12",
+        "channel": "Beta",
+        "date": "2026-11-22",
+        "title": "Anti-Hang Explorer 'Working on it...', Non-Blocking Samba dfree & MPR Cache (Backend v1.4.12)",
+        "notes": [
+            "Non-Blocking Samba dfree & Tuning Explorer LAN (Backend v1.4.12): Menambahkan helper `dfree_safe.py` (timeout 1.2s + cache `/dev/shm` + fallback aman) pada `smb.conf` agar probe `statvfs()` partisi Cloud FUSE (`Gdrive_*`) atau HDD tidur tidak lagi membuat Windows File Explorer macet di `Working on it...`, mematikan `ea support`, `store dos attributes`, dan `map archive/hidden/system/readonly` guna menghilangkan badai xattr/stat, menambahkan `getwd cache = yes`, serta memperluas `is_fuse_or_remote_mount()` untuk `fuse3` / `fuse3.*` / `mergerfs` / `overlay` + `change notify = no` khusus share FUSE.",
+            "Penghilangan Badai WNetGetConnectionW & Batas Keras Subprocess SMB (Desktop v4.6.12): Menambahkan cache bitmask `GetLogicalDrives()` 15 detik di `_scan_windows_network_drives()` dan throttling bitmask 30 detik di `update_drives_cache_loop()` untuk menekan lock contention MPR dengan `explorer.exe`, serta pembungkus `_run_subprocess_bounded()` agar `net.exe use` yang macet di IRP kernel benar-benar berhenti tepat waktu tanpa menggantung 60+ detik."
+        ],
+        "features": [
+            "Bounded Non-Blocking Samba dfree Helper (dfree_safe.py)",
+            "Zero-xattr & getwd Cache Samba Explorer Tuning + fuse3 Detection",
+            "15s/30s Bitmask-Gated WNetGetConnectionW Anti-Contention",
+            "Hard-Bounded net.exe Subprocess Timeout Wrapper"
+        ]
+    },
+    {
         "version": "4.6.11",
         "channel": "Beta",
         "date": "2026-11-22",

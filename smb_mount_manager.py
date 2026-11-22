@@ -31,6 +31,37 @@ _cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
 _cached_1219_alias = {}
 
 
+def _run_subprocess_bounded(run_cmd, timeout_sec=18.0, creationflags=0):
+    """Menjalankan subprocess.run dalam worker berbatas waktu keras agar pipe SMB kernel hang tak melewati timeout."""
+    box = {}
+    done_ev = threading.Event()
+
+    def _worker():
+        try:
+            box["res"] = subprocess.run(
+                run_cmd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+                timeout=timeout_sec,
+            )
+        except BaseException as exc:
+            box["exc"] = exc
+        finally:
+            done_ev.set()
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    if not done_ev.wait(timeout=float(timeout_sec) + 1.0):
+        raise subprocess.TimeoutExpired(run_cmd, timeout_sec)
+    if "exc" in box:
+        raise box["exc"]
+    return box["res"]
+
+
 def _run_parallel_drive_actions(items, worker_fn, max_workers=6):
     """Menjalankan aksi teardown/probe per drive secara paralel aman (tanpa overhead jika <= 1 item)."""
     seq = list(items or [])
@@ -1455,16 +1486,7 @@ def mount_smb_share(
     logger_manager.log_info(f"[SMB Mount] Menjalankan (cmdkey-first): {' '.join(cmd)}")
 
     def _exec_net_use(run_cmd, run_timeout):
-        return subprocess.run(
-            run_cmd,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-            timeout=run_timeout,
-        )
+        return _run_subprocess_bounded(run_cmd, timeout_sec=run_timeout, creationflags=creationflags)
 
     try:
         try:
@@ -1941,13 +1963,10 @@ def unmount_smb_share(drive_letter="Z:", notify_explorer=True):
 
     creationflags = 0x08000000 if sys.platform == "win32" else 0
     try:
-        res = subprocess.run(
+        res = _run_subprocess_bounded(
             ["net.exe", "use", clean_drive, "/DELETE", "/YES"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
+            timeout_sec=2.5,
             creationflags=creationflags,
-            timeout=2.5,
         )
         if res.returncode == 0:
             unmounted_ok = True

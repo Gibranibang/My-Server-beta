@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.11"
+APP_VERSION_NUMBER = "4.6.12"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -15211,47 +15211,61 @@ def update_drives_cache_loop():
 
 
 
+    last_bitmask = None
+    last_srv_id = None
+    last_smb_src = None
+    last_scan_ts = time.monotonic()
+
     while True:
 
-
-
-
-
-
-
         try:
-
-
-
-
-
-
 
             time.sleep(6)
 
             _maybe_refresh_backend_disks_usage_bg()
 
+            cur_bitmask = None
+            cur_srv_id = None
+            cur_smb_src = None
+            if sys.platform == "win32":
+                try:
+                    get_drv_fn = getattr(ctypes.windll.kernel32, "GetLogicalDrives", None)
+                    if callable(get_drv_fn):
+                        raw_m = get_drv_fn()
+                        if isinstance(raw_m, int) and not isinstance(raw_m, bool):
+                            cur_bitmask = raw_m
+                except Exception:
+                    cur_bitmask = None
+            try:
+                cfg_chk = config_manager.load_or_create_config() if config_manager else {}
+                srv_chk = config_manager.get_active_server(cfg_chk) if config_manager else None
+                cur_srv_id = srv_chk.get("id") if srv_chk else None
+                if srv_chk and hasattr(config_manager, "get_server_smb_source_config"):
+                    cur_smb_src = (config_manager.get_server_smb_source_config(srv_chk) or {}).get("source", "zimaos")
+            except Exception:
+                pass
 
-
-
-
-
+            now_m = time.monotonic()
+            with _drives_cache_lock:
+                cache_empty = not bool(_cached_live_drives)
+            should_rescan = (
+                cache_empty
+                or cur_bitmask is None
+                or cur_bitmask != last_bitmask
+                or cur_srv_id != last_srv_id
+                or cur_smb_src != last_smb_src
+                or (now_m - last_scan_ts) >= 30.0
+            )
+            if not should_rescan:
+                continue
 
             new_drives = _scan_live_drives_now()
-
-
-
-
-
-
+            last_bitmask = cur_bitmask
+            last_srv_id = cur_srv_id
+            last_smb_src = cur_smb_src
+            last_scan_ts = time.monotonic()
 
             with _drives_cache_lock:
-
-
-
-
-
-
 
                 _cached_live_drives = new_drives
 

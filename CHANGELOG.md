@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.6.12 - Beta] - 2026-11-22
+
+- Non-Blocking Samba `dfree` & Explorer LAN Tuning (Backend v1.4.12): Menambahkan helper [`dfree_safe.py`](app/services/smb_manager.py) (`dfree command`, timeout keras 1.2s + cache `/dev/shm`) agar kueri ukuran disk Explorer (`This PC`) tidak membeku saat FUSE/HDD macet, menonaktifkan `ea support`, `store dos attributes`, dan `map archive/hidden/system/readonly` + mengaktifkan `getwd cache = yes`, serta memperluas [`is_fuse_or_remote_mount()`](app/services/smb_manager.py) agar `fuse3` / `fuse3.rclone` / `overlay` / `mergerfs` otomatis mendapat mode aman (`posix locking = no`, `use sendfile = no`, `change notify = no`).
+- Penghentian Contention MPR & Hard-Bounded `net.exe` (Desktop v4.6.12): Menambahkan cache bitmask `GetLogicalDrives()` 15s pada `_scan_windows_network_drives()` dan pembatasan rescan pada `update_drives_cache_loop()` untuk mencegah berebut lock MPR (`WNetGetConnectionW`) dengan `explorer.exe`, serta `_run_subprocess_bounded()` agar timeout `net.exe use` tidak lagi tertahan 60+ detik di pipe kernel SMB.
+
 ## [v4.6.11 - Beta] - 2026-11-22
 
 - Anti-Stuck Drive SMB & Pembatalan Mid-Loop (Desktop): Menambahkan epoch `_smb_pipeline_gen` dan `abort_check` pada `mount_all_smb_shares()` & `rebind_storage_pipeline()` agar perpindahan server/profil segera membatalkan dan me-rollback mount lama yang sedang berjalan, mengizinkan pembersihan tautan DosLanman pada drive Red-X (`wnet_code == 1201`), memparalelkan `unmount_all_smb_shares()` & `purge_smb_sessions()`, memindahkan restart EasyTier pada `/api/switch_server` ke background thread non-blocking, serta menekan kaskade ganda `server_recovered` selama transisi aktif.

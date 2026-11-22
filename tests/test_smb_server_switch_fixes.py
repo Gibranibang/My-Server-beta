@@ -379,6 +379,73 @@ class TestSmbServerSwitchAndDiskFixes(unittest.TestCase):
             core._smb_suppressed_until_ts = 0.0
         core._set_smb_sync_state(False)
 
+    def test_10_wnet_scan_cache_avoids_repeated_mpr_calls_when_bitmask_unchanged(self):
+        import ctypes as real_ctypes
+        import types
+
+        client = zmm.ZimaMetricsClient(host="192.168.1.11", username="gibran", password="secret")
+        client.is_admin = True
+        client.detailed_partitions_map = {
+            "gdrive_01": {
+                "name": "Gdrive_01",
+                "total_bytes": 1000,
+                "used_bytes": 200,
+                "avail_bytes": 800,
+                "fs_type": "fuse.rclone",
+            }
+        }
+        wnet_calls = []
+
+        class FakeK32:
+            current_mask = 1 << 25
+
+            @classmethod
+            def GetLogicalDrives(cls):
+                return cls.current_mask
+
+            @staticmethod
+            def GetDriveTypeW(path):
+                return 4
+
+        class FakeMpr:
+            @staticmethod
+            def WNetGetConnectionW(drv, buf, sz):
+                wnet_calls.append(drv)
+                buf.value = r"\\192.168.1.11\Gdrive_01"
+                return 0
+
+        fake_windll = types.SimpleNamespace(kernel32=FakeK32(), mpr=FakeMpr())
+        with patch.object(zmm.os, "name", "nt"), patch.object(zmm.ctypes, "windll", fake_windll, create=True):
+            # Poll 1: hits WNetGetConnectionW once
+            r1 = client._scan_windows_network_drives(server_connections=[{"url": "http://192.168.1.11"}])
+            # Poll 2 & 3 with same bitmask: served from 15s cache, ZERO extra WNetGetConnectionW calls
+            r2 = client._scan_windows_network_drives(server_connections=[{"url": "http://192.168.1.11"}])
+            self.assertEqual(len(wnet_calls), 1)
+            self.assertEqual(len(r1), 1)
+            self.assertEqual(len(r2), 1)
+            # Bitmask change forces immediate rescan
+            FakeK32.current_mask = (1 << 25) | (1 << 24)
+            client._scan_windows_network_drives(server_connections=[{"url": "http://192.168.1.11"}])
+            self.assertEqual(len(wnet_calls), 3)
+
+    def test_11_run_subprocess_bounded_aborts_on_pipe_hang_within_deadline(self):
+        import threading
+        import time
+
+        unblock = threading.Event()
+
+        def hanging_subproc(*args, **kwargs):
+            unblock.wait(timeout=5.0)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        t0 = time.monotonic()
+        with patch.object(smb.subprocess, "run", side_effect=hanging_subproc):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                smb._run_subprocess_bounded(["net.exe", "use", "X:"], timeout_sec=0.2)
+        elapsed = time.monotonic() - t0
+        unblock.set()
+        self.assertLess(elapsed, 2.5)
+
 
 if __name__ == "__main__":
     unittest.main()

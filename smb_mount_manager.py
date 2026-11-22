@@ -8,6 +8,7 @@ dan pelepasan atomik (unmount-before-remount) termasuk pembersihan drive Red-X (
 100% DINAMIS - ZERO HARDCODED.
 """
 
+import concurrent.futures
 import ctypes
 import ipaddress
 import logger_manager
@@ -28,6 +29,25 @@ _smb_host_cache_lock = threading.Lock()
 _cached_resolved_smb_host = {"key": None, "target": "", "resolved": "", "ts": 0.0}
 _cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
 _cached_1219_alias = {}
+
+
+def _run_parallel_drive_actions(items, worker_fn, max_workers=6):
+    """Menjalankan aksi teardown/probe per drive secara paralel aman (tanpa overhead jika <= 1 item)."""
+    seq = list(items or [])
+    if not seq:
+        return []
+    if len(seq) == 1:
+        return [(seq[0], worker_fn(seq[0]))]
+    results = []
+    workers = max(1, min(int(max_workers or 6), len(seq)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = [(item, pool.submit(worker_fn, item)) for item in seq]
+        for item, fut in future_map:
+            try:
+                results.append((item, fut.result()))
+            except Exception:
+                results.append((item, None))
+    return results
 
 
 def invalidate_smb_host_cache():
@@ -1234,87 +1254,109 @@ def purge_smb_sessions(hosts=None, notify_explorer=True):
                 session_drives.add(drv_val)
             session_lines.append((unc_val, drv_val))
 
-    # 1. Bersihkan drive WNet / LanmanRedirector strictly milik target_hosts_lc (termasuk 1203)
+    # 1. Bersihkan drive WNet / LanmanRedirector strictly milik target_hosts_lc (termasuk 1201/1203)
     handled_drives = set()
     if sys.platform == "win32":
         letters = list(_candidate_network_letters())
         for d in session_drives:
             if d not in letters:
                 letters.append(d)
+        drive_targets = []
         for d in letters:
             wnet_code, wnet_unc = _get_wnet_remote_unc(d)
             if wnet_code in (0, 1201, 1203) and wnet_unc:
                 h_part, _ = _extract_unc_host_and_share(wnet_unc)
                 if h_part and h_part in target_hosts_lc:
-                    _, timed_out = _cancel_connection_safe(d, force=True, timeout=1.5)
-                    try:
-                        subprocess.run(
-                            ["net.exe", "use", d, "/DELETE", "/YES"],
-                            stdin=subprocess.DEVNULL,
-                            capture_output=True,
-                            creationflags=creationflags,
-                            timeout=3.0,
-                        )
-                    except Exception:
-                        pass
-                    if wnet_code == 1203 or not timed_out:
-                        _remove_dos_lanman_device(d)
-                    handled_drives.add(d)
+                    drive_targets.append((d, wnet_code))
+
+        def _purge_drive_item(item):
+            d_itm, code_itm = item
+            _, timed_out = _cancel_connection_safe(d_itm, force=True, timeout=1.5)
+            try:
+                subprocess.run(
+                    ["net.exe", "use", d_itm, "/DELETE", "/YES"],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    creationflags=creationflags,
+                    timeout=2.5,
+                )
+            except Exception:
+                pass
+            if code_itm in (1201, 1203) or not timed_out:
+                _remove_dos_lanman_device(d_itm)
+            return d_itm
+
+        for item, res_d in _run_parallel_drive_actions(drive_targets, _purge_drive_item):
+            handled_drives.add(res_d or item[0])
 
     # 2. Bersihkan entri sesi di 'net use' strictly milik target_hosts_lc
     try:
+        unc_targets = []
         for unc, drv_code in session_lines:
             if drv_code and drv_code in handled_drives:
                 continue
             h_part, _ = _extract_unc_host_and_share(unc) if unc else ("", "")
             if not h_part or h_part not in target_hosts_lc:
                 continue
-            _cancel_connection_safe(unc, force=True, timeout=1.5)
-            subprocess.run(
-                ["net.exe", "use", unc, "/DELETE", "/YES"],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                creationflags=creationflags,
-                timeout=3.0,
-            )
-            if drv_code:
-                _, timed_out_drv = _cancel_connection_safe(drv_code, force=True, timeout=1.5)
+            unc_targets.append((unc, drv_code))
+
+        def _purge_unc_item(item):
+            u_itm, drv_itm = item
+            _cancel_connection_safe(u_itm, force=True, timeout=1.5)
+            try:
                 subprocess.run(
-                    ["net.exe", "use", drv_code, "/DELETE", "/YES"],
+                    ["net.exe", "use", u_itm, "/DELETE", "/YES"],
                     stdin=subprocess.DEVNULL,
                     capture_output=True,
                     creationflags=creationflags,
-                    timeout=3.0,
+                    timeout=2.5,
                 )
+            except Exception:
+                pass
+            if drv_itm:
+                _, timed_out_drv = _cancel_connection_safe(drv_itm, force=True, timeout=1.5)
+                try:
+                    subprocess.run(
+                        ["net.exe", "use", drv_itm, "/DELETE", "/YES"],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        creationflags=creationflags,
+                        timeout=2.5,
+                    )
+                except Exception:
+                    pass
                 if not timed_out_drv:
-                    _remove_dos_lanman_device(drv_code)
-                handled_drives.add(drv_code)
+                    _remove_dos_lanman_device(drv_itm)
+            return drv_itm
+
+        for _, drv_done in _run_parallel_drive_actions(unc_targets, _purge_unc_item):
+            if drv_done:
+                handled_drives.add(drv_done)
     except Exception:
         pass
 
-    # 3. Hapus sesi IPC$/root UNC dan cmdkey lokal untuk target_hosts_lc
-    for h in target_hosts:
+    # 3. Hapus sesi IPC$/root UNC dan cmdkey lokal untuk target_hosts_lc secara terarah
+    def _purge_host_item(h_itm):
         try:
-            if sys.platform == "win32" and h.lower() in session_hosts:
-                _cancel_connection_safe(f"{bs}{bs}{h}{bs}IPC$", force=True, timeout=1.5)
-                _cancel_connection_safe(f"{bs}{bs}{h}", force=True, timeout=1.5)
-                subprocess.run(
-                    ["net.exe", "use", f"{bs}{bs}{h}{bs}IPC$", "/DELETE", "/YES"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    creationflags=creationflags,
-                    timeout=3.0,
-                )
-                subprocess.run(
-                    ["net.exe", "use", f"{bs}{bs}{h}", "/DELETE", "/YES"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    creationflags=creationflags,
-                    timeout=3.0,
-                )
-            _delete_windows_credential(h)
+            if sys.platform == "win32" and h_itm.lower() in session_hosts:
+                _cancel_connection_safe(f"{bs}{bs}{h_itm}{bs}IPC$", force=True, timeout=1.5)
+                _cancel_connection_safe(f"{bs}{bs}{h_itm}", force=True, timeout=1.5)
+                for target_unc in (f"{bs}{bs}{h_itm}{bs}IPC$", f"{bs}{bs}{h_itm}"):
+                    try:
+                        subprocess.run(
+                            ["net.exe", "use", target_unc, "/DELETE", "/YES"],
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            creationflags=creationflags,
+                            timeout=2.5,
+                        )
+                    except Exception:
+                        pass
+            _delete_windows_credential(h_itm)
         except Exception:
             pass
+
+    _run_parallel_drive_actions(list(target_hosts), _purge_host_item)
 
     if notify_explorer and handled_drives:
         _notify_windows_explorer_refresh(removed_drives=sorted(handled_drives))
@@ -1594,13 +1636,22 @@ def mount_all_smb_shares(
     backend_url="",
     on_token_refreshed=None,
     known_server_hosts=None,
+    abort_check=None,
 ):
     """
     Melakukan mounting seluruh share folder disk server yang tersedia ke huruf drive Windows yang bebas.
     Memverifikasi host UNC & port 445 pada drive MyServer yang sudah terpasang dalam soft_mode
-    agar drive zombie ber-IP lama atau tak terjangkau dicabut tanpa menyentuh drive asing.
+    agar drive zombie ber-IP lama atau tak terjangkau dicabut tanpa menyentuh drive asing,
+    serta mendukung pembatalan instan via abort_check saat perpindahan server/akun.
     """
     bs = chr(92)
+
+    def _is_aborted():
+        try:
+            return bool(callable(abort_check) and abort_check())
+        except Exception:
+            return False
+
     known_hosts_lc = set(_collect_configured_myserver_hosts())
     for raw_kh in ([host, zerotier_ip] + list(known_server_hosts or [])):
         if raw_kh:
@@ -1621,6 +1672,7 @@ def mount_all_smb_shares(
         removed = []
         if sys.platform != "win32":
             return removed
+        to_remove = []
         for d in _candidate_network_letters():
             wnet_code, wnet_unc = _get_wnet_remote_unc(d)
             unc_host, _ = _extract_unc_host_and_share(wnet_unc)
@@ -1630,11 +1682,18 @@ def mount_all_smb_shares(
             if not is_known_myserver:
                 continue
             if wnet_code in (1201, 1203) or (unc_host not in keep_hosts_lc):
-                if unmount_smb_share(d, notify_explorer=False):
-                    removed.append(d)
+                to_remove.append(d)
+        for d_itm, res_ok in _run_parallel_drive_actions(
+            to_remove, lambda d_arg: unmount_smb_share(d_arg, notify_explorer=False)
+        ):
+            if res_ok:
+                removed.append(d_itm)
         if removed:
             _notify_windows_explorer_refresh(removed_drives=removed)
         return removed
+
+    if _is_aborted():
+        return False, "Pemasangan SMB dibatalkan sebelum dimulai."
 
     resolved_host = resolve_smb_host(
         target_host=host,
@@ -1642,6 +1701,8 @@ def mount_all_smb_shares(
         is_domain_route=is_domain_route,
         zerotier_ip=zerotier_ip,
     )
+    if _is_aborted():
+        return False, "Pemasangan SMB dibatalkan karena perpindahan server atau akun aktif."
     if not resolved_host:
         _cleanup_foreign_myserver_drives(set())
         _record_mount_all_stats(0, 0, [], host="")
@@ -1663,6 +1724,8 @@ def mount_all_smb_shares(
         backend_url=backend_url,
         on_token_refreshed=on_token_refreshed,
     )
+    if _is_aborted():
+        return False, "Pemasangan SMB dibatalkan karena perpindahan server atau akun aktif."
     if not shares:
         _cleanup_foreign_myserver_drives(set())
         _record_mount_all_stats(0, 0, [], host=clean_host)
@@ -1682,16 +1745,16 @@ def mount_all_smb_shares(
     host_reachability_cache = {}
 
     if sys.platform == "win32":
+        stale_to_unmount = []
         for d in _candidate_network_letters():
             wnet_code, wnet_unc = _get_wnet_remote_unc(d)
             unc_host, unc_share = _extract_unc_host_and_share(wnet_unc)
             # Abaikan sepenuhnya network drive milik server/NAS asing
-            if unc_host and known_hosts_lc and unc_host not in known_hosts_lc:
+            if unc_host and known_hosts_lc and unc_host not in known_hosts_lc and not unc_host.startswith("10.126.126."):
                 continue
             if wnet_code in (1201, 1203):
                 if unc_host or not known_hosts_lc:
-                    unmount_smb_share(d, notify_explorer=False)
-                    removed_drives.append(d)
+                    stale_to_unmount.append(d)
             elif wnet_code == 0 and wnet_unc:
                 norm_unc = wnet_unc.rstrip(bs).lower()
                 drv_type = ctypes.windll.kernel32.GetDriveTypeW(d + bs)
@@ -1703,10 +1766,18 @@ def mount_all_smb_shares(
                         host_reachability_cache[unc_host] = bool(is_port_open(unc_host, 445, timeout=0.6))
                     reachable_ok = host_reachability_cache[unc_host]
                 if drv_type != 4 or not host_matches or not share_wanted or not reachable_ok or norm_unc in already_mounted_map:
-                    unmount_smb_share(d, notify_explorer=False)
-                    removed_drives.append(d)
+                    stale_to_unmount.append(d)
                 else:
                     already_mounted_map[norm_unc] = d
+        for d_itm, _ in _run_parallel_drive_actions(
+            stale_to_unmount, lambda d_arg: unmount_smb_share(d_arg, notify_explorer=False)
+        ):
+            removed_drives.append(d_itm)
+
+    if _is_aborted():
+        if removed_drives:
+            _notify_windows_explorer_refresh(removed_drives=removed_drives)
+        return False, "Pemasangan SMB dibatalkan karena perpindahan server atau akun aktif."
 
     creationflags = 0x08000000 if sys.platform == "win32" else 0
     if clean_user and clean_host:
@@ -1729,8 +1800,13 @@ def mount_all_smb_shares(
     mounted_count = 0
     failed_shares = []
     messages = []
+    aborted_mid_loop = False
 
     for sh in shares:
+        if _is_aborted():
+            aborted_mid_loop = True
+            break
+
         chosen_share = sanitize_input(sh).lstrip("/" + bs)
         effective_host = _cached_1219_alias.get(clean_host, resolved_host)
         expected_unc_lower = f"{bs}{bs}{clean_host}{bs}{chosen_share}".lower()
@@ -1758,6 +1834,15 @@ def mount_all_smb_shares(
             skip_ipc=True,
             notify_explorer=False,
         )
+        if _is_aborted():
+            if ok:
+                try:
+                    unmount_smb_share(target_drive, notify_explorer=False)
+                except Exception:
+                    pass
+            aborted_mid_loop = True
+            break
+
         if ok:
             mounted_count += 1
             already_mounted_map[expected_unc_lower] = target_drive
@@ -1766,6 +1851,18 @@ def mount_all_smb_shares(
         else:
             failed_shares.append(sh)
             messages.append(f"• [Drive {target_drive}] {sh} (Gagal: {msg})")
+
+    if aborted_mid_loop:
+        rollback_targets = list(dict.fromkeys(added_drives))
+        if rollback_targets:
+            _run_parallel_drive_actions(
+                rollback_targets, lambda d_arg: unmount_smb_share(d_arg, notify_explorer=False)
+            )
+            removed_drives.extend(d for d in rollback_targets if d not in removed_drives)
+        if removed_drives:
+            _notify_windows_explorer_refresh(removed_drives=removed_drives)
+        _record_mount_all_stats(0, len(shares), [], host=clean_host)
+        return False, "Pemasangan SMB dibatalkan karena perpindahan server atau akun aktif."
 
     _record_mount_all_stats(mounted_count, len(shares), failed_shares, host=clean_host)
     if added_drives or removed_drives:
@@ -1794,8 +1891,7 @@ def unmount_all_smb_shares(allowed_hosts=None, allowed_prefixes=None):
         logger_manager.log_warning("[SMB Unmount] allowed_hosts/allowed_prefixes kosong; melewati unmount demi keamanan drive asing.")
         return 0
 
-    unmounted = 0
-    removed_drives = []
+    drives_to_unmount = []
     for d in _candidate_network_letters():
         try:
             drv_type = ctypes.windll.kernel32.GetDriveTypeW(d + "\\") if sys.platform == "win32" else 0
@@ -1807,11 +1903,19 @@ def unmount_all_smb_shares(allowed_hosts=None, allowed_prefixes=None):
                 host_allowed = (unc_host in allowed_hosts_lc) or any(unc_host.startswith(p) for p in prefix_list)
                 if not host_allowed:
                     continue
-                if unmount_smb_share(d, notify_explorer=False):
-                    unmounted += 1
-                    removed_drives.append(d)
+                drives_to_unmount.append(d)
         except Exception:
             pass
+
+    unmounted = 0
+    removed_drives = []
+    for d_itm, res_ok in _run_parallel_drive_actions(
+        drives_to_unmount, lambda d_arg: unmount_smb_share(d_arg, notify_explorer=False)
+    ):
+        if res_ok:
+            unmounted += 1
+            removed_drives.append(d_itm)
+
     if removed_drives:
         _notify_windows_explorer_refresh(removed_drives=removed_drives)
     return unmounted
@@ -1820,7 +1924,7 @@ def unmount_all_smb_shares(allowed_hosts=None, allowed_prefixes=None):
 def unmount_smb_share(drive_letter="Z:", notify_explorer=True):
     """
     Melepaskan network mapping SMB secara bersih; membatasi DefineDosDeviceW strictly
-    pada tautan yatim wnet_code == 1203 atau setelah WNetCancelConnection2W selesai tanpa timeout.
+    pada tautan Red-X/yatim wnet_code in (1201, 1203) atau setelah WNetCancelConnection2W selesai tanpa timeout.
     """
     clean_drive = drive_letter.strip().rstrip("\\").upper()
     if not clean_drive.endswith(":"):
@@ -1843,7 +1947,7 @@ def unmount_smb_share(drive_letter="Z:", notify_explorer=True):
             capture_output=True,
             text=True,
             creationflags=creationflags,
-            timeout=4.0,
+            timeout=2.5,
         )
         if res.returncode == 0:
             unmounted_ok = True
@@ -1852,7 +1956,7 @@ def unmount_smb_share(drive_letter="Z:", notify_explorer=True):
 
     if sys.platform == "win32":
         allow_dos_cleanup = False
-        if initial_wnet_code == 1203:
+        if initial_wnet_code in (1201, 1203):
             allow_dos_cleanup = True
         elif not cancel_timed_out:
             post_code, _ = _get_wnet_remote_unc(clean_drive)

@@ -210,6 +210,175 @@ class TestSmbServerSwitchAndDiskFixes(unittest.TestCase):
         self.assertFalse(parts_by_name["gibran1"]["is_remote"])
         self.assertFalse(parts_by_name["gibran2"]["is_remote"])
 
+    def test_06_mount_all_aborts_mid_loop_and_rolls_back_on_switch(self):
+        state = {"aborted": False, "mounted": [], "unmounted": []}
+
+        def fake_mount(host, share_name, **kwargs):
+            drv = kwargs.get("drive_letter")
+            state["mounted"].append((share_name, drv))
+            if share_name == "Disk_A":
+                # Simulate server switch arriving right after Disk_A finishes
+                state["aborted"] = True
+            return True, f"Mounted {share_name}"
+
+        with (
+            patch.object(smb.sys, "platform", "linux"),
+            patch.object(smb, "resolve_smb_host", return_value="172.24.0.1"),
+            patch.object(smb, "get_remote_smb_shares", return_value=["Disk_A", "Disk_B", "Disk_C"]),
+            patch.object(smb, "get_available_drive_letter", side_effect=["Z:", "Y:", "X:"]),
+            patch.object(smb, "mount_smb_share", side_effect=fake_mount),
+            patch.object(smb, "unmount_smb_share", side_effect=lambda d, **kw: state["unmounted"].append(d) or True),
+            patch.object(smb, "_register_windows_credential"),
+            patch.object(smb.subprocess, "run", return_value=MagicMock(returncode=0)),
+        ):
+            ok, msg = smb.mount_all_smb_shares(
+                host="172.24.0.1",
+                username="Marcom",
+                smb_source="backend",
+                abort_check=lambda: state["aborted"],
+            )
+
+        self.assertFalse(ok)
+        self.assertIn("dibatalkan", msg.lower())
+        # Disk_B and Disk_C must NOT be attempted after abort, and Disk_A (Z:) rolled back
+        self.assertEqual(state["mounted"], [("Disk_A", "Z:")])
+        self.assertIn("Z:", state["unmounted"])
+
+    def test_07_queued_switch_preserves_pre_unmounted_false_and_suppresses_auto_recovery(self):
+        events = []
+
+        def fake_rebind(reason="manual", force_refresh=True, pre_unmounted=False, expected_gen=None):
+            events.append((reason, force_refresh, pre_unmounted, expected_gen))
+            return []
+
+        core._smb_pipeline_lock.acquire()
+        with core._pending_rebind_lock:
+            core._pending_rebind_reason = None
+            core._pending_rebind_pre_unmounted = False
+            core._pending_rebind_gen = None
+        try:
+            gen = core._bump_smb_pipeline_epoch(suppress_auto_sec=10.0)
+            self.assertTrue(core._is_smb_auto_suppressed())
+
+            # Queue user-priority switch_server while lock is busy
+            core.rebind_storage_pipeline("switch_server", pre_unmounted=False, expected_gen=gen)
+            # Background server_recovered must NOT overwrite switch_server!
+            core.rebind_storage_pipeline("server_recovered", pre_unmounted=False)
+
+            with core._pending_rebind_lock:
+                self.assertEqual(core._pending_rebind_reason, "switch_server")
+                self.assertFalse(core._pending_rebind_pre_unmounted)
+                self.assertEqual(core._pending_rebind_gen, gen)
+        finally:
+            with core._pending_rebind_lock:
+                core._pending_rebind_reason = None
+                core._pending_rebind_pre_unmounted = False
+                core._pending_rebind_gen = None
+            core._smb_pipeline_lock.release()
+            with core._smb_pipeline_gen_lock:
+                core._smb_suppressed_until_ts = 0.0
+            core._set_smb_sync_state(False)
+
+        # Also check stale expected_gen exits early without touching lock or pipeline
+        stale_gen = gen - 1
+        self.assertEqual(core.rebind_storage_pipeline("switch_server", expected_gen=stale_gen), [])
+        self.assertEqual(events, [])
+
+    def test_08_unmount_smb_share_cleans_1201_red_x_and_parallel_unmount(self):
+        # 1201 (ERROR_CONNECTION_UNAVAIL / Red-X) must clean DosLanman even if WNetCancelConnection2W times out
+        with (
+            patch.object(smb.sys, "platform", "win32"),
+            patch.object(smb, "_get_wnet_remote_unc", return_value=(1201, r"\\172.24.0.1\STIMI")),
+            patch.object(smb, "_cancel_connection_safe", return_value=(False, True)),
+            patch.object(smb.subprocess, "run", return_value=MagicMock(returncode=2, stdout="", stderr="")),
+            patch.object(smb, "_remove_dos_lanman_device", return_value=True) as mock_dos,
+            patch.object(smb, "_notify_windows_explorer_refresh"),
+        ):
+            ok = smb.unmount_smb_share("U:")
+
+        self.assertTrue(ok)
+        mock_dos.assert_called_once_with("U:")
+
+        # Parallel unmount across multiple stale drives cleans all matching drives safely
+        wnet_map = {
+            "U:": (1201, r"\\172.24.0.1\STIMI"),
+            "V:": (0, r"\\172.24.0.1\Marcom"),
+            "W:": (0, r"\\corp-nas\Other"),
+        }
+        removed = []
+
+        class FakeK32:
+            @staticmethod
+            def GetDriveTypeW(path):
+                return 4
+
+        fake_windll = MagicMock()
+        fake_windll.kernel32 = FakeK32()
+        with (
+            patch.object(smb.sys, "platform", "win32"),
+            patch.object(smb.ctypes, "windll", fake_windll),
+            patch.object(smb, "_candidate_network_letters", return_value=["U:", "V:", "W:"]),
+            patch.object(smb, "_get_wnet_remote_unc", side_effect=lambda d: wnet_map.get(d, (-1, ""))),
+            patch.object(smb, "unmount_smb_share", side_effect=lambda d, notify_explorer=True: removed.append(d) or True),
+            patch.object(smb, "_notify_windows_explorer_refresh") as mock_notif,
+        ):
+            cnt = smb.unmount_all_smb_shares(allowed_hosts={"172.24.0.1"})
+
+        self.assertEqual(cnt, 2)
+        self.assertEqual(sorted(removed), ["U:", "V:"])
+        mock_notif.assert_called_once()
+
+    def test_09_switch_server_offloads_easytier_restart_off_http_handler(self):
+        import io
+        import json
+
+        cfg_data = {
+            "active_server_id": "srv_a",
+            "remote_mode": "easytier",
+            "servers": [
+                {"id": "srv_a", "name": "Srv A", "remote_id": "rid-aaa", "connections": [{"url": "http://192.168.1.11"}]},
+                {"id": "srv_b", "name": "Srv B", "remote_id": "rid-bbb", "connections": [{"url": "http://172.24.0.1"}]},
+            ],
+        }
+        et_mock = MagicMock()
+        et_mock.is_running.return_value = True
+        et_mock.get_remote_id.return_value = "rid-aaa"
+
+        handler = core.CoreApiHandler.__new__(core.CoreApiHandler)
+        handler.path = "/api/switch_server"
+        handler.rfile = io.BytesIO(json.dumps({"serverId": "srv_b"}).encode("utf-8"))
+        handler.headers = {"Content-Length": str(len(json.dumps({"serverId": "srv_b"})))}
+        sent = {}
+        handler._send_json = lambda obj, code=200: sent.update({"obj": obj, "code": code})
+
+        spawned_targets = []
+
+        class FakeThread:
+            def __init__(self, target=None, daemon=None, **kw):
+                self._target = target
+
+            def start(self):
+                spawned_targets.append(self._target)
+
+        with (
+            patch.object(core.config_manager, "load_or_create_config", return_value=cfg_data),
+            patch.object(core.config_manager, "save_config"),
+            patch.object(core.config_manager, "get_server_smb_source_config", return_value={"source": "zimaos"}),
+            patch.object(core, "get_server_details_data", return_value={"activeServerId": "srv_b"}),
+            patch.object(core, "invalidate_active_route_cache"),
+            patch.object(core.easytier_manager, "get_easytier_manager", return_value=et_mock),
+            patch.object(core.threading, "Thread", FakeThread),
+        ):
+            handler.do_POST()
+
+        # HTTP response must NOT wait for et_mock.start_easytier synchronously
+        et_mock.start_easytier.assert_not_called()
+        self.assertEqual(sent.get("code"), 200)
+        self.assertGreaterEqual(len(spawned_targets), 2)
+        with core._smb_pipeline_gen_lock:
+            core._smb_suppressed_until_ts = 0.0
+        core._set_smb_sync_state(False)
+
 
 if __name__ == "__main__":
     unittest.main()

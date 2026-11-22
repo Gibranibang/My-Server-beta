@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.6.11 - Beta] - 2026-11-22
+
+- Anti-Stuck Drive SMB & Pembatalan Mid-Loop (Desktop): Menambahkan epoch `_smb_pipeline_gen` dan `abort_check` pada `mount_all_smb_shares()` & `rebind_storage_pipeline()` agar perpindahan server/profil segera membatalkan dan me-rollback mount lama yang sedang berjalan, mengizinkan pembersihan tautan DosLanman pada drive Red-X (`wnet_code == 1201`), memparalelkan `unmount_all_smb_shares()` & `purge_smb_sessions()`, memindahkan restart EasyTier pada `/api/switch_server` ke background thread non-blocking, serta menekan kaskade ganda `server_recovered` selama transisi aktif.
+- Perbaikan Kontrol Power & Progres Jam VM Manager (Desktop & Backend v1.4.11): Memperbaiki `_resolve_backend_bearer_token_for_url()` (`get_server_smb_source_config`, pembacaan dict `get_server_credentials()`, serta hostname dari `connections[].url`), memperbarui `InstaBoxManager.sync_vm_status()` agar membuka wrapper `machine` & menghitung durasi dari `runStartedAt`, menambah fallback `last_wake_time` di `inspect_and_sync_vm()`, serta memastikan aksi power control (`/resume`, `/suspend`, `activity-leases`) tidak diblokir oleh circuit breaker host.
+
 ## [v4.6.10 - Beta] - 2026-11-22
 
 - Teardown Lintas Server & Indikator Refresh SMB Real-Time (Desktop & UI): `/api/switch_server`, `/api/switch_profile`, `_handle_smb_source_request`, dan `rebind_storage_pipeline()` kini melepaskan seluruh drive milik server sebelumnya (`include_all_servers=True`), memblokir kebocoran partisi server lama saat perpindahan gagal/offline, mereset cache share/host/drive secara atomik, serta menampilkan banner sinkronisasi SMB (`smbSyncing`) di `FilesView.tsx` & `TrayDock.tsx`.

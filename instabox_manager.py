@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 import time
 import urllib.error
 import urllib.parse
@@ -224,19 +225,56 @@ class InstaBoxManager:
         if "error" in res:
             return res
 
-        # Parsing status runtime
-        machine_status = res.get("status", "sleeping")
-        runtime_secs = res.get("currentRunSeconds", 0)
-        runtime_mins = int(runtime_secs // 60)
+        # Parsing status runtime (dukung wrapper {"machine": {...}} maupun flat dict + runStartedAt)
+        machine_obj = res.get("machine") if isinstance(res.get("machine"), dict) else res
+        raw_state = str(machine_obj.get("state") or machine_obj.get("status") or "sleeping").strip().lower()
+        desired_state = str(machine_obj.get("desiredState") or "").strip().lower()
+        if raw_state in ("running", "active") and desired_state != "suspended":
+            machine_status = "running"
+        elif desired_state == "running" and raw_state in ("starting", "resuming", "waking", "provisioning"):
+            machine_status = "running"
+        elif raw_state in ("suspended", "stopped", "sleeping", "idle", "off"):
+            machine_status = "sleeping"
+        else:
+            machine_status = raw_state or "sleeping"
+
+        runtime_mins = None
+        run_started_at = machine_obj.get("runStartedAt") or machine_obj.get("startedAt")
+        if machine_status == "running" and run_started_at:
+            try:
+                iso_s = str(run_started_at).strip().replace("Z", "+00:00")
+                started_dt = datetime.fromisoformat(iso_s)
+                if started_dt.tzinfo is None:
+                    started_dt = started_dt.replace(tzinfo=timezone.utc)
+                runtime_mins = max(0, int((datetime.now(timezone.utc) - started_dt).total_seconds() // 60))
+            except Exception:
+                runtime_mins = None
+
+        if runtime_mins is None:
+            raw_secs = (
+                machine_obj.get("currentRunSeconds")
+                if machine_obj.get("currentRunSeconds") is not None
+                else (machine_obj.get("uptimeSeconds") if machine_obj.get("uptimeSeconds") is not None else machine_obj.get("runDurationSeconds"))
+            )
+            if raw_secs is not None:
+                try:
+                    runtime_mins = max(0, int(float(raw_secs) // 60))
+                except Exception:
+                    runtime_mins = 0
+            elif machine_status == "running":
+                runtime_mins = int(vm.get("runtimeMinutes") or 0)
+            else:
+                runtime_mins = 0
 
         updates = {
             "status": machine_status,
             "runtimeMinutes": runtime_mins,
-            "lastActive": "Just now" if machine_status == "running" else "Recently"
+            "lastActive": "Just now" if machine_status == "running" else "Recently",
         }
 
-        if res.get("ip"):
-            updates["ip"] = res.get("ip")
+        ip_val = machine_obj.get("ip") or res.get("ip")
+        if ip_val:
+            updates["ip"] = ip_val
 
         updated_vm = cls.update_vm(vm_id, updates)
         return {"status": "ok", "vm": updated_vm}

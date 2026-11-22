@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.11",
+        "channel": "Beta",
+        "date": "2026-11-22",
+        "title": "Perbaikan Drive SMB Stuck 1201, Switch Server/Akun Instan & Stabilitas VM Manager (Backend v1.4.11)",
+        "notes": [
+            "Anti-Stuck Drive SMB & Pembatalan Mid-Loop (Desktop): Menambahkan epoch & abort_check pada `mount_all_smb_shares()` dan `rebind_storage_pipeline()` sehingga perpindahan server/akun langsung membatalkan & me-rollback pemasangan lama, mengizinkan pembersihan DosLanman pada drive Red-X (`wnet_code == 1201`), memparalelkan `unmount_all_smb_shares()` / `purge_smb_sessions()`, memindahkan restart EasyTier `/api/switch_server` ke background non-blocking, serta menahan kaskade `server_recovered` saat transisi aktif.",
+            "Perbaikan Kontrol Power & Progres Jam VM Manager (Desktop & Backend v1.4.11): Memperbaiki `_resolve_backend_bearer_token_for_url()` (`get_server_smb_source_config`, dict `get_server_credentials`, dan host `connections[].url`), `InstaBoxManager.sync_vm_status()` (unwrap `machine` & hitung `runStartedAt`), fallback `last_wake_time` di `inspect_and_sync_vm()`, serta bypass circuit breaker untuk aksi power control (`/resume`, `/suspend`, `activity-leases`)."
+        ],
+        "features": [
+            "Epoch-Fenced SMB Switch & Mid-Loop Abort Rollback",
+            "Red-X 1201 Cleanup & Parallel Multi-Drive Unmount",
+            "Non-Blocking EasyTier Switch on /api/switch_server",
+            "VM Manager JWT Auth, Runtime Counter & Power Control Fix (v1.4.11)"
+        ]
+    },
+    {
         "version": "4.6.10",
         "channel": "Beta",
         "date": "2026-11-22",

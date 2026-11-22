@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.6.9 - Beta] - 2026-11-22
+
+- EasyTier Congestion Guard, Path Freeze & Mount Cooldown (Desktop): Menambahkan `get_tunnel_traffic_stats()`, `is_tunnel_traffic_active()`, serta fallback `--disable-p2p` otomatis di `easytier_manager.py` saat P2P gagal 3x berturut-turut; membekukan auto-route SMB rebind selama transfer backup/Sync/tunnel aktif, menambah cooldown kegagalan mount 60s per server, memfilter adapter virtual (`vEthernet`/`VMware`/`Hyper-V`/`Docker`/`WSL`), serta fencing generasi probe rute.
+- SMB Mount cmdkey-First, Bounded Probe & Transport Keep-Alive: Memperbarui `smb_mount_manager.py` agar `net.exe use` selalu mendahulukan kredensial Vault (`cmdkey.exe`) tanpa mengirim kata sandi plaintext di argv CLI utama, menambah `_probe_drive_readonly_liveness()` (`os.scandir` < 0.8s) dan verifikasi host UNC di `open_drive_in_explorer()`, serta menambahkan HTTP Keep-Alive connection pool, auto-Bearer JWT pada endpoint `/api/v1/vms` & listener SSE `/api/v1/events/stream` di `myserver_core_service.py`.
+- Standar Industri Backend v1.4.9: Memakai `exec uvicorn` (`--timeout-keep-alive 75 --proxy-headers`), supervisi `smbd -F --no-process-group` + crash watchdog + watcher mount `/app/storage` dinamis, memindahkan I/O upload/chunk/OTA keluar dari event loop dengan penulisan atomik `.tmp + fsync + os.replace`, RFC 9110 Range (`416`/`HEAD`/`ETag`/`If-Range`), chunked Web Explorer upload (>8MB), true streaming ZIP folder share on-the-fly, enkripsi `enc1:` pada token Cloud & `api_key` VM, `token_version` revocation + refresh token, rate limiter & JWT wajib control-plane (`vms`/`devices`/`tasks`), polling VM paralel ber-circuit-breaker, serta `/health/live`, `/health/ready`, `/metrics`, dan SSE `/api/v1/events/stream`.
+
 ## [v4.6.8 - Beta] - 2026-11-22
 
 - Perbaikan Kalkulasi DISK di ZimaMetricsClient & TrayDock: Mengecualikan mount FUSE/cloud virtual (seperti Google Drive 100 TB) dari evaluasi umbrella pool `/DATA` dan agregasi kapasitas fisik di `zima_metrics_manager.py` maupun `TrayDock.tsx` (termasuk isolasi penuh mode `backend` sesuai DSK-01), sehingga kapasitas disk fisik tidak lagi terencerkan menjadi 0%.

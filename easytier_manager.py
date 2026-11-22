@@ -114,6 +114,11 @@ class EasyTierManager:
         self._start_time = None
         self._tun_active = False
         self._no_tun_fallback = False
+        self._disable_p2p = False
+        self._p2p_failure_streak = 0
+        self._last_peer_bytes = (0, 0)
+        self._last_traffic_ts = 0.0
+        self._last_start_kwargs = {}
         self._binaries = find_easytier_binaries()
         self._cached_summary = None
         self._cached_summary_ts = 0.0
@@ -181,7 +186,7 @@ class EasyTierManager:
                 return False
         return False
 
-    def start(self, network_name=None, network_secret=None, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, use_no_tun=False, external_node=None, lazy_p2p=False, _from_tun_fallback=False):
+    def start(self, network_name=None, network_secret=None, ipv4=None, peers=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, use_no_tun=False, external_node=None, lazy_p2p=False, disable_p2p=False, _from_tun_fallback=False):
         """
         Meluncurkan daemon easytier-core.exe secara headless di background.
         Mendukung peluncuran via remote_id ZimaOS (mengikuti standar Zima Client)
@@ -204,7 +209,8 @@ class EasyTierManager:
                 return False, "Parameter Remote ID atau Network Name wajib diisi."
 
             if not _from_tun_fallback and self.is_running():
-                if self._network_name == target_net_name and self._network_secret == target_net_secret and self._tun_active == (not bool(use_no_tun)):
+                eff_disable = bool(disable_p2p or self._p2p_failure_streak >= 3)
+                if self._network_name == target_net_name and self._network_secret == target_net_secret and self._tun_active == (not bool(use_no_tun)) and self._disable_p2p == eff_disable:
                     logger.info("EasyTier daemon sudah berjalan dengan konfigurasi yang sama.")
                     return True, "Daemon sudah aktif."
                 else:
@@ -260,7 +266,24 @@ class EasyTierManager:
                 if clean_p:
                     cmd.extend(["-p", clean_p])
 
-            logger.info("Meluncurkan EasyTier Core: %s (network=%s, ip=%s, no_tun=%s)", core_exe, self._network_name, self._ipv4 or "dhcp", use_no_tun)
+            eff_disable_p2p = bool(disable_p2p or self._p2p_failure_streak >= 3)
+            self._disable_p2p = eff_disable_p2p
+            if eff_disable_p2p:
+                cmd.append("--disable-p2p")
+
+            self._last_start_kwargs = {
+                "network_name": network_name,
+                "network_secret": network_secret,
+                "ipv4": ipv4,
+                "peers": peers,
+                "rpc_port": rpc_port,
+                "remote_id": remote_id,
+                "use_no_tun": use_no_tun,
+                "external_node": external_node,
+                "lazy_p2p": lazy_p2p,
+            }
+
+            logger.info("Meluncurkan EasyTier Core: %s (network=%s, ip=%s, no_tun=%s, disable_p2p=%s)", core_exe, self._network_name, self._ipv4 or "dhcp", use_no_tun, eff_disable_p2p)
 
             is_admin = False
             if os.name == "nt":
@@ -340,6 +363,7 @@ class EasyTierManager:
                         use_no_tun=True,
                         external_node=external_node,
                         lazy_p2p=lazy_p2p,
+                        disable_p2p=disable_p2p,
                         _from_tun_fallback=True,
                     )
 
@@ -670,7 +694,97 @@ class EasyTierManager:
         """Alias untuk get_summary() demi kompatibilitas penuh."""
         return self.get_summary(force_refresh=force_refresh)
 
-    def start_easytier(self, network_name=None, network_secret=None, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, lazy_p2p=False):
+    def get_tunnel_traffic_stats(self):
+        """
+        Membaca total rx/tx bytes dan jumlah peer terhubung dari tabel peer EasyTier.
+        Mengembalikan dict {running, peers_count, rx_bytes, tx_bytes, delta_bytes, active}.
+        """
+        if not self.is_running():
+            return {"running": False, "peers_count": 0, "rx_bytes": 0, "tx_bytes": 0, "delta_bytes": 0, "active": False}
+
+        peers = self.get_peers() or []
+        total_rx = 0
+        total_tx = 0
+        for peer in peers:
+            if not isinstance(peer, dict):
+                continue
+            stats_obj = peer.get("stats") if isinstance(peer.get("stats"), dict) else {}
+            tun_obj = peer.get("tunnel_info") if isinstance(peer.get("tunnel_info"), dict) else {}
+            rx = (
+                peer.get("rx_bytes")
+                or stats_obj.get("rx_bytes")
+                or peer.get("bytes_rx")
+                or tun_obj.get("rx_bytes")
+                or 0
+            )
+            tx = (
+                peer.get("tx_bytes")
+                or stats_obj.get("tx_bytes")
+                or peer.get("bytes_tx")
+                or tun_obj.get("tx_bytes")
+                or 0
+            )
+            try:
+                total_rx += max(0, int(rx or 0))
+                total_tx += max(0, int(tx or 0))
+            except (TypeError, ValueError):
+                pass
+
+        now_mono = time.monotonic()
+        with self._lock:
+            prev_rx, prev_tx = self._last_peer_bytes
+            delta = max(0, total_rx - prev_rx) + max(0, total_tx - prev_tx)
+            self._last_peer_bytes = (total_rx, total_tx)
+            if delta > 0:
+                self._last_traffic_ts = now_mono
+            recent_traffic = (now_mono - self._last_traffic_ts) < 10.0 if self._last_traffic_ts > 0 else False
+
+        return {
+            "running": True,
+            "peers_count": len(peers),
+            "rx_bytes": total_rx,
+            "tx_bytes": total_tx,
+            "delta_bytes": delta,
+            "active": bool(delta > 0 or recent_traffic),
+        }
+
+    def is_tunnel_traffic_active(self, window_sec=10.0):
+        """
+        Traffic-Aware Congestion Guard ala Zima Client v2.3.5:
+        Mengembalikan True bila trafik peer EasyTier aktif atau baru saja mengalir dalam window_sec terakhir,
+        sehingga timeout probe HTTP sesaat tidak keliru dianggap tunnel mati.
+        """
+        st = self.get_tunnel_traffic_stats()
+        if not st.get("running"):
+            return False
+        if st.get("delta_bytes", 0) > 0:
+            return True
+        now_mono = time.monotonic()
+        with self._lock:
+            if self._last_traffic_ts > 0 and (now_mono - self._last_traffic_ts) < float(window_sec):
+                return True
+        return False
+
+    def record_p2p_probe_result(self, reachable):
+        """
+        Mencatat keberhasilan/kegagalan P2P. Setelah 3 kegagalan beruntun pada NAT simetris ketat,
+        memicu mode fallback --disable-p2p (relay stabil).
+        """
+        if reachable:
+            self._p2p_failure_streak = 0
+            return False
+        self._p2p_failure_streak += 1
+        if self._p2p_failure_streak >= 3 and not self._disable_p2p:
+            logger.warning("[EasyTier] Kegagalan P2P beruntun (%d kali); mengaktifkan fallback --disable-p2p...", self._p2p_failure_streak)
+            self._disable_p2p = True
+            if self._last_start_kwargs and self.is_running():
+                kw = dict(self._last_start_kwargs)
+                kw["disable_p2p"] = True
+                self.start(**kw)
+            return True
+        return False
+
+    def start_easytier(self, network_name=None, network_secret=None, ipv4=None, peers=None, use_no_tun=False, external_node=None, rpc_port=DEFAULT_RPC_PORT, remote_id=None, lazy_p2p=False, disable_p2p=False):
         """Alias untuk start() dengan parameter fleksibel."""
         return self.start(
             network_name=network_name,
@@ -682,6 +796,7 @@ class EasyTierManager:
             use_no_tun=use_no_tun,
             external_node=external_node,
             lazy_p2p=lazy_p2p,
+            disable_p2p=disable_p2p,
         )
 
     def stop_easytier(self):

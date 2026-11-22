@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.8"
+APP_VERSION_NUMBER = "4.6.9"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -4654,15 +4654,109 @@ def _get_active_server_backend_url(cfg, target_server_id=None):
         return None
 
 
+_BACKEND_HTTP_POOL_LOCK = threading.Lock()
+_BACKEND_HTTP_POOL = {}  # key: (scheme, netloc) -> {"conn": HTTPConnection, "ts": float}
+_BACKEND_HTTP_POOL_IDLE_SEC = 55.0
+_BACKEND_JWT_CACHE_LOCK = threading.Lock()
+_BACKEND_JWT_CACHE = {}  # key: (server_id, base_url) -> {"token": str, "fail_until": float}
+_PROTECTED_CONTROL_PREFIXES = ("/api/v1/vms", "/api/v1/devices", "/api/v1/tasks", "/api/v1/system/")
+
+
+def _clear_backend_http_pool():
+    """Menutup dan membersihkan koneksi HTTP keep-alive backend saat rute/jaringan berpindah."""
+    with _BACKEND_HTTP_POOL_LOCK:
+        for entry in _BACKEND_HTTP_POOL.values():
+            try:
+                if entry and entry.get("conn") is not None:
+                    entry["conn"].close()
+            except Exception:
+                pass
+        _BACKEND_HTTP_POOL.clear()
+
+
+def _resolve_backend_bearer_token_for_url(url, force_refresh=False):
+    """Mengambil atau memperbarui JWT Backend secara otomatis untuk endpoint terautentikasi (vms/devices/tasks)."""
+    try:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        path = parsed.path or ""
+        if not any(path.startswith(pref) for pref in _PROTECTED_CONTROL_PREFIXES):
+            return ""
+        base_url = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        if not config_manager:
+            return ""
+        cfg = config_manager.load_or_create_config()
+        servers = cfg.get("servers", []) or []
+        target_host = (parsed.hostname or "").strip().lower()
+        srv = None
+        for cand in servers:
+            if not isinstance(cand, dict):
+                continue
+            cand_hosts = {str(cand.get("ip") or "").strip().lower(), str(cand.get("zerotier_ip") or "").strip().lower()}
+            for c_item in (cand.get("connections", []) or []):
+                if isinstance(c_item, dict) and c_item.get("address"):
+                    cand_hosts.add(str(c_item.get("address")).strip().lower())
+            if target_host and target_host in cand_hosts:
+                srv = cand
+                break
+        if srv is None:
+            srv = config_manager.get_active_server(cfg) if hasattr(config_manager, "get_active_server") else None
+        if not srv or not srv.get("id"):
+            return ""
+        srv_id = srv.get("id")
+        smb_cfg = config_manager.get_server_smb_auth_credentials(cfg, srv_id) if hasattr(config_manager, "get_server_smb_auth_credentials") else {}
+        stored_tok = str((smb_cfg or {}).get("access_token") or "").strip()
+        if stored_tok and not force_refresh:
+            return stored_tok
+
+        cache_key = (str(srv_id), base_url)
+        now_m = time.monotonic()
+        with _BACKEND_JWT_CACHE_LOCK:
+            cached = _BACKEND_JWT_CACHE.get(cache_key)
+            if cached and not force_refresh:
+                if cached.get("token"):
+                    return cached["token"]
+                if float(cached.get("fail_until") or 0.0) > now_m:
+                    return ""
+
+        uname = str((smb_cfg or {}).get("username") or "").strip()
+        pwd = str((smb_cfg or {}).get("password") or "")
+        if (not uname or not pwd) and hasattr(config_manager, "get_server_credentials"):
+            z_u, z_p = config_manager.get_server_credentials(srv)
+            uname = str(z_u or "").strip()
+            pwd = str(z_p or "")
+        if not uname or not pwd:
+            return ""
+
+        v_status, v_data = _verify_backend_account(base_url, uname, pwd)
+        if v_status == 200 and isinstance(v_data, dict) and v_data.get("access_token"):
+            fresh_tok = str(v_data.get("access_token") or "").strip()
+            with _BACKEND_JWT_CACHE_LOCK:
+                _BACKEND_JWT_CACHE[cache_key] = {"token": fresh_tok, "fail_until": 0.0}
+            if smb_cfg.get("hasCredentials"):
+                try:
+                    _persist_refreshed_backend_token(srv_id, fresh_tok, v_data)
+                except Exception:
+                    pass
+            return fresh_tok
+
+        with _BACKEND_JWT_CACHE_LOCK:
+            _BACKEND_JWT_CACHE[cache_key] = {"token": "", "fail_until": now_m + 60.0}
+    except Exception:
+        pass
+    return ""
+
+
 def _backend_http_request(url, method="GET", json_body=None, headers=None, timeout=5.0, retries=1):
     """
     Eksekutor HTTP tangguh ke backend ZimaOS (port 8080).
-    Menggunakan header 'Connection: close' dan auto-retry saat terjadi [WinError 10054] / socket reset.
+    Mendukung HTTP Keep-Alive pooling (sinkron dengan Uvicorn --timeout-keep-alive 75),
+    injeksi otomatis Bearer JWT untuk endpoint control-plane, dan auto-retry saat socket reset.
     Return (ok: bool, data_or_error: any, http_status: int).
     """
     req_headers = {
         "User-Agent": f"MyServer-Core/{APP_VERSION_NUMBER}",
-        "Connection": "close",
         "Accept": "application/json",
     }
     if json_body is not None:
@@ -4670,17 +4764,141 @@ def _backend_http_request(url, method="GET", json_body=None, headers=None, timeo
     if headers:
         req_headers.update(headers)
 
+    auto_auth_used = False
+    if not any(str(k).lower() == "authorization" for k in req_headers.keys()):
+        auto_tok = _resolve_backend_bearer_token_for_url(url, force_refresh=False)
+        if auto_tok:
+            req_headers["Authorization"] = f"Bearer {auto_tok}"
+            auto_auth_used = True
+
     data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+    urlopen_mocked = getattr(urllib.request.urlopen, "__module__", "urllib.request") != "urllib.request"
+
+    def _exec_via_keepalive_pool(cur_headers):
+        import http.client
+        parsed = urllib.parse.urlparse(url)
+        scheme = (parsed.scheme or "http").lower()
+        host = parsed.hostname
+        if not host or scheme not in ("http", "https"):
+            raise ValueError("Unsupported scheme for keep-alive pool")
+        port = parsed.port or (443 if scheme == "https" else 80)
+        rel_path = parsed.path or "/"
+        if parsed.query:
+            rel_path = f"{rel_path}?{parsed.query}"
+        pool_key = (scheme, f"{host}:{port}")
+
+        conn = None
+        reused = False
+        now_m = time.monotonic()
+        with _BACKEND_HTTP_POOL_LOCK:
+            entry = _BACKEND_HTTP_POOL.pop(pool_key, None)
+            if entry and (now_m - float(entry.get("ts") or 0.0)) < _BACKEND_HTTP_POOL_IDLE_SEC:
+                conn = entry.get("conn")
+                reused = conn is not None
+            elif entry and entry.get("conn") is not None:
+                try:
+                    entry["conn"].close()
+                except Exception:
+                    pass
+
+        if conn is None:
+            conn = (
+                http.client.HTTPSConnection(host, port=port, timeout=timeout)
+                if scheme == "https"
+                else http.client.HTTPConnection(host, port=port, timeout=timeout)
+            )
+        else:
+            conn.timeout = timeout
+
+        send_hdrs = dict(cur_headers)
+        send_hdrs["Connection"] = "keep-alive"
+        try:
+            conn.request(method, rel_path, body=data, headers=send_hdrs)
+            resp = conn.getresponse()
+            raw = resp.read()
+            status_code = int(resp.status)
+            conn_hdr = str(resp.getheader("Connection") or "").lower()
+            if "close" in conn_hdr:
+                conn.close()
+            else:
+                with _BACKEND_HTTP_POOL_LOCK:
+                    old = _BACKEND_HTTP_POOL.get(pool_key)
+                    if old and old.get("conn") is not None and old.get("conn") is not conn:
+                        try:
+                            old["conn"].close()
+                        except Exception:
+                            pass
+                    _BACKEND_HTTP_POOL[pool_key] = {"conn": conn, "ts": time.monotonic()}
+            if 200 <= status_code < 400:
+                parsed_json = json.loads(raw.decode("utf-8")) if raw else {}
+                return True, parsed_json, status_code
+            try:
+                err_data = json.loads(raw.decode("utf-8"))
+            except Exception:
+                err_data = f"HTTP {status_code}"
+            return False, err_data, status_code
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            if reused:
+                # Reconnect once on stale keep-alive socket without consuming caller retry budget
+                fresh_conn = (
+                    http.client.HTTPSConnection(host, port=port, timeout=timeout)
+                    if scheme == "https"
+                    else http.client.HTTPConnection(host, port=port, timeout=timeout)
+                )
+                fresh_conn.request(method, rel_path, body=data, headers=send_hdrs)
+                resp = fresh_conn.getresponse()
+                raw = resp.read()
+                status_code = int(resp.status)
+                with _BACKEND_HTTP_POOL_LOCK:
+                    _BACKEND_HTTP_POOL[pool_key] = {"conn": fresh_conn, "ts": time.monotonic()}
+                if 200 <= status_code < 400:
+                    parsed_json = json.loads(raw.decode("utf-8")) if raw else {}
+                    return True, parsed_json, status_code
+                try:
+                    err_data = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    err_data = f"HTTP {status_code}"
+                return False, err_data, status_code
+            raise
 
     last_err = None
+    refreshed_401 = False
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
+            if not urlopen_mocked:
+                ok_p, body_p, status_p = _exec_via_keepalive_pool(req_headers)
+                if status_p == 401 and auto_auth_used and not refreshed_401:
+                    refreshed_401 = True
+                    new_tok = _resolve_backend_bearer_token_for_url(url, force_refresh=True)
+                    if new_tok:
+                        req_headers["Authorization"] = f"Bearer {new_tok}"
+                        ok_p, body_p, status_p = _exec_via_keepalive_pool(req_headers)
+                return ok_p, body_p, status_p
+
+            urllib_headers = dict(req_headers)
+            urllib_headers["Connection"] = "close"
+            req = urllib.request.Request(url, data=data, headers=urllib_headers, method=method)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read()
                 parsed = json.loads(raw.decode("utf-8")) if raw else {}
                 return True, parsed, resp.status
         except urllib.error.HTTPError as he:
+            if he.code == 401 and auto_auth_used and not refreshed_401:
+                refreshed_401 = True
+                new_tok = _resolve_backend_bearer_token_for_url(url, force_refresh=True)
+                if new_tok:
+                    req_headers["Authorization"] = f"Bearer {new_tok}"
+                    try:
+                        req2 = urllib.request.Request(url, data=data, headers=dict(req_headers, Connection="close"), method=method)
+                        with urllib.request.urlopen(req2, timeout=timeout) as resp2:
+                            raw2 = resp2.read()
+                            return True, (json.loads(raw2.decode("utf-8")) if raw2 else {}), resp2.status
+                    except Exception:
+                        pass
             try:
                 err_txt = he.read().decode("utf-8")
                 err_data = json.loads(err_txt)
@@ -6581,19 +6799,9 @@ _cached_active_route = {
 
     "active_conn": None,
 
-
-
-
-
-
+    "generation": 0,
 
     "lock": threading.Lock()
-
-
-
-
-
-
 
 }
 
@@ -6684,24 +6892,12 @@ def invalidate_active_route_cache():
 
 
         _cached_active_route["active_conn"] = None
-
-
-
-
-
-
+        _cached_active_route["generation"] = int(_cached_active_route.get("generation") or 0) + 1
 
     _active_metrics_client = None
-
-
-
-
-
-
-
     _active_metrics_client_key = None
-
     _backend_url_cache.clear()
+    _clear_backend_http_pool()
     _cached_backend_info["timestamp"] = 0
     _cached_backend_info["server_id"] = ""
     _cached_backend_info["data"] = {"online": False, "version": "", "latestVersion": "", "url": ""}
@@ -7384,6 +7580,63 @@ def _record_mounted_smb_host(server_id, host_val):
         _auto_route_smb_tracker["pending_since_ts"] = 0.0
 
 
+SMB_MOUNT_FAILURE_COOLDOWN_SEC = 60.0
+_smb_mount_failure_lock = threading.Lock()
+_smb_mount_failure_cooldowns = {}  # key: server_id -> last failure monotonic ts
+_VIRTUAL_ADAPTER_PATTERN = re.compile(
+    r"(vethernet|virtual|vmware|hyper-v|loopback|teredo|isatap|npcap|tunnel|docker|wsl)",
+    re.IGNORECASE,
+)
+
+
+def _is_virtual_adapter_name(name):
+    """Menentukan apakah nama adapter jaringan lokal termasuk adapter virtual yang diabaikan."""
+    return bool(name and _VIRTUAL_ADAPTER_PATTERN.search(str(name)))
+
+
+def _is_backup_or_file_transfer_active():
+    """Active-Transfer Path Freeze ala Zima Client v2.3.5: True bila sinkronisasi/backup atau trafik EasyTier aktif."""
+    try:
+        with _state_lock:
+            if bool(_cached_state.get("sync_active")):
+                return True
+    except Exception:
+        pass
+    try:
+        if easytier_manager and hasattr(easytier_manager, "easytier_instance"):
+            if easytier_manager.easytier_instance.is_tunnel_traffic_active(window_sec=8.0):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_smb_mount_in_cooldown(server_id, now_mono=None, cooldown_sec=SMB_MOUNT_FAILURE_COOLDOWN_SEC):
+    """Mencegah badai retry net.exe use ketika kredensial atau port SMB baru saja gagal."""
+    sid = str(server_id or "__default__")
+    now_m = float(now_mono if now_mono is not None else time.monotonic())
+    with _smb_mount_failure_lock:
+        fail_ts = float(_smb_mount_failure_cooldowns.get(sid) or 0.0)
+        return bool(fail_ts > 0.0 and (now_m - fail_ts) < float(cooldown_sec))
+
+
+def _record_smb_mount_outcome(server_id, success, now_mono=None):
+    sid = str(server_id or "__default__")
+    with _smb_mount_failure_lock:
+        if success:
+            _smb_mount_failure_cooldowns.pop(sid, None)
+        else:
+            _smb_mount_failure_cooldowns[sid] = float(now_mono if now_mono is not None else time.monotonic())
+
+
+def clear_smb_mount_failure_cooldown(server_id=None):
+    with _smb_mount_failure_lock:
+        if server_id is None:
+            _smb_mount_failure_cooldowns.clear()
+        else:
+            _smb_mount_failure_cooldowns.pop(str(server_id), None)
+
+
 def _check_effective_smb_host_transition_for_server(
     srv,
     active_url,
@@ -7391,9 +7644,16 @@ def _check_effective_smb_host_transition_for_server(
     is_online=True,
     now_ts=None,
     spawn_async=True,
+    transfer_active=None,
 ):
     """Menguji apakah host SMB efektif berpindah (rute auto atau Domain LAN<->VPN) dan memicu rebind ter-debounce."""
     if not srv or not active_url or not auto_mount_enabled or not is_online:
+        return False, ""
+    is_xfer = _is_backup_or_file_transfer_active() if transfer_active is None else bool(transfer_active)
+    if is_xfer:
+        logger_manager.log_debug("[SMB Lifecycle] Transfer backup/file aktif; membekukan jalur koneksi & menunda auto-route rebind.")
+        return False, ""
+    if _is_smb_mount_in_cooldown(srv.get("id")):
         return False, ""
     host_p, is_dom_p, zt_p = _resolve_smb_route_params(srv, active_url)
     eff_host = smb_mount_manager.resolve_smb_host(
@@ -7430,9 +7690,16 @@ def _should_unmount_on_offline_streak(
     already_unmounted,
     threshold=SMB_OFFLINE_UNMOUNT_THRESHOLD,
     smb_port_alive=False,
+    tunnel_traffic_active=False,
 ):
     """Menentukan apakah drive MyServer harus di-unmount satu kali setelah server offline beruntun."""
-    return bool((not raw_on) and (offline_streak >= threshold) and (not already_unmounted) and (not smb_port_alive))
+    return bool(
+        (not raw_on)
+        and (offline_streak >= threshold)
+        and (not already_unmounted)
+        and (not smb_port_alive)
+        and (not tunnel_traffic_active)
+    )
 
 
 def _is_server_smb_port_alive(cfg=None, server=None, timeout=0.6):
@@ -7502,22 +7769,36 @@ def _handle_windows_power_event(event_type, now_ts=None, spawn_async=True):
 
 
 def _get_local_ipv4_snapshot():
-    """Mengambil snapshot alamat IPv4 lokal antarmuka jaringan secara non-blocking."""
+    """Mengambil snapshot alamat IPv4 lokal antarmuka jaringan fisik secara non-blocking (mengabaikan virtual/APIPA)."""
     ips = set()
     try:
-        hostname = socket.gethostname()
-        _, _, addr_list = socket.gethostbyname_ex(hostname)
-        for ip in addr_list:
-            if ip and not ip.startswith("127."):
-                ips.add(ip)
+        import psutil
+        addrs = psutil.net_if_addrs()
+        for iface_name, iface_addrs in (addrs or {}).items():
+            if _is_virtual_adapter_name(iface_name):
+                continue
+            for a in iface_addrs:
+                if getattr(a, "family", None) == socket.AF_INET:
+                    ip_v = str(getattr(a, "address", "") or "").strip()
+                    if ip_v and not ip_v.startswith("127.") and not ip_v.startswith("169.254."):
+                        ips.add(ip_v)
     except Exception:
         pass
+    if not ips:
+        try:
+            hostname = socket.gethostname()
+            _, _, addr_list = socket.gethostbyname_ex(hostname)
+            for ip in addr_list:
+                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                    ips.add(ip)
+        except Exception:
+            pass
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.1)
         s.connect(("10.255.255.255", 1))
         local_ip = s.getsockname()[0]
-        if local_ip and not local_ip.startswith("127."):
+        if local_ip and not local_ip.startswith("127.") and not local_ip.startswith("169.254."):
             ips.add(local_ip)
         s.close()
     except Exception:
@@ -7530,9 +7811,12 @@ def _handle_local_network_change(prev_ips, cur_ips):
     if set(prev_ips or ()) == set(cur_ips or ()):
         return False
     smb_mount_manager.invalidate_smb_host_cache()
+    clear_smb_mount_failure_cooldown()
+    _clear_backend_http_pool()
     try:
         with _cached_active_route["lock"]:
             _cached_active_route["last_check"] = 0.0
+            _cached_active_route["generation"] = int(_cached_active_route.get("generation") or 0) + 1
     except Exception:
         pass
     logger_manager.log_info(
@@ -7741,25 +8025,34 @@ def update_route_resolver_loop():
 
             eff_url_for_smb = ""
             if srv and srv.get("active_connection", "auto") == "auto":
-                url, lbl = config_manager.resolve_target_connection(cfg, check_network=True, target_server=srv)
-                eff_url_for_smb = url or ""
                 with _cached_active_route["lock"]:
-                    _cached_active_route["url"] = url
-                    _cached_active_route["label"] = lbl
-                    _cached_active_route["last_check"] = time.time()
-                    _cached_active_route["server_id"] = srv.get("id")
-                    _cached_active_route["active_conn"] = srv.get("active_connection", "auto")
-                parsed = urllib.parse.urlparse(url)
-                ip_str = parsed.hostname or ""
-                route_url_shifted = False
-                with _state_lock:
-                    if _cached_state.get("ip") != ip_str or _cached_state.get("server_url") != url.rstrip("/"):
-                        route_url_shifted = True
-                        _cached_state["ip"] = ip_str
-                        _cached_state["server_url"] = url.rstrip("/")
-                        _cached_state["route_name"] = "LAN Fisik" if "LAN" in lbl else ("ZeroTier P2P" if "ZeroTier" in lbl else "Domain / Internet")
-                if route_url_shifted:
-                    smb_mount_manager.invalidate_smb_host_cache()
+                    probe_gen = int(_cached_active_route.get("generation") or 0)
+                url, lbl = config_manager.resolve_target_connection(cfg, check_network=True, target_server=srv)
+                with _cached_active_route["lock"]:
+                    cur_gen = int(_cached_active_route.get("generation") or 0)
+                    if cur_gen != probe_gen:
+                        logger_manager.log_debug(f"[RouteResolver] Mengabaikan hasil probe rute usang (gen {probe_gen} != {cur_gen}).")
+                        eff_url_for_smb = _cached_active_route.get("url") or ""
+                    else:
+                        eff_url_for_smb = url or ""
+                        _cached_active_route["url"] = url
+                        _cached_active_route["label"] = lbl
+                        _cached_active_route["last_check"] = time.time()
+                        _cached_active_route["server_id"] = srv.get("id")
+                        _cached_active_route["active_conn"] = srv.get("active_connection", "auto")
+                if eff_url_for_smb and eff_url_for_smb == (url or ""):
+                    parsed = urllib.parse.urlparse(url)
+                    ip_str = parsed.hostname or ""
+                    route_url_shifted = False
+                    with _state_lock:
+                        if _cached_state.get("ip") != ip_str or _cached_state.get("server_url") != url.rstrip("/"):
+                            route_url_shifted = True
+                            _cached_state["ip"] = ip_str
+                            _cached_state["server_url"] = url.rstrip("/")
+                            _cached_state["route_name"] = "LAN Fisik" if "LAN" in lbl else ("ZeroTier P2P" if "ZeroTier" in lbl else "Domain / Internet")
+                    if route_url_shifted:
+                        smb_mount_manager.invalidate_smb_host_cache()
+                        _clear_backend_http_pool()
             elif srv:
                 eff_url_for_smb, _ = get_active_resolved_route(cfg)
 
@@ -16016,6 +16309,11 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
                 pass
             host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
 
+        auto_mount_reason = reason in ("startup_auto", "server_recovered", "auto_route_changed")
+        if auto_mount_reason and srv and _is_smb_mount_in_cooldown(srv.get("id")):
+            logger_manager.log_debug(f"[SMB Pipeline] Melewati '{reason}' karena server {srv.get('id')} dalam masa cooldown kegagalan mount.")
+            return []
+
         known_srv_hosts = _collect_myserver_smb_hosts(cfg, srv, include_all_servers=True)
         res = smb_mount_manager.mount_all_smb_shares(
             host=host,
@@ -16033,7 +16331,10 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
             known_server_hosts=known_srv_hosts,
         )
         logger_manager.log_info(f"[SMB Pipeline] Hasil pemasangan ulang ({reason}): {res}")
-        if isinstance(res, tuple) and res[0]:
+        mount_ok = bool(isinstance(res, tuple) and res[0])
+        if srv and srv.get("id"):
+            _record_smb_mount_outcome(srv.get("id"), mount_ok)
+        if mount_ok:
             mounted_host = (
                 (getattr(smb_mount_manager, "_cached_resolved_smb_host", {}) or {}).get("resolved")
                 or resolved_b_host
@@ -19600,11 +19901,46 @@ def update_metrics_loop():
                 offline_streak = 0
                 smb_offline_unmounted = False
                 is_on = True
+                try:
+                    if easytier_manager and hasattr(easytier_manager, "easytier_instance"):
+                        easytier_manager.easytier_instance.record_p2p_probe_result(True)
+                except Exception:
+                    pass
             else:
-                offline_streak += 1
-                held_online = was_online and not srv_changed and not route_changed and offline_streak < OFFLINE_FAIL_THRESHOLD
-                is_on = held_online
-                if _should_unmount_on_offline_streak(raw_on, offline_streak, smb_offline_unmounted):
+                tunnel_traffic_active = False
+                try:
+                    if easytier_manager and hasattr(easytier_manager, "easytier_instance"):
+                        tunnel_traffic_active = bool(easytier_manager.easytier_instance.is_tunnel_traffic_active())
+                except Exception:
+                    tunnel_traffic_active = False
+
+                if tunnel_traffic_active and was_online and not srv_changed and not route_changed:
+                    logger_manager.log_debug(
+                        "[Connection Monitor] Probe HTTP timeout saat trafik tunnel EasyTier sedang aktif (kongesti); menjaga status online."
+                    )
+                    is_on = True
+                else:
+                    offline_streak += 1
+                    held_online = was_online and not srv_changed and not route_changed and offline_streak < OFFLINE_FAIL_THRESHOLD
+                    is_on = held_online
+                    try:
+                        if (
+                            offline_streak >= 3
+                            and active_u
+                            and "10.126.126." in str(active_u)
+                            and easytier_manager
+                            and hasattr(easytier_manager, "easytier_instance")
+                            and easytier_manager.easytier_instance.is_running()
+                        ):
+                            easytier_manager.easytier_instance.record_p2p_probe_result(False)
+                    except Exception:
+                        pass
+                if _should_unmount_on_offline_streak(
+                    raw_on,
+                    offline_streak,
+                    smb_offline_unmounted,
+                    tunnel_traffic_active=tunnel_traffic_active,
+                ):
                     smb_offline_unmounted = True
                     _offline_cfg = cfg
                     _offline_srv = s
@@ -35732,6 +36068,39 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
     t_easytier = threading.Thread(target=auto_start_easytier_worker, daemon=True)
     t_easytier.start()
+
+    def _backend_sse_listener_loop():
+        """Listener SSE opsional /api/v1/events/stream untuk invalidasi instan status SMB tanpa menunggu polling."""
+        while True:
+            try:
+                cfg_s = config_manager.load_or_create_config() if config_manager else {}
+                srv_s = config_manager.get_active_server(cfg_s) if config_manager else None
+                b_url = _get_active_server_backend_url(cfg_s)
+                if not srv_s or not b_url:
+                    time.sleep(20.0)
+                    continue
+                tok = _resolve_backend_bearer_token_for_url(f"{b_url}/api/v1/events/stream", force_refresh=False)
+                if not tok:
+                    smb_cfg = config_manager.get_server_smb_auth_credentials(cfg_s, srv_s.get("id")) if hasattr(config_manager, "get_server_smb_auth_credentials") else {}
+                    tok = str((smb_cfg or {}).get("access_token") or "").strip()
+                if not tok:
+                    time.sleep(30.0)
+                    continue
+                sse_req = urllib.request.Request(
+                    f"{b_url}/api/v1/events/stream",
+                    headers={"Authorization": f"Bearer {tok}", "Accept": "text/event-stream"},
+                )
+                with urllib.request.urlopen(sse_req, timeout=45.0) as resp:
+                    for raw_line in resp:
+                        line = raw_line.decode("utf-8", errors="ignore").strip()
+                        if line.startswith("event:"):
+                            ev_name = line[6:].strip()
+                            if ev_name in ("smb_mode_changed", "smb_synced", "storage_changed"):
+                                smb_mount_manager.clear_smb_share_cache()
+            except Exception:
+                time.sleep(30.0)
+
+    threading.Thread(target=_backend_sse_listener_loop, daemon=True, name="backend-sse-listener").start()
 
 
 

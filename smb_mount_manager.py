@@ -1350,35 +1350,45 @@ def mount_smb_share(
         unmount_smb_share(target_drive, notify_explorer=False)
         time.sleep(0.2)
 
-    # Langkah 1 (Standar Zima Client v2.3.5): Daftarkan ke cmdkey & buka sesi IPC$ jika belum dilakukan di batch
+    # Langkah 1 (Standar Zima Client v2.3.5): Daftarkan ke cmdkey terlebih dahulu agar password tak selalu terekspos di CLI
     if clean_user and not skip_ipc:
         _register_windows_credential(clean_host, clean_user, clean_pass)
         try:
             ipc_target = f"{bs}{bs}{clean_host}{bs}IPC$"
-            ipc_cmd = ["net.exe", "use", ipc_target]
-            if clean_pass:
-                ipc_cmd.append(clean_pass)
-            ipc_cmd.extend([f"/USER:{clean_user}", "/PERSISTENT:NO"])
-            subprocess.run(
+            ipc_cmd = ["net.exe", "use", ipc_target, f"/USER:{clean_user}", "/PERSISTENT:NO"]
+            ipc_res = subprocess.run(
                 ipc_cmd,
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 creationflags=creationflags,
                 timeout=4.5,
             )
+            if ipc_res.returncode != 0 and clean_pass:
+                subprocess.run(
+                    ["net.exe", "use", ipc_target, clean_pass, f"/USER:{clean_user}", "/PERSISTENT:NO"],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    creationflags=creationflags,
+                    timeout=4.5,
+                )
         except Exception as e:
             logger_manager.log_warning(f"[SMB Mount] IPC$ pre-auth notice: {e}")
 
-    # Langkah 2: Mount share folder ke target_drive dengan kredensial eksplisit & stdin=DEVNULL
-    cmd = ["net.exe", "use", target_drive, unc_path]
+    # Langkah 2: Mount share dengan cmdkey-first (tanpa password plaintext pada percobaan CLI utama)
+    cmd_no_pw = ["net.exe", "use", target_drive, unc_path]
+    if clean_user:
+        cmd_no_pw.append(f"/USER:{clean_user}")
+    cmd_no_pw.append("/PERSISTENT:NO")
+
+    cmd_with_pw = ["net.exe", "use", target_drive, unc_path]
     if clean_user:
         if clean_pass:
-            cmd.append(clean_pass)
-        cmd.append(f"/USER:{clean_user}")
-    cmd.append("/PERSISTENT:NO")
+            cmd_with_pw.append(clean_pass)
+        cmd_with_pw.append(f"/USER:{clean_user}")
+    cmd_with_pw.append("/PERSISTENT:NO")
 
-    masked_cmd = " ".join([c if (not clean_pass or c != clean_pass) else "***" for c in cmd])
-    logger_manager.log_info(f"[SMB Mount] Menjalankan: {masked_cmd}")
+    cmd = cmd_no_pw
+    logger_manager.log_info(f"[SMB Mount] Menjalankan (cmdkey-first): {' '.join(cmd)}")
 
     try:
         res = subprocess.run(
@@ -1401,9 +1411,32 @@ def mount_smb_share(
                 _notify_windows_explorer_refresh(added_drives=[target_drive])
             return True, f"Berhasil memasang {unc_path} ke {target_drive}"
 
+        # Fallback alternatif kredensial CLI bila cmdkey-first belum cukup (selain konflik sesi 1219/85/1202)
+        if clean_user and clean_pass and not any(err_code in combined_out for err_code in ("1219", "85", "1202")):
+            logger_manager.log_info(f"[SMB Mount] Percobaan cmdkey-first gagal ({res.returncode}); mencoba fallback kredensial CLI...")
+            alt_res = subprocess.run(
+                cmd_with_pw,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+                timeout=18.0,
+            )
+            alt_combined = f"{(alt_res.stdout or '').strip()} {(alt_res.stderr or '').strip()}".strip()
+            logger_manager.log_info(f"[SMB Mount] Fallback kode {alt_res.returncode}: {alt_combined}")
+            if alt_res.returncode == 0:
+                if notify_explorer:
+                    _notify_windows_explorer_refresh(added_drives=[target_drive])
+                return True, f"Berhasil memasang {unc_path} ke {target_drive}"
+            res = alt_res
+            combined_out = alt_combined
+
         # Langkah 3 (Standar Zima Client service/smb.go): Jika gagal karena Error 1219 / 85 / 1202 (konflik sesi/drive),
         # bersihkan seluruh sesi lama ke host tersebut, registrasi ulang cmdkey, dan retry 1x dengan kredensial lengkap!
         if any(err_code in combined_out for err_code in ("1219", "85", "1202")):
+            cmd = cmd_with_pw
             logger_manager.log_warning(f"[SMB Mount] Terdeteksi konflik sesi ({combined_out[:80]}). Menjalankan pembersihan otomatis ala Zima Client...")
             unmount_smb_share(target_drive, notify_explorer=False)
             purge_smb_sessions([clean_host], notify_explorer=False)
@@ -1773,9 +1806,41 @@ def preflight_smb_port(host, timeout=0.8):
     return bool(is_port_open(clean_h, 445, timeout=bounded_timeout))
 
 
-def open_drive_in_explorer(drive_letter="Z:", timeout=0.8):
+def _probe_drive_readonly_liveness(target_path, timeout=0.8):
     """
-    Membuka drive network yang ter-mount di File Explorer setelah preflight status & TCP port 445.
+    Uji keterbacaan read-only berbatas waktu (<0.8s) pada root drive via os.scandir.
+    Menangkap drive yang macet di level RPC/FUSE tanpa menulis file dummy (aman untuk share read-only & Google Drive).
+    """
+    bounded = min(float(timeout or 0.8), 0.8)
+    if bounded <= 0:
+        bounded = 0.8
+    done_ev = threading.Event()
+    outcome = {"ok": False, "err": None}
+
+    def _scan():
+        try:
+            with os.scandir(target_path) as it:
+                next(it, None)
+            outcome["ok"] = True
+        except PermissionError:
+            outcome["ok"] = True
+        except Exception as exc:
+            outcome["err"] = exc
+        finally:
+            done_ev.set()
+
+    threading.Thread(target=_scan, daemon=True, name="smb-readonly-probe").start()
+    if not done_ev.wait(timeout=bounded):
+        return False, f"Drive {target_path} macet pada probe read-only (>{bounded:.1f}s); tidak membuka Explorer."
+    if outcome["ok"]:
+        return True, "ok"
+    return False, f"Drive {target_path} tidak dapat diakses: {outcome['err']}"
+
+
+def open_drive_in_explorer(drive_letter="Z:", timeout=0.8, expected_host=None):
+    """
+    Membuka drive network yang ter-mount di File Explorer setelah preflight status, TCP port 445,
+    kecocokan host UNC aktual, dan bounded read-only liveness check.
     Mengembalikan tuple (bool, str).
     """
     clean_drive = drive_letter.strip().rstrip("\\").upper()
@@ -1789,8 +1854,14 @@ def open_drive_in_explorer(drive_letter="Z:", timeout=0.8):
             return False, f"Drive {clean_drive} terputus atau tidak aktif; tidak membuka Explorer."
         if wnet_code == 0 and wnet_unc:
             unc_host, _ = _extract_unc_host_and_share(wnet_unc)
+            if expected_host and unc_host and unc_host.lower() != str(expected_host).strip().lower():
+                return False, f"Target UNC {clean_drive} ({unc_host}) tidak cocok dengan host aktif ({expected_host})."
             if unc_host and not preflight_smb_port(unc_host, timeout=timeout):
                 return False, f"Host SMB ({unc_host}:445) tidak merespons; pembukaan {clean_drive} dibatalkan agar Explorer tidak hang."
+        if os.name == "nt" or os.path.exists(target_path):
+            live_ok, live_msg = _probe_drive_readonly_liveness(target_path, timeout=timeout)
+            if not live_ok:
+                return False, live_msg
 
     try:
         if sys.platform == "win32":

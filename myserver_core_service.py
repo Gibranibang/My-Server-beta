@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.7"
+APP_VERSION_NUMBER = "4.6.8"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -666,6 +666,7 @@ _cached_state = {
 
 
     "storage_partitions": [],
+    "smb_source": "zimaos",
 
 
 
@@ -14014,6 +14015,7 @@ def get_network_speeds():
 
 _backend_disks_usage_lock = threading.Lock()
 _cached_backend_disks_usage = {}
+_last_backend_disks_bg_fetch_ts = 0.0
 
 
 def _update_backend_disks_usage_cache(server_id, disks_list):
@@ -14033,8 +14035,43 @@ def _update_backend_disks_usage_cache(server_id, disks_list):
             used_b = int(d.get("used_bytes", 0) or 0)
             raw_free = d.get("free_bytes", None)
             free_b = int(raw_free) if raw_free is not None else max(tot_b - used_b, 0)
+            is_rem = bool(d.get("is_remote", False))
             if tot_b > 0:
-                _cached_backend_disks_usage[(sid, d_name)] = (tot_b, max(free_b, 0), now_ts)
+                _cached_backend_disks_usage[(sid, d_name)] = (tot_b, max(free_b, 0), now_ts, is_rem)
+
+
+def _maybe_refresh_backend_disks_usage_bg(min_interval_sec=30.0):
+    """Menyegarkan cache kapasitas REST Backend di latar belakang bila mode 'backend' aktif."""
+    global _last_backend_disks_bg_fetch_ts
+    now_ts = time.time()
+    if (now_ts - _last_backend_disks_bg_fetch_ts) < float(min_interval_sec):
+        return
+    try:
+        with _state_lock:
+            is_on = bool(_cached_state.get("is_online", False))
+        if not is_on or not config_manager:
+            return
+        cfg = config_manager.load_or_create_config()
+        srv = config_manager.get_active_server(cfg)
+        if not srv:
+            return
+        smb_cfg = config_manager.get_server_smb_source_config(srv)
+        if smb_cfg.get("source") != "backend":
+            return
+        if not (smb_cfg.get("access_token") or smb_cfg.get("hasCredentials")):
+            return
+        srv_id = str(srv.get("id") or "").strip()
+        backend_url = _get_active_server_backend_url(cfg, target_server_id=srv_id) or ""
+        if not backend_url:
+            return
+        _last_backend_disks_bg_fetch_ts = now_ts
+        d_code, d_data, _ = _backend_authenticated_request(
+            backend_url, "/api/v1/storage/disks", smb_cfg, srv_id, method="GET"
+        )
+        if d_code == 200 and isinstance(d_data, dict):
+            _update_backend_disks_usage_cache(srv_id, d_data.get("disks") or [])
+    except Exception:
+        pass
 
 
 def _unpack_explorer_result(res):
@@ -14424,12 +14461,14 @@ def _scan_live_drives_now():
 
                     tot = 0
                     fr = 0
+                    is_rem_drive = False
                     if smb_cfg_scan.get("source") == "backend":
                         scan_srv_id = str((srv_scan or {}).get("id") or "").strip()
                         with _backend_disks_usage_lock:
                             b_ent = _cached_backend_disks_usage.get((scan_srv_id, share_key))
                             if b_ent and len(b_ent) >= 2:
                                 tot, fr = int(b_ent[0]), int(b_ent[1])
+                                is_rem_drive = bool(b_ent[3]) if len(b_ent) >= 4 else False
                     else:
                         for cp in cached_parts:
                             if not isinstance(cp, dict):
@@ -14440,6 +14479,7 @@ def _scan_live_drives_now():
                                 tot = int(cp.get("total_bytes", 0))
                                 used_b = int(cp.get("used_bytes", 0))
                                 fr = max(tot - used_b, 0)
+                                is_rem_drive = bool(cp.get("is_remote", False))
                                 break
 
 
@@ -14525,6 +14565,7 @@ def _scan_live_drives_now():
 
 
                         "usedBytes": max(tot - fr, 0),
+                        "isRemote": is_rem_drive,
 
 
 
@@ -14843,6 +14884,8 @@ def update_drives_cache_loop():
 
 
             time.sleep(6)
+
+            _maybe_refresh_backend_disks_usage_bg()
 
 
 
@@ -18508,6 +18551,7 @@ _active_metrics_client = None
 
 
 _active_metrics_client_key = None
+_active_metrics_client_srv_id = None
 
 
 
@@ -18539,7 +18583,7 @@ def get_cached_metrics_client(srv, active_u):
 
 
 
-    global _active_metrics_client, _active_metrics_client_key
+    global _active_metrics_client, _active_metrics_client_key, _active_metrics_client_srv_id
 
 
 
@@ -18794,6 +18838,17 @@ def get_cached_metrics_client(srv, active_u):
 
 
 
+        prev_client = _active_metrics_client
+        prev_srv_id = _active_metrics_client_srv_id
+        cur_srv_id = srv.get("id")
+        if prev_client is not None and prev_srv_id and cur_srv_id == prev_srv_id:
+            prev_cache = getattr(prev_client, "last_storage_cache", None)
+            if isinstance(prev_cache, dict) and prev_cache.get("total_bytes", 0) > 0:
+                client.last_storage_cache = dict(prev_cache)
+            prev_parts = getattr(prev_client, "detailed_partitions_map", None)
+            if isinstance(prev_parts, dict) and prev_parts:
+                client.detailed_partitions_map = dict(prev_parts)
+
         _active_metrics_client = client
 
 
@@ -18803,6 +18858,7 @@ def get_cached_metrics_client(srv, active_u):
 
 
         _active_metrics_client_key = client_key
+        _active_metrics_client_srv_id = cur_srv_id
 
 
 
@@ -19066,7 +19122,7 @@ def run_auto_mount_with_retry(reason):
 
 
 
-def commit_fast_online(partial_m, s_name="", active_u="", route_lbl="", ip_str=""):
+def commit_fast_online(partial_m, s_name="", active_u="", route_lbl="", ip_str="", smb_source=""):
 
 
 
@@ -19095,6 +19151,9 @@ def commit_fast_online(partial_m, s_name="", active_u="", route_lbl="", ip_str="
 
 
     with _state_lock:
+        prev_disk_tot = int(_cached_state.get("storage_total_bytes", 0) or 0)
+        partial_disk_tot = int(partial_m.get("storage_total_bytes", 0) or 0)
+        has_fresh_storage = partial_disk_tot > 0 or fast_disk > 0 or prev_disk_tot <= 0
 
 
 
@@ -19127,6 +19186,9 @@ def commit_fast_online(partial_m, s_name="", active_u="", route_lbl="", ip_str="
 
 
         }
+
+        if smb_source:
+            update_dict["smb_source"] = smb_source
 
 
 
@@ -19162,7 +19224,7 @@ def commit_fast_online(partial_m, s_name="", active_u="", route_lbl="", ip_str="
 
 
 
-        if partial_m.get("storage_usage_pct") is not None:
+        if partial_m.get("storage_usage_pct") is not None and has_fresh_storage:
 
 
 
@@ -19202,7 +19264,7 @@ def commit_fast_online(partial_m, s_name="", active_u="", route_lbl="", ip_str="
 
 
 
-        if partial_m.get("storage_used_bytes") is not None:
+        if partial_m.get("storage_used_bytes") is not None and has_fresh_storage:
 
 
 
@@ -19214,7 +19276,7 @@ def commit_fast_online(partial_m, s_name="", active_u="", route_lbl="", ip_str="
 
 
 
-        if partial_m.get("storage_partitions"):
+        if partial_m.get("storage_partitions") and has_fresh_storage:
 
 
 
@@ -19417,11 +19479,16 @@ def update_metrics_loop():
 
 
 
+            cur_smb_cfg = config_manager.get_server_smb_source_config(s) if (s and hasattr(config_manager, "get_server_smb_source_config")) else {}
+            cur_smb_source = str((cur_smb_cfg.get("source") if isinstance(cur_smb_cfg, dict) else None) or (s.get("smb_source") if s else None) or "zimaos").strip().lower()
+            if cur_smb_source not in ("zimaos", "backend"):
+                cur_smb_source = "zimaos"
+
             def _commit_fast_online(partial_m):
 
 
 
-                commit_fast_online(partial_m, s_name, active_u, route_lbl, ip_str)
+                commit_fast_online(partial_m, s_name, active_u, route_lbl, ip_str, smb_source=cur_smb_source)
 
 
 
@@ -19690,7 +19757,11 @@ def update_metrics_loop():
 
 
 
-            if held_online:
+            storage_used_out = m.get("storage_used_bytes", used_b)
+            storage_total_out = m.get("storage_total_bytes", tot_b)
+            storage_parts_out = m.get("storage_partitions", [])
+
+            if (held_online or (raw_on and not srv_changed and int(storage_total_out or 0) <= 0 and disk_val == 0)):
 
 
 
@@ -19698,7 +19769,7 @@ def update_metrics_loop():
 
 
 
-                # Gagal sesaat: pertahankan metrik terakhir yang valid, jangan tampilkan 0 palsu
+                # Gagal sesaat atau sub-query storage timeout: pertahankan metrik terakhir yang valid, jangan tampilkan 0 palsu
 
 
 
@@ -19707,6 +19778,7 @@ def update_metrics_loop():
 
 
                 with _state_lock:
+                    if held_online:
 
 
 
@@ -19714,7 +19786,7 @@ def update_metrics_loop():
 
 
 
-                    cpu_val = _cached_state.get("cpu_percent", cpu_val)
+                        cpu_val = _cached_state.get("cpu_percent", cpu_val)
 
 
 
@@ -19722,7 +19794,7 @@ def update_metrics_loop():
 
 
 
-                    ram_val = _cached_state.get("ram_percent", ram_val)
+                        ram_val = _cached_state.get("ram_percent", ram_val)
 
 
 
@@ -19730,7 +19802,7 @@ def update_metrics_loop():
 
 
 
-                    disk_val = _cached_state.get("disk_percent", disk_val)
+                        is_admin_val = bool(_cached_state.get("is_admin", is_admin_val))
 
 
 
@@ -19738,7 +19810,14 @@ def update_metrics_loop():
 
 
 
-                    is_admin_val = bool(_cached_state.get("is_admin", is_admin_val))
+                    prev_tot_s = int(_cached_state.get("storage_total_bytes", 0) or 0)
+                    if held_online or prev_tot_s > 0:
+                        disk_val = _cached_state.get("disk_percent", disk_val)
+                        if prev_tot_s > 0 and int(storage_total_out or 0) <= 0:
+                            storage_used_out = _cached_state.get("storage_used_bytes", storage_used_out)
+                            storage_total_out = prev_tot_s
+                            if _cached_state.get("storage_partitions"):
+                                storage_parts_out = _cached_state.get("storage_partitions", storage_parts_out)
 
 
 
@@ -19926,7 +20005,7 @@ def update_metrics_loop():
 
 
 
-                    "storage_used_bytes": m.get("storage_used_bytes", used_b),
+                    "storage_used_bytes": storage_used_out,
 
 
 
@@ -19934,7 +20013,7 @@ def update_metrics_loop():
 
 
 
-                    "storage_total_bytes": m.get("storage_total_bytes", tot_b),
+                    "storage_total_bytes": storage_total_out,
 
 
 
@@ -19942,7 +20021,8 @@ def update_metrics_loop():
 
 
 
-                    "storage_partitions": m.get("storage_partitions", []),
+                    "storage_partitions": storage_parts_out,
+                    "smb_source": cur_smb_source,
 
 
 

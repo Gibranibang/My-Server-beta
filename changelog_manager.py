@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.8",
+        "channel": "Beta",
+        "date": "2026-11-22",
+        "title": "Perbaikan Bug Monitor DISK 0% (Isolasi Mount Cloud/FUSE & Preservasi Cache Telemetri, Backend v1.4.8)",
+        "notes": [
+            "Perbaikan Kalkulasi DISK di ZimaMetricsClient & TrayDock: Mengecualikan mount FUSE/cloud virtual (seperti Google Drive 100 TB) dari evaluasi umbrella pool `/DATA` dan agregasi kapasitas fisik di `zima_metrics_manager.py` maupun `TrayDock.tsx` (termasuk isolasi penuh mode `backend` sesuai DSK-01), sehingga kapasitas disk fisik tidak lagi terencerkan menjadi 0%.",
+            "Preservasi Cache DISK Saat Timeout, Switch Rute & Fast-Online: `get_cached_metrics_client()`, `commit_fast_online()`, `update_metrics_loop()`, dan `ZimaMetricsClient.fetch_metrics()` kini mempertahankan persentase disk terakhir yang valid ketika `/v2/local_storage/mount` timeout di jalur WAN, mengembalikan `size=0`, atau saat perpindahan rute/recovery server (`server_recovered`), serta memperbarui cache kapasitas mode `backend` secara berkala di latar belakang.",
+            "Peningkatan Cache & Penandaan Remote Mount di Backend v1.4.8: `_get_cached_disk_usage()` di `app/routers/storage.py` kini tetap menghangatkan `_DISK_USAGE_CACHE` setelah probe selesai meski melewati batas 2.5 detik (dengan single-flight guard), dan `StorageDiskItem` kini mengekspos flag `is_remote` untuk mount FUSE/cloud."
+        ],
+        "features": [
+            "Isolasi Kapasitas Cloud/FUSE 100 TB dari Monitor DISK Fisik & Mode Backend",
+            "Preservasi Cache DISK Anti-0% Saat Timeout WAN, Route Failover & Fast-Online",
+            "Async Cache Warming & Penandaan `is_remote` pada `/api/v1/storage/disks` (Backend v1.4.8)"
+        ]
+    },
+    {
         "version": "4.6.7",
         "channel": "Beta",
         "date": "2026-11-21",

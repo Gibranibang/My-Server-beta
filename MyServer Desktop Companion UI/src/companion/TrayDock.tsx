@@ -322,10 +322,18 @@ export default function TrayDock({
   onNavigate: (view: ViewId) => void
 }) {
   const { metrics, isOnline, power, settings, drives, transitionState, monitoringLoading } = useCompanion()
-  const accountDrives = drives || []
-  const accDriveCount = accountDrives.length
-  const accTotalBytes = accountDrives.reduce((sum, d) => sum + (d.totalBytes || 0), 0)
-  const accUsedBytes = accountDrives.reduce((sum, d) => sum + (d.usedBytes || 0), 0)
+  const isBackendSmbMode = metrics.smbSource === "backend"
+  const accountDrives = isBackendSmbMode ? [] : (drives || [])
+  const physicalDrives = accountDrives.filter((d) => !d.isRemote && (d.totalBytes || 0) > 0)
+  const effectiveDrives =
+    physicalDrives.length > 0
+      ? physicalDrives
+      : (metrics.storageTotalBytes && metrics.storageTotalBytes > 0)
+        ? []
+        : accountDrives
+  const accDriveCount = effectiveDrives.length
+  const accTotalBytes = effectiveDrives.reduce((sum, d) => sum + (d.totalBytes || 0), 0)
+  const accUsedBytes = effectiveDrives.reduce((sum, d) => sum + (d.usedBytes || 0), 0)
   const accUsedPct = accTotalBytes > 0 ? Math.round((accUsedBytes / accTotalBytes) * 100) : metrics.hdd
   const isId = settings?.language === "id"
   const offline = isId ? "server tidak terjangkau" : "server unreachable"

@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.6.8 - Beta] - 2026-11-22
+
+- Perbaikan Kalkulasi DISK di ZimaMetricsClient & TrayDock: Mengecualikan mount FUSE/cloud virtual (seperti Google Drive 100 TB) dari evaluasi umbrella pool `/DATA` dan agregasi kapasitas fisik di `zima_metrics_manager.py` maupun `TrayDock.tsx` (termasuk isolasi penuh mode `backend` sesuai DSK-01), sehingga kapasitas disk fisik tidak lagi terencerkan menjadi 0%.
+- Preservasi Cache DISK Saat Timeout, Switch Rute & Fast-Online: `get_cached_metrics_client()`, `commit_fast_online()`, `update_metrics_loop()`, dan `ZimaMetricsClient.fetch_metrics()` kini mempertahankan persentase disk terakhir yang valid ketika `/v2/local_storage/mount` timeout di jalur WAN, mengembalikan `size=0`, atau saat perpindahan rute/recovery server (`server_recovered`), serta memperbarui cache kapasitas mode `backend` secara berkala di latar belakang.
+- Peningkatan Cache & Penandaan Remote Mount di Backend v1.4.8: `_get_cached_disk_usage()` di `app/routers/storage.py` kini tetap menghangatkan `_DISK_USAGE_CACHE` setelah probe selesai meski melewati batas 2.5 detik (dengan single-flight guard), dan `StorageDiskItem` kini mengekspos flag `is_remote` untuk mount FUSE/cloud.
+
 ## [v4.6.7 - Beta] - 2026-11-21
 
 - Hapus Crawl Penuh storage_root di Backend v1.4.7: Menghilangkan os.walk(storage_root) pada pembersihan berkas sementara berkala (cleanup_temp_storage tiap 30 menit) sehingga partisi FUSE/Google Drive ZimaOS maupun HDD besar tidak lagi di-scan penuh secara diam-diam dan memicu rate-limit/hang di File Explorer.

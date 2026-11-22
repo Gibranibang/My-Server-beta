@@ -70,6 +70,35 @@ _du_inflight_lock = threading.Lock()
 _du_inflight_drives = set()
 _du_cached_usage = {}
 
+_REMOTE_CLOUD_FSTYPES = frozenset({
+    "rclone", "cifs", "smbfs", "nfs", "nfs4", "davfs", "webdav", "9p", "sshfs", "gcsfuse",
+})
+
+
+def _is_fuse_or_cloud_fstype(fs_type, source="", mount_point=""):
+    """Mengembalikan True jika filesystem/source berasal dari mount FUSE/cloud/jaringan remote."""
+    fs_low = str(fs_type or "").strip().lower()
+    if fs_low in ("fuseblk", "fusectl"):
+        return False
+    if fs_low in _REMOTE_CLOUD_FSTYPES or fs_low.startswith("fuse."):
+        return True
+    src_low = str(source or "").strip().lower()
+    if src_low.startswith(("rclone:", "gdrive", "onedrive", "s3:", "webdav:")):
+        return True
+    mp_low = str(mount_point or "").strip().lower()
+    if any(tok in mp_low for tok in ("/gdrive", "/google_drive", "/onedrive")):
+        return True
+    return False
+
+
+def _log_metrics_warning(msg):
+    """Mencatat peringatan telemetri secara aman tanpa mengganggu thread metrik."""
+    try:
+        import logger_manager
+        logger_manager.log_warning(msg)
+    except Exception:
+        pass
+
 
 def format_dynamic_bytes(size_bytes):
     """Format bytes ke B, KB, MB, GB, atau TB secara intuitif."""
@@ -203,6 +232,7 @@ class ZimaMetricsClient:
         self._storage_bg_running = False
         self._last_bg_storage_fetch = 0
         self._failed_dev_paths = set()
+        self._last_storage_warn_ts = 0.0
 
         self.refresh_token = None
 
@@ -1383,11 +1413,15 @@ class ZimaMetricsClient:
                         p_name = "System Storage (/DATA)"
 
                     if p_name and m_size > 0:
+                        m_src = str(m.get("source") or m.get("device") or "").strip()
+                        m_fs = m.get("fstype", "")
+                        m_is_remote = _is_fuse_or_cloud_fstype(m_fs, m_src, mp)
                         m_data = {
                             "name": p_name,
                             "raw_name": p_name,
                             "mount_point": mp,
-                            "fs_type": m.get("fstype", ""),
+                            "fs_type": m_fs,
+                            "is_remote": m_is_remote,
                             "used_bytes": m_used,
                             "total_bytes": m_size,
                             "avail_bytes": m_avail,
@@ -1401,6 +1435,13 @@ class ZimaMetricsClient:
                         self.detailed_partitions_map[p_name.lower()] = m_data
                         self.detailed_partitions_map[mp] = m_data
                         self.detailed_partitions_map[mp.lower()] = m_data
+        elif not mount_res:
+            now_warn = time.time()
+            if now_warn - getattr(self, "_last_storage_warn_ts", 0.0) >= 30.0:
+                self._last_storage_warn_ts = now_warn
+                _log_metrics_warning(
+                    f"[ZimaMetrics] /v2/local_storage/mount gagal/timeout untuk {self.base_url}; mempertahankan cache storage terakhir."
+                )
 
         # Ambil izin Samba user aktif jika non-admin
         user_allowed = self.get_user_authorized_shares() if not self.is_admin else None
@@ -1589,6 +1630,10 @@ class ZimaMetricsClient:
                         except Exception:
                             self._failed_dev_paths.add(dev_base)
 
+                is_remote_mount = bool(
+                    _is_fuse_or_cloud_fstype(fs, src, mp)
+                    or (isinstance(p_info, dict) and p_info.get("is_remote"))
+                )
                 if p_info and p_info.get("total_bytes", 0) > 0:
                     d_let = p_info.get("drive_letter", "")
                     p_fs = fs or p_info.get("fs_type", "")
@@ -1603,6 +1648,7 @@ class ZimaMetricsClient:
                         "raw_name": p_name,
                         "mount_point": mp,
                         "drive_letter": d_let,
+                        "is_remote": bool(is_remote_mount or _is_fuse_or_cloud_fstype(p_fs, src, mp)),
                         "used_bytes": p_info["used_bytes"],
                         "total_bytes": p_info["total_bytes"],
                         "pct": p_info["pct"],
@@ -1614,6 +1660,7 @@ class ZimaMetricsClient:
                         "name": f"{p_name} ({fs})" if fs else p_name,
                         "raw_name": p_name,
                         "mount_point": mp,
+                        "is_remote": is_remote_mount,
                         "used_bytes": m_used,
                         "total_bytes": m_size,
                         "pct": round(m_pct, 1),
@@ -1624,6 +1671,7 @@ class ZimaMetricsClient:
                         "name": f"{p_name} ({fs})" if fs else p_name,
                         "raw_name": p_name,
                         "mount_point": mp,
+                        "is_remote": is_remote_mount,
                         "used_bytes": 0,
                         "total_bytes": 0,
                         "pct": 0.0,
@@ -1654,7 +1702,7 @@ class ZimaMetricsClient:
                     c_key = self._canonical_vol_key(r_name or p_data.get("mount_point"))
                     if not c_key or c_key in seen_vol_keys or RAW_DEV_REGEX.match(c_key):
                         continue
-                    if c_key == "data":
+                    if c_key == "data" or p_data.get("mount_point") == "/DATA":
                         continue
                     if p_data.get("total_bytes", 0) <= 0:
                         continue
@@ -1669,27 +1717,35 @@ class ZimaMetricsClient:
                 seen_vol_keys.add(c_key)
                 partitions.append(nd)
 
-            # 6b. Evaluasi cerdas apakah /DATA merupakan umbrella pool agregat dari disk-disk individual:
-            # Pada ZimaOS, jika pengguna memiliki 2+ disk fisik/network (/media/*, network drives)
-            # dan kapasitas disk-disk tersebut mendekati atau sama dengan sys_tot,
-            # maka sys_tot/DATA adalah pool total gabungan seluruh disk, BUKAN partisi fisik tersendiri!
-            # Menampilkannya akan menduplikasi kapasitas (misal: 3.3TB + 3.3TB = 5.6TB / 6.6TB).
-            user_disks = [p for p in partitions if p.get("mount_point") != "/DATA" and p.get("total_bytes", 0) > 0]
+            # 6b. Evaluasi cerdas apakah /DATA merupakan umbrella pool agregat dari disk-disk fisik lokal:
+            # Hanya hitung disk lokal fisik (kecualikan FUSE/cloud/rclone & network drive) dan beri batas atas wajar
+            # agar mount cloud raksasa (misal Google Drive 100 TB) tidak salah membuang /DATA atau mengencerkan DISK %.
+            user_disks = [
+                p for p in partitions
+                if p.get("mount_point") != "/DATA"
+                and p.get("total_bytes", 0) > 0
+                and not p.get("is_remote")
+                and not p.get("is_network_drive")
+                and not _is_fuse_or_cloud_fstype(p.get("fs_type", ""), "", p.get("mount_point", ""))
+            ]
             user_disks_size = sum(p.get("total_bytes", 0) for p in user_disks)
 
             is_data_umbrella_pool = False
             if len(user_disks) >= 2 and sys_tot > 0:
-                if user_disks_size >= sys_tot * 0.7 or abs(sys_tot - user_disks_size) < (sys_tot * 0.35):
+                if (sys_tot * 0.7 <= user_disks_size <= sys_tot * 1.35) or abs(sys_tot - user_disks_size) < (sys_tot * 0.35):
                     is_data_umbrella_pool = True
 
             if not is_data_umbrella_pool and data_partition_obj and "data" not in seen_vol_keys:
                 seen_vol_keys.add("data")
                 partitions.insert(0, data_partition_obj)
 
-            # 7. Hitung total penyimpanan seluruh partisi server secara akurat (deduplikasi kanonikal ketat)
+            # 7. Hitung total penyimpanan fisik server secara akurat (deduplikasi kanonikal ketat)
             tot_p_size = 0
             tot_p_used = 0
+            all_p_size = 0
+            all_p_used = 0
             counted_volumes = set()
+            counted_all_volumes = set()
 
             for p in partitions:
                 p_sz = p.get("total_bytes", 0)
@@ -1697,10 +1753,25 @@ class ZimaMetricsClient:
                 if p_sz <= 0:
                     continue
                 c_key = self._canonical_vol_key(p.get("raw_name") or p.get("name") or p.get("mount_point"))
-                if c_key and c_key not in counted_volumes:
+                if not c_key:
+                    continue
+                if c_key not in counted_all_volumes:
+                    counted_all_volumes.add(c_key)
+                    all_p_size += p_sz
+                    all_p_used += p_us
+                p_remote = bool(
+                    p.get("is_remote")
+                    or p.get("is_network_drive")
+                    or _is_fuse_or_cloud_fstype(p.get("fs_type", ""), "", p.get("mount_point", ""))
+                )
+                if not p_remote and c_key not in counted_volumes:
                     counted_volumes.add(c_key)
                     tot_p_size += p_sz
                     tot_p_used += p_us
+
+            if tot_p_size <= 0 and all_p_size > 0 and self.last_storage_cache.get("total_bytes", 0) <= 0:
+                tot_p_size = all_p_size
+                tot_p_used = all_p_used
 
             if tot_p_size > 0:
                 tot_p_pct = (tot_p_used / tot_p_size * 100.0) if tot_p_size > 0 else 0.0
@@ -1719,7 +1790,7 @@ class ZimaMetricsClient:
                     "label": "System Storage",
                     "partitions": partitions,
                 }
-            elif partitions:
+            elif partitions and self.last_storage_cache.get("total_bytes", 0) <= 0:
                 self.last_storage_cache = {
                     "total_bytes": 0,
                     "used_bytes": 0,
@@ -1727,6 +1798,13 @@ class ZimaMetricsClient:
                     "label": "Server Storage",
                     "partitions": partitions,
                 }
+            elif partitions:
+                now_warn = time.time()
+                if now_warn - getattr(self, "_last_storage_warn_ts", 0.0) >= 30.0:
+                    self._last_storage_warn_ts = now_warn
+                    _log_metrics_warning(
+                        f"[ZimaMetrics] Partisi mount mengembalikan size=0 pada {self.base_url}; menjaga last_storage_cache valid ({self.last_storage_cache.get('usage_pct')}%)."
+                    )
 
         else:
             # AKUN NON-ADMIN:
@@ -1832,7 +1910,7 @@ class ZimaMetricsClient:
                     tot_size += nd.get("total_bytes", 0)
                     tot_used += nd.get("used_bytes", 0)
 
-            if partitions:
+            if partitions and (tot_size > 0 or self.last_storage_cache.get("total_bytes", 0) <= 0):
                 tot_pct = (tot_used / tot_size * 100.0) if tot_size > 0 else 0.0
                 self.last_storage_cache = {
                     "total_bytes": tot_size,
@@ -1841,7 +1919,7 @@ class ZimaMetricsClient:
                     "label": f"Workspace ({self.username})",
                     "partitions": partitions,
                 }
-            else:
+            elif not partitions and self.last_storage_cache.get("total_bytes", 0) <= 0:
                 self.last_storage_cache = {
                     "total_bytes": 0,
                     "used_bytes": 0,

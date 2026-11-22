@@ -195,6 +195,108 @@ class TestSmbMetricsIsolation(unittest.TestCase):
         self.assertNotIn("gethostbyname", scan_attrs)
         self.assertNotIn("gethostbyaddr", id_attrs)
 
+    def test_06_umbrella_pool_ignores_fuse_cloud_and_preserves_valid_storage_cache(self):
+        client = _make_client()
+        client.smb_source = "backend"
+        client._last_bg_storage_fetch = 9e18  # skip background thread spawn
+
+        tb = 1024 ** 4
+        gb = 1024 ** 3
+        util_payload = {
+            "data": {
+                "cpu": {"percent": 55.0},
+                "mem": {"used": 8 * gb, "total": 16 * gb, "usedPercent": 50.0},
+                "net": [{"rxBytesPerSec": 130000, "txBytesPerSec": 0}],
+                "sys_disk": {"size": 476 * gb, "used": 165 * gb},
+            }
+        }
+        mount_payload_with_cloud = {
+            "data": [
+                {"mount_point": "/DATA", "fstype": "ext4", "size": 476 * gb, "used": 165 * gb},
+                {"mount_point": "/media/CloudDrive_A", "fstype": "fuse.rclone", "source": "rclone:gdrive", "size": 100 * tb, "used": 100 * gb},
+                {"mount_point": "/media/CloudDrive_B", "fstype": "fuse.rclone", "source": "rclone:gdrive2", "size": 5 * tb, "used": 10 * gb},
+            ]
+        }
+
+        def fake_req(endpoint, **_kw):
+            if endpoint == "/v1/sys/utilization":
+                return util_payload
+            if endpoint == "/v2/local_storage/mount":
+                return mount_payload_with_cloud
+            return None
+
+        with patch.object(client, "_make_request", side_effect=fake_req):
+            m1 = client.fetch_metrics()
+
+        self.assertGreater(m1["storage_usage_pct"], 30.0)
+        self.assertEqual(m1["storage_total_bytes"], 476 * gb)
+
+        # Transient timeout/size=0 on /v2/local_storage/mount must NOT reset valid last_storage_cache to 0.0
+        def fake_req_timeout(endpoint, **_kw):
+            if endpoint == "/v1/sys/utilization":
+                return {"data": {"cpu": {"percent": 20.0}, "mem": {"used": 8 * gb, "total": 16 * gb, "usedPercent": 50.0}}}
+            if endpoint == "/v2/local_storage/mount":
+                return {"data": [{"mount_point": "/media/USB", "fstype": "ext4", "size": 0, "used": 0}]}
+            return None
+
+        with patch.object(client, "_make_request", side_effect=fake_req_timeout):
+            m2 = client.fetch_metrics()
+
+        self.assertGreater(m2["storage_usage_pct"], 30.0)
+        self.assertEqual(m2["storage_total_bytes"], 476 * gb)
+
+    def test_07_core_commit_fast_online_and_client_carryover_preserve_disk_percent(self):
+        import myserver_core_service as core
+
+        with core._state_lock:
+            saved_state = dict(core._cached_state)
+        saved_client = core._active_metrics_client
+        saved_key = core._active_metrics_client_key
+        saved_srv_id = core._active_metrics_client_srv_id
+        try:
+            with core._state_lock:
+                core._cached_state["disk_percent"] = 35
+                core._cached_state["storage_total_bytes"] = 476 * (1024 ** 3)
+                core._cached_state["storage_used_bytes"] = 165 * (1024 ** 3)
+                core._cached_state["storage_partitions"] = [{"name": "System Storage (/DATA)"}]
+
+            # Fast callback right after /v1/sys/utilization (before storage fetched) must not overwrite 35% with 0%
+            core.commit_fast_online(
+                {"cpu_usage_pct": 55.0, "ram_usage_pct": 31.0, "storage_usage_pct": 0.0, "storage_total_bytes": 0},
+                s_name="STIMI-Server",
+                smb_source="backend",
+            )
+            with core._state_lock:
+                self.assertEqual(core._cached_state["disk_percent"], 35)
+                self.assertEqual(core._cached_state["smb_source"], "backend")
+
+            # Route change for same server_id carries over valid last_storage_cache
+            srv = {
+                "id": "srv_test_1",
+                "name": "STIMI-Server",
+                "connections": [{"url": "https://example.com"}],
+                "active_connection": "auto",
+                "active_profile": "Admin",
+            }
+            c1 = core.get_cached_metrics_client(srv, "https://example.com")
+            c1.last_storage_cache = {
+                "total_bytes": 476 * (1024 ** 3),
+                "used_bytes": 165 * (1024 ** 3),
+                "usage_pct": 34.7,
+                "label": "Server Storage",
+                "partitions": [{"name": "System Storage (/DATA)"}],
+            }
+            c2 = core.get_cached_metrics_client(srv, "http://192.168.1.50:80")
+            self.assertIsNot(c1, c2)
+            self.assertEqual(c2.last_storage_cache["usage_pct"], 34.7)
+        finally:
+            with core._state_lock:
+                core._cached_state.clear()
+                core._cached_state.update(saved_state)
+            core._active_metrics_client = saved_client
+            core._active_metrics_client_key = saved_key
+            core._active_metrics_client_srv_id = saved_srv_id
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -408,6 +408,10 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     const appsInterval = setInterval(() => {
       void refreshWebApps()
     }, 10000)
+    const drivesInterval = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return
+      void api.listDrives().then(setDrives).catch(() => undefined)
+    }, 15000)
     const syncDetailsAndMac = (details: any) => {
       const active = details?.routes?.find((r: any) => r.active)
       if (active && active.url) {
@@ -536,12 +540,19 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       offMetrics()
       offPower()
       clearInterval(appsInterval)
+      clearInterval(drivesInterval)
       clearInterval(milestoneInterval)
       clearTimeout(monitoringFallbackTimer)
       clearTimeout(autoUpdateCheckTimer)
       window.removeEventListener("myserver:refresh", onStoreRefresh)
     }
   }, [api, refreshWebApps, telemetrySuspended])
+
+  const hasStoragePartitions = Boolean(metrics.storagePartitions && metrics.storagePartitions.length > 0)
+  useEffect(() => {
+    if (telemetrySuspended || !hasStoragePartitions) return
+    void api.listDrives().then(setDrives).catch(() => undefined)
+  }, [api, hasStoragePartitions, telemetrySuspended])
 
   const value = useMemo<CompanionStore>(
     () => ({

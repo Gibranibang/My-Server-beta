@@ -251,6 +251,7 @@ export function createRealApi(): CompanionApi {
   let isPollingRunning = false
   let pollTimeoutId: number | undefined
   let isPollInProgress = false
+  let hasEmittedInitialOnlineRefresh = false
 
   const parseStateToMetrics = (state: any): Metrics => {
     if (state.ip) {
@@ -287,6 +288,7 @@ export function createRealApi(): CompanionApi {
       storageUsedBytes: state.storage_used_bytes !== undefined ? Number(state.storage_used_bytes) : undefined,
       storageTotalBytes: state.storage_total_bytes !== undefined ? Number(state.storage_total_bytes) : undefined,
       storagePartitions: Array.isArray(state.storage_partitions) ? state.storage_partitions : undefined,
+      smbSource: state.smb_source === "backend" ? "backend" : state.smb_source === "zimaos" ? "zimaos" : undefined,
       isLoading: Boolean(state.telemetry_loading),
     }
     return currentMetrics
@@ -328,7 +330,8 @@ export function createRealApi(): CompanionApi {
         const prevPower = power
         const nextPower = isOnline ? "online" : "offline"
         setPower(nextPower)
-        if (prevPower !== "online" && nextPower === "online") {
+        if (nextPower === "online" && (prevPower !== "online" || !hasEmittedInitialOnlineRefresh)) {
+          hasEmittedInitialOnlineRefresh = true
           powerChangedToOnline = true
         }
       }

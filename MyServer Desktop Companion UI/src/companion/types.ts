@@ -115,6 +115,7 @@ export interface Metrics {
   storageUsedBytes?: number
   storageTotalBytes?: number
   storagePartitions?: StoragePartitionItem[]
+  smbSource?: SmbSourceMode
   isLoading?: boolean
 }
 
@@ -127,6 +128,7 @@ export interface Drive {
   mounted: boolean
   totalBytes?: number
   usedBytes?: number
+  isRemote?: boolean
 }
 
 export type SmbSourceMode = "zimaos" | "backend"

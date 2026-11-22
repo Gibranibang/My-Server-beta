@@ -187,8 +187,10 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       const shouldReset = options?.resetMetrics ?? false
       if (shouldReset) {
         setMonitoringLoading(true)
+        setDrives([])
         setMetrics({
           ...EMPTY_METRICS,
+          smbSyncing: true,
           isLoading: true,
         })
       }
@@ -198,7 +200,8 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         // Progressive auto-refresh for newly mounted SMB drives & fresh metrics
         void (async () => {
           let metricsSettled = false
-          for (let i = 0; i < 16; i++) {
+          let smbSettled = false
+          for (let i = 0; i < 24; i++) {
             try {
               const [drivesRes, freshMetrics] = await Promise.allSettled([
                 api.listDrives(),
@@ -214,14 +217,17 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
                   setMonitoringLoading(false)
                   metricsSettled = true
                 }
+                if (!fresh.smbSyncing) {
+                  smbSettled = true
+                }
               }
             } catch {
               // ignore
             }
-            if (metricsSettled && i >= 6) {
+            if (metricsSettled && smbSettled && i >= 6) {
               break
             }
-            await new Promise((r) => setTimeout(r, 350))
+            await new Promise((r) => setTimeout(r, i < 8 ? 350 : 600))
           }
           setMonitoringLoading(false)
           setMetrics((m) => (m.isLoading ? { ...m, isLoading: false } : m))
@@ -549,10 +555,31 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
   }, [api, refreshWebApps, telemetrySuspended])
 
   const hasStoragePartitions = Boolean(metrics.storagePartitions && metrics.storagePartitions.length > 0)
+  const isSmbSyncing = Boolean(metrics.smbSyncing)
+  const prevSmbSyncingRef = useRef(false)
   useEffect(() => {
     if (telemetrySuspended || !hasStoragePartitions) return
     void api.listDrives().then(setDrives).catch(() => undefined)
   }, [api, hasStoragePartitions, telemetrySuspended])
+
+  useEffect(() => {
+    if (telemetrySuspended) {
+      prevSmbSyncingRef.current = isSmbSyncing
+      return
+    }
+    if (isSmbSyncing) {
+      prevSmbSyncingRef.current = true
+      void api.listDrives().then(setDrives).catch(() => undefined)
+      const syncPoll = setInterval(() => {
+        void api.listDrives().then(setDrives).catch(() => undefined)
+      }, 2000)
+      return () => clearInterval(syncPoll)
+    }
+    if (prevSmbSyncingRef.current) {
+      prevSmbSyncingRef.current = false
+      void api.listDrives().then(setDrives).catch(() => undefined)
+    }
+  }, [api, isSmbSyncing, telemetrySuspended])
 
   const value = useMemo<CompanionStore>(
     () => ({

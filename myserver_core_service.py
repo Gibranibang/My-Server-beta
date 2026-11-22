@@ -393,7 +393,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.9"
+APP_VERSION_NUMBER = "4.6.10"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -667,6 +667,10 @@ _cached_state = {
 
     "storage_partitions": [],
     "smb_source": "zimaos",
+    "smb_syncing": False,
+    "smb_sync_reason": "",
+    "smb_sync_message": "",
+    "active_server_id": "",
 
 
 
@@ -675,6 +679,32 @@ _cached_state = {
 
 
 }
+
+_metrics_switch_epoch = 0
+_last_mounted_server_id = None
+_partial_retry_timer = None
+_partial_retry_lock = threading.Lock()
+
+
+def _bump_metrics_switch_epoch(reset_client=False):
+    """Menandai pergantian server/rute/profil agar hasil fetch metrik in-flight yang usang dibuang."""
+    global _metrics_switch_epoch, _active_metrics_client, _active_metrics_client_key, _active_metrics_client_srv_id
+    with _state_lock:
+        _metrics_switch_epoch += 1
+        epoch_val = _metrics_switch_epoch
+    if reset_client:
+        _active_metrics_client = None
+        _active_metrics_client_key = None
+        _active_metrics_client_srv_id = None
+    return epoch_val
+
+
+def _set_smb_sync_state(syncing, reason="", message=""):
+    """Memperbarui indikator status sinkronisasi SMB secara thread-safe untuk UI."""
+    with _state_lock:
+        _cached_state["smb_syncing"] = bool(syncing)
+        _cached_state["smb_sync_reason"] = str(reason or "") if syncing else ""
+        _cached_state["smb_sync_message"] = str(message or "") if syncing else ""
 
 
 
@@ -7498,6 +7528,7 @@ def _unmount_myserver_smb_drives(
     include_all_servers=False,
     include_easytier_subnet=False,
     easytier_only=False,
+    exclude_hosts=None,
 ):
     """Melepaskan hanya drive SMB milik MyServer dengan allowlist host ketat."""
     hosts = set()
@@ -7519,6 +7550,13 @@ def _unmount_myserver_smb_drives(
             include_all_servers=include_all_servers,
         )
         prefixes = ("10.126.126.",) if include_easytier_subnet else None
+
+    if exclude_hosts:
+        excl_lc = {str(h).strip().lower() for h in exclude_hosts if str(h).strip()}
+        hosts = {h for h in hosts if h not in excl_lc}
+
+    if not hosts and not prefixes:
+        return 0
 
     try:
         unmounted = smb_mount_manager.unmount_all_smb_shares(
@@ -16094,111 +16132,57 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
 
 
 
-    global _pending_rebind_reason
-
-
+    global _pending_rebind_reason, _last_mounted_server_id, _partial_retry_timer
 
     if not _smb_pipeline_lock.acquire(blocking=False):
-
-
-
         with _pending_rebind_lock:
-
-
-
             _pending_rebind_reason = reason
-
-
-
+        _set_smb_sync_state(True, reason=reason, message="Menjadwalkan sinkronisasi partisi SMB...")
         logger_manager.log_info(f"[SMB Pipeline] Menjadwalkan ulang pemicu '{reason}' setelah pipeline aktif selesai.")
-
-
-
         return []
 
-
-
-
-
-
-
     try:
-
-
-
-
-
-
-
+        should_schedule_followup = False
+        followup_delay = 3.5
+        followup_reason = "partial_retry"
+        _set_smb_sync_state(True, reason=reason, message="Menyinkronkan partisi penyimpanan SMB...")
         logger_manager.log_info(f"[SMB Pipeline] Memulai sinkronisasi storage (Pemicu: {reason})...")
 
+        cfg = config_manager.load_or_create_config()
+        srv = config_manager.get_active_server(cfg)
+        if not srv:
+            return []
 
-
-
-
-
-
-        # Pemicu otomatis (boot/pemulihan server) bersifat non-destruktif: drive yang sudah sehat
-
-
-
-        # tidak dilepas; mount_all_smb_shares hanya membersihkan drive Red-X & memasang yang belum ada.
-
-
-
-        soft_mode = reason in ("startup_auto", "server_recovered")
-
-
-
-
-
-
+        cur_srv_id_pipeline = srv.get("id")
+        server_switched_since_mount = bool(
+            _last_mounted_server_id and cur_srv_id_pipeline and _last_mounted_server_id != cur_srv_id_pipeline
+        )
+        soft_mode = (reason in ("startup_auto", "server_recovered")) and not server_switched_since_mount
 
         if soft_mode:
+            active_hosts = _collect_myserver_smb_hosts(cfg=cfg, server=srv, include_all_servers=False)
+            foreign_unmounted = _unmount_myserver_smb_drives(
+                reason=f"pipeline:{reason}:foreign",
+                cfg=cfg,
+                server=srv,
+                include_all_servers=True,
+                include_easytier_subnet=True,
+                exclude_hosts=active_hosts,
+            )
+            if foreign_unmounted:
+                logger_manager.log_info(f"[SMB Pipeline] Melepaskan {foreign_unmounted} drive milik server lain sebelum pemulihan.")
             logger_manager.log_info("[SMB Pipeline] Mode non-destruktif: drive sehat dipertahankan, hanya melengkapi yang belum terpasang.")
         elif not pre_unmounted:
-            unmounted_count = _unmount_myserver_smb_drives(reason=f"pipeline:{reason}", include_easytier_subnet=True)
+            unmounted_count = _unmount_myserver_smb_drives(
+                reason=f"pipeline:{reason}",
+                cfg=cfg,
+                server=srv,
+                include_all_servers=True,
+                include_easytier_subnet=True,
+            )
             logger_manager.log_info(f"[SMB Pipeline] Berhasil melepaskan {unmounted_count} drive lama.")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-        cfg = config_manager.load_or_create_config()
-
-
-
-
-
-
-
-        srv = config_manager.get_active_server(cfg)
-
-
-
-
-
-
-
-        if not srv:
-
-
-
-
-
-
-
-            return []
 
 
 
@@ -16334,13 +16318,40 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
         mount_ok = bool(isinstance(res, tuple) and res[0])
         if srv and srv.get("id"):
             _record_smb_mount_outcome(srv.get("id"), mount_ok)
+        mount_summary = {}
+        try:
+            if hasattr(smb_mount_manager, "get_last_mount_summary"):
+                mount_summary = smb_mount_manager.get_last_mount_summary() or {}
+        except Exception:
+            mount_summary = {}
+        failed_shares = list(mount_summary.get("failed_shares") or [])
+
         if mount_ok:
+            _last_mounted_server_id = srv.get("id")
             mounted_host = (
                 (getattr(smb_mount_manager, "_cached_resolved_smb_host", {}) or {}).get("resolved")
                 or resolved_b_host
                 or host
             )
             _record_mounted_smb_host(srv.get("id"), mounted_host)
+
+        should_schedule_followup = False
+        followup_delay = 3.5
+        followup_reason = "partial_retry"
+        if mount_ok and failed_shares and reason not in ("partial_retry", "shutdown"):
+            should_schedule_followup = True
+            followup_delay = 3.5
+            followup_reason = "partial_retry"
+            logger_manager.log_info(
+                f"[SMB Pipeline] {len(failed_shares)} partisi gagal/timeout ({', '.join(failed_shares)}); menjadwalkan retry terarah dalam {followup_delay}s."
+            )
+        elif not mount_ok and reason == "switch_server":
+            should_schedule_followup = True
+            followup_delay = 4.0
+            followup_reason = "switch_server_retry"
+            logger_manager.log_info(
+                f"[SMB Pipeline] Mount awal setelah switch_server belum berhasil; menjadwalkan retry dalam {followup_delay}s."
+            )
 
         if smb_source == "backend" and config_manager:
             try:
@@ -16457,26 +16468,33 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
 
 
         if next_reason:
-
-
-
+            _set_smb_sync_state(True, reason=next_reason, message="Melanjutkan sinkronisasi partisi SMB...")
             threading.Thread(
-
-
-
                 target=rebind_storage_pipeline,
-
-
-
                 args=(next_reason, True),
-
-
-
                 daemon=True,
-
-
-
             ).start()
+        else:
+            _set_smb_sync_state(False)
+            if should_schedule_followup and srv and srv.get("id"):
+                target_retry_sid = srv.get("id")
+                def _run_deferred_retry(expected_sid=target_retry_sid, retry_reason=followup_reason):
+                    try:
+                        c_now = config_manager.load_or_create_config() if config_manager else {}
+                        s_now = config_manager.get_active_server(c_now) if config_manager else None
+                        if s_now and s_now.get("id") == expected_sid:
+                            rebind_storage_pipeline(retry_reason, pre_unmounted=True)
+                    except Exception:
+                        pass
+                with _partial_retry_lock:
+                    if _partial_retry_timer is not None:
+                        try:
+                            _partial_retry_timer.cancel()
+                        except Exception:
+                            pass
+                    _partial_retry_timer = threading.Timer(followup_delay, _run_deferred_retry)
+                    _partial_retry_timer.daemon = True
+                    _partial_retry_timer.start()
 
 
 
@@ -16740,7 +16758,7 @@ def _handle_smb_source_request(body=None):
         action = "get"
 
     def _collect_hosts(target_srv, target_cfg):
-        return _collect_myserver_smb_hosts(cfg=target_cfg, server=target_srv, include_all_servers=False)
+        return _collect_myserver_smb_hosts(cfg=target_cfg, server=target_srv, include_all_servers=True)
 
     def _resolve_backend_url(target_cfg, target_srv):
         raw_url = _get_active_server_backend_url(target_cfg, target_server_id=target_srv.get("id")) or ""
@@ -17041,6 +17059,8 @@ def _handle_smb_source_request(body=None):
             access_token=active_token,
         )
 
+        with _state_lock:
+            _cached_state["smb_source"] = "backend"
         if auto_mount:
             rebind_storage_pipeline("switch_source_backend", pre_unmounted=True)
 
@@ -17100,6 +17120,8 @@ def _handle_smb_source_request(body=None):
     cfg = config_manager.load_or_create_config()
     config_manager.save_server_smb_source_config(cfg, srv_id, "zimaos")
 
+    with _state_lock:
+        _cached_state["smb_source"] = "zimaos"
     if auto_mount:
         rebind_storage_pipeline("switch_source_zimaos", pre_unmounted=True)
 
@@ -18988,18 +19010,13 @@ def get_cached_metrics_client(srv, active_u):
 
 
 
-    client_key = (srv_host, srv_port, use_https, u_name, p_pass, is_auto)
-
-
-
-
-
-
-
     smb_cfg = config_manager.get_server_smb_source_config(srv) if (config_manager and hasattr(config_manager, "get_server_smb_source_config")) else {}
     srv_smb_source = str((smb_cfg.get("source") if isinstance(smb_cfg, dict) else None) or srv.get("smb_source") or "zimaos").strip().lower()
     if srv_smb_source not in ("zimaos", "backend"):
         srv_smb_source = "zimaos"
+
+    srv_id = srv.get("id") or ""
+    client_key = (srv_id, srv_host, srv_port, use_https, u_name, p_pass, is_auto, srv_smb_source)
 
     if _active_metrics_client is not None and _active_metrics_client_key == client_key:
 
@@ -19785,31 +19802,32 @@ def update_metrics_loop():
             if cur_smb_source not in ("zimaos", "backend"):
                 cur_smb_source = "zimaos"
 
+            loop_srv_id = cur_srv_id
+            with _state_lock:
+                loop_epoch = _metrics_switch_epoch
+
             def _commit_fast_online(partial_m):
-
-
-
+                with _state_lock:
+                    if _metrics_switch_epoch != loop_epoch:
+                        return
                 commit_fast_online(partial_m, s_name, active_u, route_lbl, ip_str, smb_source=cur_smb_source)
 
-
-
-
-
-
-
             # Ambil metrik telemetri nyata dari ZimaMetricsClient
-
-
-
             client = get_cached_metrics_client(s, active_u)
-
-
-
-
-
-
-
             m = client.fetch_metrics(on_online_callback=_commit_fast_online) if client else {}
+
+            # Jika server/rute/profil berpindah saat fetch_metrics() in-flight, buang hasil usang agar tidak menimpa state server baru
+            try:
+                cfg_post = config_manager.load_or_create_config()
+                s_post = config_manager.get_active_server(cfg_post)
+                post_srv_id = s_post.get("id") if s_post else None
+                with _state_lock:
+                    post_epoch = _metrics_switch_epoch
+                if post_srv_id != loop_srv_id or post_epoch != loop_epoch:
+                    time.sleep(0.1)
+                    continue
+            except Exception:
+                pass
 
 
 
@@ -20358,6 +20376,7 @@ def update_metrics_loop():
 
 
                     "storage_partitions": storage_parts_out,
+                    "active_server_id": cur_srv_id or "",
                     "smb_source": cur_smb_source,
 
 
@@ -32699,7 +32718,27 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 logger_manager.log_info(f"[CoreService] Server aktif beralih ke: {server_id} ({s_name})")
+                switch_epoch = _bump_metrics_switch_epoch(reset_client=True)
+                clear_smb_mount_failure_cooldown(server_id)
+                with _partial_retry_lock:
+                    if _partial_retry_timer is not None:
+                        try:
+                            _partial_retry_timer.cancel()
+                        except Exception:
+                            pass
+                smb_mount_manager.clear_smb_share_cache()
+                smb_mount_manager.invalidate_smb_host_cache()
+                target_smb_cfg = (
+                    config_manager.get_server_smb_source_config(target_srv)
+                    if hasattr(config_manager, "get_server_smb_source_config")
+                    else {}
+                )
+                target_smb_source = str((target_smb_cfg.get("source") if isinstance(target_smb_cfg, dict) else None) or target_srv.get("smb_source") or "zimaos").strip().lower()
+                if target_smb_source not in ("zimaos", "backend"):
+                    target_smb_source = "zimaos"
+
                 # Beralih jaringan EasyTier otomatis ke Remote ID milik server target jika berbeda
+                switched_easytier = False
                 target_rid = (target_srv.get("remote_id") or target_srv.get("zerotier_network_id") or "").strip().lower()
                 r_mode = (target_srv.get("remote_mode") or cfg.get("remote_mode", "auto")).lower()
                 if easytier_manager and r_mode in ("auto", "easytier"):
@@ -32707,6 +32746,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         et_mgr = easytier_manager.get_easytier_manager()
                         cur_rid = (et_mgr.get_remote_id() or "").strip().lower()
                         if target_rid and target_rid != cur_rid and et_mgr.is_running():
+                            switched_easytier = True
                             logger_manager.log_info(f"[CoreService] Beralih jaringan EasyTier ke Remote ID target: {target_rid}")
                             et_params = easytier_manager.derive_easytier_params(target_rid)
                             et_mgr.start_easytier(
@@ -32717,12 +32757,6 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             )
                     except Exception as et_switch_err:
                         logger_manager.log_error(f"[CoreService] Gagal beralih EasyTier ke server target: {et_switch_err}")
-
-
-
-
-
-
 
                 invalidate_active_route_cache()
 
@@ -32825,13 +32859,12 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                         "storage_partitions": [],
-
-
-
+                        "active_server_id": server_id,
+                        "smb_source": target_smb_source,
+                        "smb_syncing": True,
+                        "smb_sync_reason": "switch_server",
+                        "smb_sync_message": f"Menyinkronkan partisi {s_name}...",
                         "telemetry_loading": True,
-
-
-
                     })
 
 
@@ -32896,7 +32929,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                                commit_fast_online(m, s_name, u, route_lbl, ip_str)
+                                with _state_lock:
+                                    if _metrics_switch_epoch != switch_epoch:
+                                        return
+                                commit_fast_online(m, s_name, u, route_lbl, ip_str, smb_source=target_smb_source)
 
                             else:
 
@@ -32936,7 +32972,58 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-                threading.Thread(target=mount_active_server_smb, daemon=True).start()
+                def _do_server_switch_rebind(expected_sid=server_id, wait_et=switched_easytier):
+                    global _cached_live_drives
+                    try:
+                        _set_smb_sync_state(True, reason="switch_server", message=f"Melepas partisi lama & menghubungkan {s_name}...")
+                        cfg_sw = config_manager.load_or_create_config()
+                        _unmount_myserver_smb_drives(
+                            reason="switch_server_teardown",
+                            cfg=cfg_sw,
+                            include_all_servers=True,
+                            include_easytier_subnet=True,
+                        )
+                        smb_mount_manager.clear_smb_share_cache()
+                        smb_mount_manager.invalidate_smb_host_cache()
+                        try:
+                            cleared_drives = _scan_live_drives_now()
+                            with _drives_cache_lock:
+                                _cached_live_drives = cleared_drives
+                        except Exception:
+                            pass
+
+                        # Bila EasyTier baru direstart, beri waktu singkat agar peer route siap sebelum resolve host/shares
+                        if wait_et:
+                            deadline = time.time() + 3.5
+                            while time.time() < deadline:
+                                c_chk = config_manager.load_or_create_config()
+                                s_chk = config_manager.get_active_server(c_chk)
+                                if not s_chk or s_chk.get("id") != expected_sid:
+                                    return
+                                try:
+                                    u_chk, _ = get_active_resolved_route(c_chk, force_refresh=True)
+                                    h_chk, is_dom_chk, zt_chk = _resolve_smb_route_params(s_chk, u_chk)
+                                    if smb_mount_manager.resolve_smb_host(
+                                        h_chk,
+                                        s_chk.get("connections", []),
+                                        is_dom_chk,
+                                        zt_chk,
+                                        max_age_seconds=0,
+                                    ):
+                                        break
+                                except Exception:
+                                    pass
+                                time.sleep(0.4)
+
+                        c_chk2 = config_manager.load_or_create_config()
+                        s_chk2 = config_manager.get_active_server(c_chk2)
+                        if s_chk2 and s_chk2.get("id") == expected_sid:
+                            rebind_storage_pipeline("switch_server", pre_unmounted=True)
+                    except Exception as sw_err:
+                        logger_manager.log_debug(f"[CoreService] Server switch SMB rebind error: {sw_err}")
+                        _set_smb_sync_state(False)
+
+                threading.Thread(target=_do_server_switch_rebind, daemon=True).start()
 
 
 
@@ -33033,6 +33120,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 invalidate_active_route_cache()
+                route_switch_epoch = _bump_metrics_switch_epoch(reset_client=True)
+                smb_mount_manager.clear_smb_share_cache()
+                smb_mount_manager.invalidate_smb_host_cache()
+                _set_smb_sync_state(True, reason="switch_route", message="Menyinkronkan partisi SMB rute baru...")
 
 
 
@@ -33204,6 +33295,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
+                                with _state_lock:
+                                    if _metrics_switch_epoch != route_switch_epoch:
+                                        return
                                 commit_fast_online(m, srv.get("name", "MyServer"), new_u, route_lbl, ip_str)
 
                             else:
@@ -33333,84 +33427,46 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 logger_manager.log_info(f"[CoreService] Profil aktif beralih ke: {p_name}")
-
-
-
-
-
-
+                _bump_metrics_switch_epoch(reset_client=True)
+                smb_mount_manager.clear_smb_share_cache()
+                smb_mount_manager.invalidate_smb_host_cache()
+                clear_smb_mount_failure_cooldown(srv.get("id"))
 
                 with _drives_cache_lock:
-
-
-
                     _cached_live_drives = []
 
-
-
-
-
-
-
                 with _state_lock:
-
-
-
-                    _cached_state["telemetry_loading"] = False
-
-
-
-
-
-
+                    _cached_state.update({
+                        "telemetry_loading": True,
+                        "disk_percent": 0,
+                        "storage_used_bytes": 0,
+                        "storage_total_bytes": 0,
+                        "storage_partitions": [],
+                        "smb_syncing": True,
+                        "smb_sync_reason": "profile_switch",
+                        "smb_sync_message": f"Menyinkronkan partisi akun {p_name}...",
+                    })
 
                 def _do_profile_rebind():
-
-
-
+                    global _cached_live_drives
                     try:
-
-
-
-                        rebind_storage_pipeline("profile_switch")
-
-
-
+                        _unmount_myserver_smb_drives(
+                            reason="profile_switch_teardown",
+                            include_all_servers=True,
+                            include_easytier_subnet=True,
+                        )
+                        rebind_storage_pipeline("profile_switch", pre_unmounted=True)
                     except Exception as e:
-
-
-
                         logger_manager.log_debug(f"[CoreService] Profile rebind error: {e}")
-
-
-
                     finally:
-
-
-
                         try:
-
                             fresh_d = _scan_live_drives_now()
-
                             with _drives_cache_lock:
-
                                 _cached_live_drives = fresh_d
-
                         except Exception:
-
                             pass
-
                         with _state_lock:
-
-
-
                             _cached_state["telemetry_loading"] = False
-
-
-
-
-
-
 
                 threading.Thread(target=_do_profile_rebind, daemon=True).start()
 

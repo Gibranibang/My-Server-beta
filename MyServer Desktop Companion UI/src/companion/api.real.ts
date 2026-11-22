@@ -289,6 +289,10 @@ export function createRealApi(): CompanionApi {
       storageTotalBytes: state.storage_total_bytes !== undefined ? Number(state.storage_total_bytes) : undefined,
       storagePartitions: Array.isArray(state.storage_partitions) ? state.storage_partitions : undefined,
       smbSource: state.smb_source === "backend" ? "backend" : state.smb_source === "zimaos" ? "zimaos" : undefined,
+      smbSyncing: Boolean(state.smb_syncing),
+      smbSyncReason: typeof state.smb_sync_reason === "string" && state.smb_sync_reason ? state.smb_sync_reason : undefined,
+      smbSyncMessage: typeof state.smb_sync_message === "string" && state.smb_sync_message ? state.smb_sync_message : undefined,
+      activeServerId: typeof state.active_server_id === "string" && state.active_server_id ? state.active_server_id : undefined,
       isLoading: Boolean(state.telemetry_loading),
     }
     return currentMetrics

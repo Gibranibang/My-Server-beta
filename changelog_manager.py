@@ -12,6 +12,23 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.10",
+        "channel": "Beta",
+        "date": "2026-11-22",
+        "title": "Perbaikan Switch Server/Profil SMB Instan, Akurasi Monitor DISK & Anti-Timeout Mount (Backend v1.4.10)",
+        "notes": [
+            "Teardown Lintas Server & Indikator Refresh SMB Real-Time (Desktop & UI): `/api/switch_server`, `/api/switch_profile`, `_handle_smb_source_request`, serta `rebind_storage_pipeline()` kini melepaskan seluruh drive server sebelumnya (`include_all_servers=True` bahkan saat mode `server_recovered` atau target offline), menunggu sinkronisasi EasyTier hingga siap, mereset cache drive/host/share seketika, serta menampilkan banner status live `Menyegarkan Partisi SMB...` di `FilesView` & `TrayDock`.",
+            "Akurasi Monitor DISK Lintas Mode & Anti-Race Telemetri: Menambahkan fencing epoch `_metrics_switch_epoch` di `update_metrics_loop()` agar hasil telemetri in-flight dari server lama tidak menimpa server baru, memisahkan kunci `ZimaMetricsClient` berdasarkan `server_id` dan `smb_source`, serta meneruskan flag `is_remote` & deduplikasi `mount_point` pada mode non-admin.",
+            "Ketahanan Timeout Mount SMB & Tuning Samba Backend v1.4.10: Menambahkan 1x retry otomatis pada `net.exe use` saat `TimeoutExpired` dengan verifikasi port 445 serta `partial_retry` terarah untuk share yang tertinggal; di Backend v1.4.10, `_aggregate_storage_usage()` kini mengecualikan mount FUSE/cloud (`rclone`) dari total DISK, dan `smb.conf` menambahkan `dns proxy = no`, `hostname lookups = no`, `kernel change notify = no`, serta `dfree cache time = 60`."
+        ],
+        "features": [
+            "Clean Cross-Server SMB Unmount & EasyTier Switch Warmup Guard",
+            "Live SMB Refresh Indicator in FilesView & TrayDock DISK Protection",
+            "Non-Admin ZimaMetrics Remote/Cloud Filtering & Switch Epoch Fencing",
+            "SMB Mount Timeout Recovery Retry & Backend v1.4.10 FUSE DISK Exclusion"
+        ]
+    },
+    {
         "version": "4.6.9",
         "channel": "Beta",
         "date": "2026-11-22",

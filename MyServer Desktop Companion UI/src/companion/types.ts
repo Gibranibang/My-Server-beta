@@ -116,6 +116,10 @@ export interface Metrics {
   storageTotalBytes?: number
   storagePartitions?: StoragePartitionItem[]
   smbSource?: SmbSourceMode
+  smbSyncing?: boolean
+  smbSyncReason?: string
+  smbSyncMessage?: string
+  activeServerId?: string
   isLoading?: boolean
 }
 

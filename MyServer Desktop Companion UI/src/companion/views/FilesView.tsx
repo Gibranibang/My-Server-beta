@@ -1,6 +1,6 @@
 import { getTranslation } from "../i18n"
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
-import { AlertTriangle, Folder, FolderOpen, HardDrive, Send, Server, ShieldCheck, Unplug } from "lucide-react"
+import { AlertTriangle, Folder, FolderOpen, HardDrive, RefreshCw, Send, Server, ShieldCheck, Unplug } from "lucide-react"
 import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { useAsyncAction, useCompanion, useNotice } from "../store"
 import { getCompanionApi } from "../api"
@@ -147,7 +147,7 @@ function DriveCard({ drive, online, onOpen }: DriveCardProps & { onOpen: (letter
 
 export default function FilesView() {
   const api = getCompanionApi()
-  const { drives, setAllMounted, isOnline, refreshDrives, serverUrl, settings } = useCompanion()
+  const { drives, setAllMounted, isOnline, refreshDrives, serverUrl, settings, metrics } = useCompanion()
   const t = getTranslation(settings?.language)
   const isDefaultExplorer = (settings?.fileManagerClickTarget || "explorer") === "explorer"
   const { notify } = useNotice()
@@ -434,6 +434,7 @@ export default function FilesView() {
   const unmountAll = useCallback(() => setAllMounted(false), [setAllMounted])
   const [mountState, runMount] = useAsyncAction(mountAll)
   const [unmountState, runUnmount] = useAsyncAction(unmountAll)
+  const isSmbSyncing = Boolean(metrics?.smbSyncing) || isSwitchingSource
   const mounted = drives.filter((d) => d.mounted).length
   const online = isOnline ? mounted : 0
 
@@ -707,9 +708,30 @@ export default function FilesView() {
           aria-label="Network Drive (SMB)"
           className="flex flex-col gap-2"
         >
-          <SectionLabel trailing={`${mounted}/${drives.length} ${t("mounted_trailing", "mounted")}`}>
+          <SectionLabel
+            trailing={
+              isSmbSyncing
+                ? t("smb_refreshing_trailing", "Menyegarkan…")
+                : `${mounted}/${drives.length} ${t("mounted_trailing", "mounted")}`
+            }
+          >
             Network Drive (SMB)
           </SectionLabel>
+          {isSmbSyncing && (
+            <div data-testid="smb-syncing-indicator" role="status" aria-live="polite">
+              <Card className="flex items-center gap-2.5 border-info/40 bg-info/5 p-2.5">
+                <RefreshCw className="size-3.5 shrink-0 animate-spin text-info" aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <div className="text-micro font-semibold text-ink">
+                    {t("smb_syncing_title", "Menyegarkan Partisi SMB...")}
+                  </div>
+                  <p className="truncate text-nano text-ink-muted">
+                    {metrics?.smbSyncMessage || t("smb_syncing_desc", "Melepas sesi lama & memasang ulang partisi server aktif…")}
+                  </p>
+                </div>
+              </Card>
+            </div>
+          )}
           {drives.map((drive) => (
             <DriveCard
               key={drive.letter}
@@ -728,7 +750,7 @@ export default function FilesView() {
               }}
             />
           ))}
-          {smbSource === "backend" && drives.length === 0 && (
+          {smbSource === "backend" && drives.length === 0 && !isSmbSyncing && (
             <Card className="p-2.5 text-micro text-ink-subtle">
               {t("backend_smb_empty_drives", "Belum Ada Partisi Penyimpanan Terdeteksi")}
             </Card>

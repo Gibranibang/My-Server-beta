@@ -1845,7 +1845,10 @@ class ZimaMetricsClient:
                             seen_paths.add(p_path)
                             valid_paths.append(perm)
 
-                    seen_drive_letters = set()
+                    seen_phys_vols = set()
+                    fallback_remote_tot = 0
+                    fallback_remote_used = 0
+                    seen_remote_vols = set()
                     for perm in valid_paths:
                         p_path = perm.get("path", "")
                         ro = perm.get("read_only", False)
@@ -1877,38 +1880,67 @@ class ZimaMetricsClient:
                             p_size = p_info["total_bytes"]
                             p_pct = p_info["pct"]
                             d_letter = p_info.get("drive_letter")
+                            p_fs = p_info.get("fs_type", "")
+                            p_remote = bool(
+                                p_info.get("is_remote")
+                                or _is_fuse_or_cloud_fstype(p_fs, "", p_info.get("mount_point", p_path))
+                            )
                             display_tag = f"{d_letter} {mode_str}" if d_letter else mode_str
                             partitions.append({
                                 "name": f"{share_name} ({display_tag})",
                                 "raw_name": share_name,
                                 "mount_point": p_path,
                                 "drive_letter": d_letter,
+                                "is_remote": p_remote,
+                                "fs_type": p_fs,
                                 "used_bytes": p_used,
                                 "total_bytes": p_size,
                                 "pct": p_pct,
                                 "formatted_str": f"{format_dynamic_bytes(p_used)} / {format_dynamic_bytes(p_size)} ({p_pct:.1f}%)",
                             })
-                            # Cegah perhitungan ganda jika satu drive letter memiliki banyak sub-folder share
-                            vol_id = d_letter or c_key or p_path
-                            if vol_id not in seen_drive_letters:
-                                seen_drive_letters.add(vol_id)
+                            # Deduplikasi volume fisik (mount_point / c_key) agar banyak subfolder pada disk sama tak dihitung ganda
+                            phys_id = p_info.get("mount_point") or c_key or d_letter or p_path
+                            if p_remote:
+                                if phys_id not in seen_remote_vols:
+                                    seen_remote_vols.add(phys_id)
+                                    fallback_remote_tot += p_size
+                                    fallback_remote_used += p_used
+                            elif phys_id not in seen_phys_vols:
+                                seen_phys_vols.add(phys_id)
                                 tot_size += p_size
                                 tot_used += p_used
                         else:
+                            p_remote = bool(_is_fuse_or_cloud_fstype("", "", p_path))
                             partitions.append({
                                 "name": share_name,
+                                "raw_name": share_name,
+                                "mount_point": p_path,
+                                "is_remote": p_remote,
                                 "used_bytes": 0,
                                 "total_bytes": 0,
                                 "pct": 0.0,
                                 "formatted_str": f"Akses {mode_str} ({p_path})",
                             })
 
+                    if tot_size <= 0 and fallback_remote_tot > 0 and self.last_storage_cache.get("total_bytes", 0) <= 0:
+                        tot_size = fallback_remote_tot
+                        tot_used = fallback_remote_used
+
             # Jika API Samba kosong atau gagal, tetapi Windows Network Drives terdeteksi:
             if not partitions and network_drives:
+                fb_rem_tot = 0
+                fb_rem_used = 0
                 for nd in network_drives:
                     partitions.append(nd)
-                    tot_size += nd.get("total_bytes", 0)
-                    tot_used += nd.get("used_bytes", 0)
+                    if nd.get("is_remote"):
+                        fb_rem_tot += nd.get("total_bytes", 0)
+                        fb_rem_used += nd.get("used_bytes", 0)
+                    else:
+                        tot_size += nd.get("total_bytes", 0)
+                        tot_used += nd.get("used_bytes", 0)
+                if tot_size <= 0 and fb_rem_tot > 0 and self.last_storage_cache.get("total_bytes", 0) <= 0:
+                    tot_size = fb_rem_tot
+                    tot_used = fb_rem_used
 
             if partitions and (tot_size > 0 or self.last_storage_cache.get("total_bytes", 0) <= 0):
                 tot_pct = (tot_used / tot_size * 100.0) if tot_size > 0 else 0.0

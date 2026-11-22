@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.6.10 - Beta] - 2026-11-22
+
+- Teardown Lintas Server & Indikator Refresh SMB Real-Time (Desktop & UI): `/api/switch_server`, `/api/switch_profile`, `_handle_smb_source_request`, dan `rebind_storage_pipeline()` kini melepaskan seluruh drive milik server sebelumnya (`include_all_servers=True`), memblokir kebocoran partisi server lama saat perpindahan gagal/offline, mereset cache share/host/drive secara atomik, serta menampilkan banner sinkronisasi SMB (`smbSyncing`) di `FilesView.tsx` & `TrayDock.tsx`.
+- Akurasi Monitor DISK & Anti-Race Switch Telemetri: Menambahkan `_metrics_switch_epoch` di `update_metrics_loop()` untuk membuang hasil telemetri server lama yang masih berjalan saat perpindahan server, memisahkan `ZimaMetricsClient` per `server_id` & `smb_source`, dan memastikan mode non-admin ZimaOS menandai `is_remote` serta menduduplikasi partisi berdasarkan `mount_point` fisik.
+- Ketahanan Mount Timeout & Backend v1.4.10: Menambahkan pemulihan retry `net.exe use` saat `TimeoutExpired` beserta `partial_retry` terarah untuk share yang tertinggal (`STIMI`/`gibran1`); di sisi Backend v1.4.10, `_aggregate_storage_usage()` kini mengecualikan mount FUSE/cloud (`rclone`) dari agregasi disk sistem dan `smb.conf` menambahkan `dns proxy = no`, `hostname lookups = no`, `kernel change notify = no`, serta `dfree cache time = 60`.
+
 ## [v4.6.9 - Beta] - 2026-11-22
 
 - EasyTier Congestion Guard, Path Freeze & Mount Cooldown (Desktop): Menambahkan `get_tunnel_traffic_stats()`, `is_tunnel_traffic_active()`, serta fallback `--disable-p2p` otomatis di `easytier_manager.py` saat P2P gagal 3x berturut-turut; membekukan auto-route SMB rebind selama transfer backup/Sync/tunnel aktif, menambah cooldown kegagalan mount 60s per server, memfilter adapter virtual (`vEthernet`/`VMware`/`Hyper-V`/`Docker`/`WSL`), serta fencing generasi probe rute.

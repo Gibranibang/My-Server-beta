@@ -339,7 +339,9 @@ export default function TrayDock({
   const offline = isId ? "server tidak terjangkau" : "server unreachable"
   const t = getTranslation(settings?.language)
   const isTelemetryLoading = power === "waking" || Boolean(monitoringLoading) || Boolean(transitionState?.active) || Boolean(metrics.isLoading)
+  const isDiskSyncing = isTelemetryLoading || Boolean(metrics.smbSyncing)
   const connectingStr = t("connecting_telemetry", isId ? "Menghubungkan telemetri server…" : "Connecting server telemetry…")
+  const diskSyncingStr = metrics.smbSyncMessage || t("smb_syncing_short", isId ? "Menyinkronkan partisi penyimpanan…" : "Syncing storage partitions…")
 
   return (
     <aside
@@ -395,15 +397,15 @@ export default function TrayDock({
         <MetricTile
           label="DISK"
           summary={
-            isTelemetryLoading
-              ? connectingStr
+            isDiskSyncing
+              ? (Boolean(metrics.smbSyncing) ? diskSyncingStr : connectingStr)
               : isOnline
                 ? `${accDriveCount > 0 ? accUsedPct : metrics.hdd}% ${isId ? "terpakai" : "used"}${accDriveCount > 0 && accTotalBytes > 0 ? ` (${(accUsedBytes / (1024 ** 3)).toFixed(1)} GB / ${(accTotalBytes / (1024 ** 3)).toFixed(1)} GB)` : metrics.storageUsedBytes && metrics.storageTotalBytes ? ` (${(metrics.storageUsedBytes / (1024 ** 3)).toFixed(1)} GB / ${(metrics.storageTotalBytes / (1024 ** 3)).toFixed(1)} GB)` : ""}${accDriveCount > 0 ? ` · ${accDriveCount} ${isId ? "disk" : "drives"}` : metrics.storagePartitions && metrics.storagePartitions.length > 0 ? ` · ${metrics.storagePartitions.length} ${isId ? "partisi" : "partitions"}` : ""}`
                 : offline
           }
           onClick={() => onNavigate("files")}
         >
-          {isTelemetryLoading ? (
+          {isDiskSyncing ? (
             <SkeletonMeter />
           ) : (
             <PercentMeter

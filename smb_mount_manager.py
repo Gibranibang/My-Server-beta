@@ -62,6 +62,28 @@ def _is_easytier_ip(ip_str, active_et_vip=""):
     return bool(clean_et and clean == clean_et)
 
 
+_mount_stats_lock = threading.Lock()
+_last_mount_all_stats = {"mounted": 0, "total": 0, "failed_shares": [], "host": "", "ts": 0.0}
+
+
+def get_last_mount_summary():
+    """Mengembalikan ringkasan eksekusi mount_all_smb_shares terakhir (termasuk share yang gagal)."""
+    with _mount_stats_lock:
+        return dict(_last_mount_all_stats, failed_shares=list(_last_mount_all_stats.get("failed_shares") or []))
+
+
+def _record_mount_all_stats(mounted, total, failed_shares, host=""):
+    global _last_mount_all_stats
+    with _mount_stats_lock:
+        _last_mount_all_stats = {
+            "mounted": int(mounted),
+            "total": int(total),
+            "failed_shares": list(failed_shares or []),
+            "host": str(host or ""),
+            "ts": time.time(),
+        }
+
+
 def clear_smb_share_cache():
     """Menghapus cache daftar share SMB agar peralihan sumber atau host selalu membaca ulang."""
     global _cached_smb_shares
@@ -1390,17 +1412,38 @@ def mount_smb_share(
     cmd = cmd_no_pw
     logger_manager.log_info(f"[SMB Mount] Menjalankan (cmdkey-first): {' '.join(cmd)}")
 
-    try:
-        res = subprocess.run(
-            cmd,
+    def _exec_net_use(run_cmd, run_timeout):
+        return subprocess.run(
+            run_cmd,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             creationflags=creationflags,
-            timeout=18.0,
+            timeout=run_timeout,
         )
+
+    try:
+        try:
+            res = _exec_net_use(cmd, 18.0)
+        except subprocess.TimeoutExpired:
+            logger_manager.log_warning(
+                f"[SMB Mount] Pemasangan {target_drive} ({unc_path}) timeout 18.0s; membersihkan & mencoba ulang 1x..."
+            )
+            unmount_smb_share(target_drive, notify_explorer=False)
+            if not is_port_open(clean_host, 445, timeout=1.5):
+                raise
+            time.sleep(0.4)
+            if is_drive_letter_in_use(target_drive):
+                alt_drive = get_available_drive_letter(preferred=target_drive)
+                if alt_drive:
+                    target_drive = alt_drive
+                    cmd[2] = target_drive
+                    cmd_with_pw[2] = target_drive
+            if clean_user:
+                _register_windows_credential(clean_host, clean_user, clean_pass)
+            res = _exec_net_use(cmd, 20.0)
         stdout_msg = (res.stdout or "").strip()
         stderr_msg = (res.stderr or "").strip()
         combined_out = f"{stdout_msg} {stderr_msg}".strip()
@@ -1557,35 +1600,9 @@ def mount_all_smb_shares(
     Memverifikasi host UNC & port 445 pada drive MyServer yang sudah terpasang dalam soft_mode
     agar drive zombie ber-IP lama atau tak terjangkau dicabut tanpa menyentuh drive asing.
     """
-    resolved_host = resolve_smb_host(
-        target_host=host,
-        server_connections=server_connections,
-        is_domain_route=is_domain_route,
-        zerotier_ip=zerotier_ip,
-    )
-    if not resolved_host:
-        return False, "Host SMB server tidak dapat dijangkau di port 445."
-    clean_host = sanitize_input(resolved_host).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
-    clean_user = sanitize_input(username)
-    clean_pass = sanitize_password(password)
     bs = chr(92)
-
-    shares = get_remote_smb_shares(
-        host=resolved_host,
-        username=username,
-        password=password,
-        auth_token=auth_token,
-        base_url=base_url,
-        force_refresh=force_refresh,
-        smb_source=smb_source,
-        backend_url=backend_url,
-        on_token_refreshed=on_token_refreshed,
-    )
-    if not shares:
-        return False, "Tidak ada share folder disk yang terdeteksi di server."
-
     known_hosts_lc = set(_collect_configured_myserver_hosts())
-    for raw_kh in ([host, clean_host, resolved_host, zerotier_ip] + list(known_server_hosts or [])):
+    for raw_kh in ([host, zerotier_ip] + list(known_server_hosts or [])):
         if raw_kh:
             kh = sanitize_input(raw_kh).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
             if kh:
@@ -1599,6 +1616,57 @@ def mount_all_smb_shares(
     for av in _cached_1219_alias.values():
         if av:
             known_hosts_lc.add(str(av).strip().lower())
+
+    def _cleanup_foreign_myserver_drives(keep_hosts_lc):
+        removed = []
+        if sys.platform != "win32":
+            return removed
+        for d in _candidate_network_letters():
+            wnet_code, wnet_unc = _get_wnet_remote_unc(d)
+            unc_host, _ = _extract_unc_host_and_share(wnet_unc)
+            if not unc_host:
+                continue
+            is_known_myserver = (not known_hosts_lc) or (unc_host in known_hosts_lc) or unc_host.startswith("10.126.126.")
+            if not is_known_myserver:
+                continue
+            if wnet_code in (1201, 1203) or (unc_host not in keep_hosts_lc):
+                if unmount_smb_share(d, notify_explorer=False):
+                    removed.append(d)
+        if removed:
+            _notify_windows_explorer_refresh(removed_drives=removed)
+        return removed
+
+    resolved_host = resolve_smb_host(
+        target_host=host,
+        server_connections=server_connections,
+        is_domain_route=is_domain_route,
+        zerotier_ip=zerotier_ip,
+    )
+    if not resolved_host:
+        _cleanup_foreign_myserver_drives(set())
+        _record_mount_all_stats(0, 0, [], host="")
+        return False, "Host SMB server tidak dapat dijangkau di port 445."
+    clean_host = sanitize_input(resolved_host).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
+    if clean_host:
+        known_hosts_lc.add(clean_host.lower())
+    clean_user = sanitize_input(username)
+    clean_pass = sanitize_password(password)
+
+    shares = get_remote_smb_shares(
+        host=resolved_host,
+        username=username,
+        password=password,
+        auth_token=auth_token,
+        base_url=base_url,
+        force_refresh=force_refresh,
+        smb_source=smb_source,
+        backend_url=backend_url,
+        on_token_refreshed=on_token_refreshed,
+    )
+    if not shares:
+        _cleanup_foreign_myserver_drives(set())
+        _record_mount_all_stats(0, 0, [], host=clean_host)
+        return False, "Tidak ada share folder disk yang terdeteksi di server."
 
     valid_target_hosts_lc = {clean_host.lower()}
     if clean_host in _cached_1219_alias:
@@ -1659,6 +1727,7 @@ def mount_all_smb_shares(
             pass
 
     mounted_count = 0
+    failed_shares = []
     messages = []
 
     for sh in shares:
@@ -1695,8 +1764,10 @@ def mount_all_smb_shares(
             added_drives.append(target_drive)
             messages.append(f"• [Drive {target_drive}] {sh} (Terpasang)")
         else:
+            failed_shares.append(sh)
             messages.append(f"• [Drive {target_drive}] {sh} (Gagal: {msg})")
 
+    _record_mount_all_stats(mounted_count, len(shares), failed_shares, host=clean_host)
     if added_drives or removed_drives:
         _notify_windows_explorer_refresh(added_drives=added_drives, removed_drives=removed_drives)
     summary = f"Berhasil memasang {mounted_count} dari {len(shares)} partisi disk:\n" + "\n".join(messages)

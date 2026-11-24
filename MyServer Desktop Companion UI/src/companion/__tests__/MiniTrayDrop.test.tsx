@@ -107,6 +107,10 @@ function renderMiniTray() {
   )
 }
 
+async function waitForMiniTrayReady(language: "en" | "id" = "en") {
+  await screen.findByRole("button", { name: I18N[language].open_in_browser })
+}
+
 function dispatchDragDrop(detail: MiniTrayDragDropDetail) {
   act(() => {
     window.dispatchEvent(new CustomEvent("myserver:drag-drop", { detail }))
@@ -131,9 +135,9 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
   })
 
   it("renders unified lime drop overlay on enter and dismisses on leave and blur (EN & ID)", async () => {
-    const api = setupApi({ language: "en", online: true })
+    setupApi({ language: "en", online: true })
     renderMiniTray()
-    await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
 
     dispatchDragDrop({ type: "enter", count: 1 })
     const overlay = await screen.findByTestId("mini-tray-drop-overlay")
@@ -153,9 +157,9 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
     expect(screen.queryByTestId("mini-tray-drop-overlay")).not.toBeInTheDocument()
 
     cleanup()
-    const idApi = setupApi({ language: "id", online: true })
+    setupApi({ language: "id", online: true })
     renderMiniTray()
-    await waitFor(() => expect(idApi.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("id")
     dispatchDragDrop({ type: "enter", count: 1 })
     expect(await screen.findByText(I18N.id.drop_title_online)).toBeInTheDocument()
     expect(screen.getByText(I18N.id.drop_sub_online)).toBeInTheDocument()
@@ -164,7 +168,7 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
   it("renders offline danger overlay and emits offline toast without calling resolveSharePath", async () => {
     const api = setupApi({ language: "en", online: false })
     renderMiniTray()
-    await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
 
     dispatchDragDrop({ type: "enter", count: 1 })
     const overlay = await screen.findByTestId("mini-tray-drop-overlay")
@@ -193,7 +197,7 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
     delete (window as any).__TAURI_INTERNALS__
     const nonTauriApi = setupApi({ language: "en" })
     renderMiniTray()
-    await waitFor(() => expect(nonTauriApi.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
     dispatchDragDrop({ type: "enter", count: 1 })
     dispatchDragDrop({ type: "drop", paths: ["Z:\\docs\\report.pdf"] })
     expect(screen.queryByTestId("mini-tray-drop-overlay")).not.toBeInTheDocument()
@@ -204,7 +208,7 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
     window.history.replaceState({}, "", "/?window=share")
     const shareWinApi = setupApi({ language: "en" })
     renderMiniTray()
-    await waitFor(() => expect(shareWinApi.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
     dispatchDragDrop({ type: "enter", count: 1 })
     dispatchDragDrop({ type: "drop", paths: ["Z:\\docs\\report.pdf"] })
     expect(screen.queryByTestId("mini-tray-drop-overlay")).not.toBeInTheDocument()
@@ -214,7 +218,7 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
   it("dismisses overlay cleanly on empty paths: [] drop without calling resolveSharePath or emitting a toast", async () => {
     const api = setupApi({ language: "en", online: true })
     renderMiniTray()
-    await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
 
     dispatchDragDrop({ type: "enter", count: 1 })
     expect(screen.getByTestId("mini-tray-drop-overlay")).toBeInTheDocument()
@@ -229,7 +233,7 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
   it("rejects multi-item drops immediately with MULTI_ITEM_DROP danger toast before calling resolveSharePath", async () => {
     const api = setupApi({ language: "en", online: true })
     renderMiniTray()
-    await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
 
     dispatchDragDrop({ type: "enter", count: 2 })
     dispatchDragDrop({ type: "drop", paths: ["Z:\\a.txt", "Z:\\b.txt"] })
@@ -257,7 +261,7 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
       },
     })
     renderMiniTray()
-    await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
 
     dispatchDragDrop({ type: "drop", paths: ["C:\\Users\\test\\secret.txt"] })
 
@@ -282,7 +286,7 @@ describe("Mini Tray Drag-and-Drop Unified Overlay (SHAR-05 / Surface 2 E5)", () 
       },
     })
     renderMiniTray()
-    await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+    await waitForMiniTrayReady("en")
 
     dispatchDragDrop({ type: "enter", count: 1 })
     dispatchDragDrop({ type: "drop", paths: ["Z:\\Photos\\vacation.jpg"] })

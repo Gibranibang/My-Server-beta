@@ -12,6 +12,23 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.7.0",
+        "channel": "Beta",
+        "date": "2026-11-24",
+        "title": "Windows File Explorer Native Share, Quick Share & Mini Tray Drag-and-Drop (Backend tetap v1.4.14)",
+        "notes": [
+            "Resolver SMB 3-Lapis & Share Proxy Terautentikasi (`smb_mount_manager.py`, `myserver_core_service.py`): Menambahkan resolver non-blocking (< 1 ms) via `WNetGetConnectionW`/`QueryDosDeviceW` dan pencocokan segmen disk Backend (mendukung `smb_source='backend'` dan `smb_source='zimaos'` dengan isolasi kredensial & cache JWT per-profil), serta 6 endpoint `/api/shares/*` yang dilindungi `X-MyServer-Core-Token`.",
+            "Menu Klik Kanan Windows File Explorer, Quick Share & Toast Dwibahasa: Mendaftarkan 2 verb HKCU klasik (`Share via MyServer` dan `Quick Share via MyServer` dengan `MultiSelectModel='Single'`, toggleable via `SettingsView` & Inno Setup `installer.iss`), mendukung Quick Share instan (*Unlimited time, No password*) ke Win32 Clipboard hanya saat sukses plus Windows WinRT/NotifyIcon Toast EN/ID aman-injeksi.",
+            "Floating Share Window & Mini Tray Drag-and-Drop (`src-tauri/src/lib.rs`, Companion UI): Menambahkan jendela mandiri `share-window` (`400x560`, style Setup Wizard tanpa window-lock, QR SVG lokal `uqr@0.1.3`, `ShellExecuteW` `Open in Browser`, RBAC admin-only `public_base_url`, dan inline 2-step Revoke) serta drop zone penuh `WindowEvent::DragDrop` di Mini Tray (`TrayDock`) — lengkap dengan perbaikan pasca-audit review (`CR-01`..`CR-03`, `WR-01`..`WR-06`). Backend v1.4.14 tetap tidak berubah."
+        ],
+        "features": [
+            "Windows Explorer Right-Click 'Share via MyServer' & 'Quick Share via MyServer' (HKCU + Inno Setup)",
+            "Standalone Unlocked Floating Share Window (QR SVG, Expiry, Password, Admin-Only Public Base URL & Revoke)",
+            "Instant Headless Quick Share with Win32 Clipboard & Injection-Safe Bilingual EN/ID Windows Toast",
+            "Mini Tray (TrayDock) Native OLE Drag-and-Drop Share Trigger"
+        ]
+    },
+    {
         "version": "4.6.14",
         "channel": "Beta",
         "date": "2026-11-24",

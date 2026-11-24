@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.7.0 - Beta] - 2026-11-24
+
+- Resolver SMB 3-Lapis & Share Proxy Terautentikasi (`smb_mount_manager.py`, `myserver_core_service.py`): Menambahkan resolver non-blocking (< 1 ms) via `WNetGetConnectionW`/`QueryDosDeviceW` dan pencocokan segmen disk Backend (mendukung `smb_source='backend'` dan `smb_source='zimaos'` dengan isolasi kredensial & cache JWT per-profil), serta 6 endpoint `/api/shares/*` yang dilindungi `X-MyServer-Core-Token`.
+- Menu Klik Kanan Windows File Explorer, Quick Share & Toast Dwibahasa: Mendaftarkan 2 verb HKCU klasik (`Share via MyServer` dan `Quick Share via MyServer` dengan `MultiSelectModel='Single'`, toggleable via `SettingsView` & Inno Setup `installer.iss`), mendukung Quick Share instan (*Unlimited time, No password*) ke Win32 Clipboard hanya saat sukses plus Windows WinRT/NotifyIcon Toast EN/ID aman-injeksi.
+- Floating Share Window & Mini Tray Drag-and-Drop (`src-tauri/src/lib.rs`, Companion UI): Menambahkan jendela mandiri `share-window` (`400x560`, style Setup Wizard tanpa window-lock, QR SVG lokal `uqr@0.1.3`, `ShellExecuteW` `Open in Browser`, RBAC admin-only `public_base_url`, dan inline 2-step Revoke) serta drop zone penuh `WindowEvent::DragDrop` di Mini Tray (`TrayDock`) — lengkap dengan perbaikan pasca-audit review (`CR-01`..`CR-03`, `WR-01`..`WR-06`). Backend v1.4.14 tetap tidak berubah.
+
 ## [v4.6.14 - Beta] - 2026-11-24
 
 - Desktop & Tauri v4.6.14 (Localhost Auth, Strict CORS & Safe Opener): Menerbitkan token CSPRNG per-boot antara Tauri (`BCryptGenRandom` / `MYSERVER_CORE_TOKEN` / `X-MyServer-Core-Token`) dan Core Service (`hmac.compare_digest` fail-closed + dukungan `core.token` untuk Inno Setup `TryGracefulAppShutdown`), membatasi `Access-Control-Allow-Origin` khusus WebView Tauri (`tauri.localhost`), memvalidasi HTTPS + allowlist rilis resmi GitHub (`Gibranibang/`) beserta setiap hop redirect `30x` di `/api/download_and_install_update`, serta mengganti `cmd /c start` pada `open_in_browser` dengan validator ketat `http://`/`https://` + Win32 `ShellExecuteW`.

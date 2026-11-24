@@ -120,6 +120,7 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
     token: string
     url: string
     isLanFallback: boolean
+    copied: boolean
   } | null>(null)
 
   const [shares, setShares] = useState<PublicShareItem[]>([])
@@ -351,8 +352,13 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
 
   const handleCopyUrl = async (url: string) => {
     if (!url) return
-    await getCompanionApi().copyShareClipboard(url)
-    showToast(t("share_copied_toast"), "success")
+    const ok = await getCompanionApi().copyShareClipboard(url)
+    if (ok) {
+      setGeneratedLink((prev) => (prev && prev.url === url ? { ...prev, copied: true } : prev))
+      showToast(t("share_copied_toast"), "success")
+    } else {
+      showToast(t("share_copy_failed_toast"), "warning")
+    }
   }
 
   const handleCreateShare = async (e: React.FormEvent) => {
@@ -387,24 +393,34 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
       }
 
       setIsOnline(true)
-      await api.copyShareClipboard(url)
+      let copied = res.clipboard_copied === true
+      if (!copied) {
+        copied = await api.copyShareClipboard(url)
+      }
 
       const token = res.share?.token || ""
       const isLanFallback = Boolean(res.is_lan_fallback ?? res.share?.is_lan_fallback)
-      setGeneratedLink({ token, url, isLanFallback })
+      setGeneratedLink({ token, url, isLanFallback, copied })
 
       if (res.share) {
         setShares((prev) => [res.share!, ...prev.filter((s) => s.token !== res.share!.token)])
       }
 
-      setJustCopied(true)
-      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
-      copiedTimerRef.current = window.setTimeout(() => {
-        setJustCopied(false)
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current)
         copiedTimerRef.current = null
-      }, 2000)
-
-      showToast(t("share_copied_toast"), "success")
+      }
+      if (copied) {
+        setJustCopied(true)
+        copiedTimerRef.current = window.setTimeout(() => {
+          setJustCopied(false)
+          copiedTimerRef.current = null
+        }, 2000)
+        showToast(t("share_copied_toast"), "success")
+      } else {
+        setJustCopied(false)
+        showToast(t("share_copy_failed_toast"), "warning")
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : t("share_err_offline"), "error")
     } finally {
@@ -735,10 +751,12 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
               >
                 <SectionLabel
                   trailing={
-                    <span className="inline-flex items-center gap-1 rounded-full border border-[var(--ok-border)] bg-[var(--ok-bg)] text-[var(--ok-ink)] px-2 py-1 text-caption font-semibold">
-                      <Check className="size-4" aria-hidden />
-                      {t("share_copied_badge")}
-                    </span>
+                    generatedLink.copied ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[var(--ok-border)] bg-[var(--ok-bg)] text-[var(--ok-ink)] px-2 py-1 text-caption font-semibold">
+                        <Check className="size-4" aria-hidden />
+                        {t("share_copied_badge")}
+                      </span>
+                    ) : undefined
                   }
                 >
                   {t("share_generated_section")}

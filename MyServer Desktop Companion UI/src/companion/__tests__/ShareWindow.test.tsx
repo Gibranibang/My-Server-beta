@@ -385,7 +385,8 @@ describe("ShareWindow (Surface 1: E1-E4, SHAR-03, SECH-02, SECH-03)", () => {
     expect(within(card).getByText(I18N.en.share_copied_badge)).toBeInTheDocument()
     expect(within(card).getByTitle("http://192.168.1.10:8085/s/tok_lan")).toHaveClass("select-all")
     expect(within(card).getByText(I18N.en.share_lan_warn_admin)).toBeInTheDocument()
-    expect(apiAdmin.copyShareClipboard).toHaveBeenCalledWith("http://192.168.1.10:8085/s/tok_lan")
+    // WR-03: skips redundant copyShareClipboard when res.clipboard_copied === true
+    expect(apiAdmin.copyShareClipboard).not.toHaveBeenCalled()
 
     // Local SVG QR inside #FFFFFF quiet-zone container
     const qrSvg = within(card).getByRole("img", { name: I18N.en.share_qr_aria })
@@ -397,9 +398,12 @@ describe("ShareWindow (Surface 1: E1-E4, SHAR-03, SECH-02, SECH-03)", () => {
     expect(apiAdmin.openExternalBrowser).toHaveBeenCalledWith("http://192.168.1.10:8085/s/tok_lan")
     expect(winOpenSpy).not.toHaveBeenCalled()
 
-    // Copy Link button is idempotent
+    // Copy Link button calls copyShareClipboard once
     fireEvent.click(within(card).getByRole("button", { name: I18N.en.share_btn_copy_link }))
-    expect(apiAdmin.copyShareClipboard).toHaveBeenCalledTimes(2)
+    await waitFor(() => {
+      expect(apiAdmin.copyShareClipboard).toHaveBeenCalledTimes(1)
+    })
+    expect(apiAdmin.copyShareClipboard).toHaveBeenCalledWith("http://192.168.1.10:8085/s/tok_lan")
 
     unmount()
 
@@ -688,5 +692,54 @@ describe("ShareWindow (Surface 1: E1-E4, SHAR-03, SECH-02, SECH-03)", () => {
     expect(screen.getByTestId("active-share-row-tok_fresh")).toBeInTheDocument()
     expect(screen.queryByTestId("active-share-row-tok_stale")).toBeNull()
     expect(screen.getByLabelText(/Public Base URL/i)).toHaveValue("https://fresh.example.com")
+  })
+
+  it("WR-03: falls back to copyShareClipboard when clipboard_copied=false and shows warning toast when copy fails", async () => {
+    const copyShareClipboard = vi
+      .fn()
+      .mockResolvedValueOnce(false) // fallback during createShare fails
+      .mockResolvedValueOnce(false) // manual Copy Link fails
+      .mockResolvedValueOnce(true)  // manual Copy Link succeeds
+
+    const api = makeTestApi({
+      copyShareClipboard,
+      createShare: vi.fn(async () => ({
+        success: true,
+        share: makeShare({ token: "tok_clip" }),
+        share_url: "https://nas.example.com/s/tok_clip",
+        is_lan_fallback: false,
+        clipboard_copied: false,
+      })),
+    })
+    setCompanionApi(api)
+
+    render(<ShareWindow initialTarget={makeTarget()} />)
+    await waitFor(() => {
+      expect(screen.getByText(I18N.en.share_active_empty_title)).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: I18N.en.share_cta_create }))
+
+    const card = await screen.findByTestId("generated-share-card")
+    expect(copyShareClipboard).toHaveBeenCalledTimes(1)
+    expect(within(card).queryByText(I18N.en.share_copied_badge)).toBeNull()
+    expect(screen.queryByText(I18N.en.share_cta_copied)).toBeNull()
+    expect(screen.getByRole("status")).toHaveTextContent(I18N.en.share_copy_failed_toast)
+
+    // Manual retry fails -> still warning toast
+    fireEvent.click(within(card).getByRole("button", { name: I18N.en.share_btn_copy_link }))
+    await waitFor(() => {
+      expect(copyShareClipboard).toHaveBeenCalledTimes(2)
+    })
+    expect(screen.getByRole("status")).toHaveTextContent(I18N.en.share_copy_failed_toast)
+    expect(within(card).queryByText(I18N.en.share_copied_badge)).toBeNull()
+
+    // Manual retry succeeds -> success toast and Copied badge appears
+    fireEvent.click(within(card).getByRole("button", { name: I18N.en.share_btn_copy_link }))
+    await waitFor(() => {
+      expect(copyShareClipboard).toHaveBeenCalledTimes(3)
+    })
+    expect(screen.getByRole("status")).toHaveTextContent(I18N.en.share_copied_toast)
+    expect(within(card).getByText(I18N.en.share_copied_badge)).toBeInTheDocument()
   })
 })

@@ -17935,7 +17935,7 @@ def _backend_share_request(matched_srv, cfg, endpoint, method="GET", json_body=N
     """
     Mengirim permintaan terautentikasi ke Backend dengan isolasi kredensial ketat (SECH-03):
     - smb_source == 'backend': HANYA memakai backend_smb_auth (_backend_authenticated_request), tidak pernah fallback ke ZimaOS.
-    - smb_source == 'zimaos': memakai backend_smb_auth jika tersedia, atau JWT dari kredensial profil ZimaOS via /api/v1/auth/verify.
+    - smb_source == 'zimaos': HANYA memakai JWT dari kredensial profil ZimaOS aktif via /api/v1/auth/verify (abaikan backend_smb_auth tersisa).
     """
     if not isinstance(matched_srv, dict):
         return 400, {"success": False, "error": "Server target tidak ditemukan."}, ""
@@ -17949,11 +17949,6 @@ def _backend_share_request(matched_srv, cfg, endpoint, method="GET", json_body=N
     smb_source = str((smb_cfg or {}).get("source") or "zimaos").strip().lower()
 
     if smb_source == "backend":
-        return _backend_authenticated_request(
-            clean_base, ep, smb_cfg, srv_id, method=method, json_body=json_body
-        )
-
-    if (smb_cfg or {}).get("access_token") or (smb_cfg or {}).get("hasCredentials"):
         return _backend_authenticated_request(
             clean_base, ep, smb_cfg, srv_id, method=method, json_body=json_body
         )

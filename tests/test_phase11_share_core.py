@@ -432,6 +432,47 @@ class TestShareResolver(_BaseShareCoreTestCase):
         self.assertEqual(res_z["canonical_rel"], "Disk1/a.txt")
         self.assertEqual(res_z["smb_source"], "zimaos")
 
+    def test_zimaos_mode_ignores_stale_backend_smb_auth(self):
+        """CR-02: Switching back to smb_source='zimaos' ignores leftover backend_smb_auth credentials/token."""
+        cfg = config_manager.load_or_create_config()
+        config_manager.save_server_smb_source_config(
+            cfg,
+            "srv_1",
+            source="backend",
+            username="stale_staff",
+            password="StaffPass1!",
+            role="user",
+            allowed_disks=["Disk1"],
+            access_token="stale_backend_tok",
+        )
+        cfg = config_manager.load_or_create_config()
+        config_manager.save_server_smb_source_config(cfg, "srv_1", source="zimaos")
+
+        seen_auth_users = []
+        seen_bearer_tokens = []
+
+        def _fake_backend(url, method="GET", json_body=None, headers=None, timeout=5.0, retries=1):
+            if url.endswith("/api/v1/auth/verify"):
+                seen_auth_users.append((json_body or {}).get("username"))
+                return True, {"access_token": "zimaos_admin_jwt", "role": "admin"}, 200
+            if url.endswith("/api/v1/storage/disks"):
+                seen_bearer_tokens.append((headers or {}).get("Authorization"))
+                return True, {
+                    "disks": [{"name": "Disk1", "relative_path": "Disk1", "mount_point": "/app/storage/Disk1", "is_accessible": True}],
+                    "is_admin": True,
+                }, 200
+            return False, {}, 404
+
+        with patch.object(core, "_backend_http_request", side_effect=_fake_backend):
+            ok, res = core._resolve_smb_share_target(r"\\192.168.1.10\Disk1\a.txt")
+
+        self.assertTrue(ok)
+        self.assertEqual(res["smb_source"], "zimaos")
+        self.assertEqual(seen_auth_users, ["admin_ops"])
+        self.assertEqual(seen_bearer_tokens, ["Bearer zimaos_admin_jwt"])
+        self.assertNotIn("stale_staff", seen_auth_users)
+        self.assertNotIn("Bearer stale_backend_tok", seen_bearer_tokens)
+
     def test_non_admin_missing_disk_probe_and_offline_errors(self):
         """Empty disks + non-admin browse 403 -> FORBIDDEN_PATH, 404 -> SHARE_NOT_MOUNTED_IN_BACKEND; 503/0 -> BACKEND_OFFLINE."""
         def _probe_403(url, method="GET", json_body=None, headers=None, timeout=5.0, retries=1):

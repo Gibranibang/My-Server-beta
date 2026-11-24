@@ -621,7 +621,7 @@ export function createMockApi(): CompanionApi {
           basename: "Report.pdf",
           is_dir: false,
           is_admin: true,
-          backend_url: "http://192.168.1.10:8085",
+          backend_url: "http://192.0.2.10:8085",
           smb_source: "zimaos",
         }
       : null
@@ -1464,7 +1464,7 @@ export function createMockApi(): CompanionApi {
           basename,
           is_dir: !basename.includes("."),
           is_admin: mockIsAdmin,
-          backend_url: "http://192.168.1.10:8085",
+          backend_url: "http://192.0.2.10:8085",
           smb_source: "zimaos",
           raw_path: path,
         },
@@ -1472,7 +1472,7 @@ export function createMockApi(): CompanionApi {
     },
 
     async listShares(opts) {
-      const base = (mockPublicBaseUrl || "http://192.168.1.10:8085").replace(/\/+$/, "")
+      const base = (mockPublicBaseUrl || "http://192.0.2.10:8085").replace(/\/+$/, "")
       const isLanFallback = !mockPublicBaseUrl
       const targetNorm = opts?.targetPath
         ? opts.targetPath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
@@ -1495,7 +1495,7 @@ export function createMockApi(): CompanionApi {
         public_base_url: mockPublicBaseUrl,
         is_admin: mockIsAdmin,
         username: "admin",
-        backend_url: "http://192.168.1.10:8085",
+        backend_url: "http://192.0.2.10:8085",
       }
     },
 
@@ -1505,7 +1505,7 @@ export function createMockApi(): CompanionApi {
         return { success: false, code: "INVALID_PATH", error: "Invalid or empty path." }
       }
       const token = `mock${++mockShareCounter}${Math.random().toString(36).slice(2, 6)}`
-      const base = (mockPublicBaseUrl || "http://192.168.1.10:8085").replace(/\/+$/, "")
+      const base = (mockPublicBaseUrl || "http://192.0.2.10:8085").replace(/\/+$/, "")
       const isLanFallback = !mockPublicBaseUrl
       const shareUrl = `${base}/s/${token}`
       const expiresAt =

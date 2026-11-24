@@ -702,14 +702,16 @@ fn sanitize_cli_share_path(raw: &str) -> Option<String> {
         s = s[1..s.len() - 1].trim().to_string();
     }
     let bytes = s.as_bytes();
-    if bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'"' {
-        s = format!("{}:\\", bytes[0] as char);
-    } else if s.ends_with("\\\"")
-        && s.len() >= 4
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
+    let is_drive_prefixed = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let is_unc_prefixed = s.starts_with("\\\\") && s.len() >= 5;
+    if (is_drive_prefixed || is_unc_prefixed) && s.ends_with("\\\"") {
+        s.pop();
+    } else if (is_drive_prefixed || is_unc_prefixed)
+        && s.ends_with('"')
+        && !s[..s.len() - 1].contains('"')
     {
         s.pop();
+        s.push('\\');
     }
     let trimmed = s.trim().to_string();
     if trimmed.is_empty() {
@@ -1287,8 +1289,30 @@ mod tests {
             Some(ShareCliAction::Share("Z:\\".into()))
         );
         assert_eq!(
-            parse_share_cli_action(&[exe, "--quick-share=Z:\"".into()]),
+            parse_share_cli_action(&[exe.clone(), "--quick-share=Z:\"".into()]),
             Some(ShareCliAction::QuickShare("Z:\\".into()))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[exe.clone(), "--share".into(), "Z:\\Folder\"".into()]),
+            Some(ShareCliAction::Share("Z:\\Folder\\".into()))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[
+                exe.clone(),
+                "--quick-share".into(),
+                "Z:\\Folder With Spaces\"".into()
+            ]),
+            Some(ShareCliAction::QuickShare("Z:\\Folder With Spaces\\".into()))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[
+                exe,
+                "--share".into(),
+                "\\\\192.168.1.10\\Disk1\\Folder\"".into()
+            ]),
+            Some(ShareCliAction::Share(
+                "\\\\192.168.1.10\\Disk1\\Folder\\".into()
+            ))
         );
     }
 

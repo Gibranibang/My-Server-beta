@@ -4909,7 +4909,7 @@ def _is_wan_host_safe(host):
             return True
 
 
-def _select_target_server(cfg, target_server_id=None):
+def _select_target_server(cfg, target_server_id=None, strict=False):
     if not isinstance(cfg, dict):
         return None
     servers = cfg.get("servers", []) or []
@@ -4917,6 +4917,8 @@ def _select_target_server(cfg, target_server_id=None):
         for s in servers:
             if s.get("id") == target_server_id or s.get("name") == target_server_id:
                 return s
+        if strict:
+            return None
     if config_manager and hasattr(config_manager, "get_active_server"):
         return config_manager.get_active_server(cfg)
     return servers[0] if servers else None
@@ -18503,7 +18505,7 @@ def _handle_share_create(body=None):
     )
 
     if req_server_id and not looks_like_os_path:
-        matched_srv = _select_target_server(cfg, target_server_id=req_server_id)
+        matched_srv = _select_target_server(cfg, target_server_id=req_server_id, strict=True)
         if not matched_srv:
             return 400, {"success": False, "code": "FOREIGN_NAS", "error": "Server target not found."}
         rel_segs = [s for s in clean_raw.replace("\\", "/").split("/") if s]
@@ -18530,7 +18532,10 @@ def _handle_share_create(body=None):
             }
             return st_map.get(err_code, 400), {"success": False, "code": err_code, "error": err_msg}
         canonical_rel = r_res["canonical_rel"]
-        matched_srv = _select_target_server(cfg, target_server_id=r_res.get("server_id"))
+        srv_id_res = r_res.get("server_id")
+        matched_srv = _select_target_server(cfg, target_server_id=srv_id_res, strict=bool(srv_id_res))
+        if not matched_srv:
+            return 400, {"success": False, "code": "FOREIGN_NAS", "error": "Server target not found."}
         backend_url = r_res.get("backend_url") or _resolve_share_backend_url(cfg, matched_srv)
 
     exp_val = payload.get("expires_in_hours", None)
@@ -18605,7 +18610,7 @@ def _handle_share_list(body=None):
     payload = body if isinstance(body, dict) else {}
     cfg = config_manager.load_or_create_config() if config_manager else {}
     req_server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip() or None
-    matched_srv = _select_target_server(cfg, target_server_id=req_server_id)
+    matched_srv = _select_target_server(cfg, target_server_id=req_server_id, strict=bool(req_server_id))
     if not matched_srv:
         return 400, {"success": False, "code": "FOREIGN_NAS", "error": "Server target not found."}
 
@@ -18670,7 +18675,7 @@ def _handle_share_revoke(body=None):
 
     cfg = config_manager.load_or_create_config() if config_manager else {}
     req_server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip() or None
-    matched_srv = _select_target_server(cfg, target_server_id=req_server_id)
+    matched_srv = _select_target_server(cfg, target_server_id=req_server_id, strict=bool(req_server_id))
     if not matched_srv:
         return 400, {"success": False, "code": "FOREIGN_NAS", "error": "Server target not found."}
 
@@ -18721,7 +18726,7 @@ def _handle_share_settings(body=None):
 
     cfg = config_manager.load_or_create_config() if config_manager else {}
     req_server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip() or None
-    matched_srv = _select_target_server(cfg, target_server_id=req_server_id)
+    matched_srv = _select_target_server(cfg, target_server_id=req_server_id, strict=bool(req_server_id))
     if not matched_srv:
         return 400, {"success": False, "code": "FOREIGN_NAS", "error": "Server target not found."}
 
@@ -18790,7 +18795,19 @@ def _handle_share_quick(body=None):
 
     canonical_rel = r_res["canonical_rel"]
     basename = str(r_res.get("basename") or "").strip()
-    matched_srv = _select_target_server(cfg, target_server_id=r_res.get("server_id"))
+    srv_id_res = r_res.get("server_id")
+    matched_srv = _select_target_server(cfg, target_server_id=srv_id_res, strict=bool(srv_id_res))
+    if not matched_srv:
+        title, msg = _format_share_toast_copy("FOREIGN_NAS", lang=lang)
+        _show_windows_toast(title, msg, level="error")
+        return 200, {
+            "success": False,
+            "ok": False,
+            "code": "FOREIGN_NAS",
+            "message": "Server target not found.",
+            "toast_title": title,
+            "toast_body": msg,
+        }
     backend_url = r_res.get("backend_url") or _resolve_share_backend_url(cfg, matched_srv)
 
     st_code, resp_data, _ = _backend_share_request(

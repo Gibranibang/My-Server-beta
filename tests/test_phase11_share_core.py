@@ -860,6 +860,23 @@ class TestShareCoreEndpoints(_BaseShareCoreTestCase):
             self.assertIs(body.get("ok"), True)
             self.assertEqual(body["target"]["canonical_rel"], f"Disk1/Folder/file_{idx}.txt")
 
+    def test_unknown_explicit_server_id_fails_closed_with_foreign_nas(self):
+        """WR-01: Explicit unknown server_id fails closed with FOREIGN_NAS instead of falling back to active server."""
+        token = core.get_core_auth_token()
+        auth_hdr = {"X-MyServer-Core-Token": token}
+        endpoints = [
+            ("/api/shares/create", {"path": "Disk1/a.txt", "server_id": "deleted_srv"}),
+            ("/api/shares/list", {"server_id": "deleted_srv"}),
+            ("/api/shares/revoke", {"token": "tok_123", "server_id": "deleted_srv"}),
+            ("/api/shares/settings", {"public_base_url": "https://nas.example.com", "server_id": "deleted_srv"}),
+        ]
+        with patch.object(core, "_backend_http_request", side_effect=AssertionError("Must not hit active server backend")):
+            for ep, payload in endpoints:
+                st, _, body = self._raw_http("POST", ep, payload=payload, headers=auth_hdr)
+                self.assertEqual(st, 400, f"{ep} must return 400 for unknown server_id")
+                self.assertIs(body.get("success"), False)
+                self.assertEqual(body.get("code"), "FOREIGN_NAS")
+
 
 if __name__ == "__main__":
     unittest.main()

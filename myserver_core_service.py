@@ -2267,6 +2267,149 @@ def set_autorun(enable=True):
         return False
 
 
+_EXPLORER_CTX_SHELL_TARGETS = (
+    (r"Software\Classes\*\shell\MyServerShare", "Share via MyServer", "--share"),
+    (r"Software\Classes\*\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
+    (r"Software\Classes\Directory\shell\MyServerShare", "Share via MyServer", "--share"),
+    (r"Software\Classes\Directory\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
+)
+
+
+def is_explorer_context_menu_enabled() -> bool:
+    """Memeriksa apakah seluruh 4 entri menu klik kanan File Explorer terdaftar di HKCU."""
+    if sys.platform != "win32":
+        return False
+    wreg = _get_winreg_module()
+    if wreg is None:
+        return False
+    for subkey, _display_name, _cli_flag in _EXPLORER_CTX_SHELL_TARGETS:
+        cmd_subkey = rf"{subkey}\command"
+        key = None
+        try:
+            key = wreg.OpenKey(wreg.HKEY_CURRENT_USER, cmd_subkey, 0, wreg.KEY_READ)
+            val, _ = wreg.QueryValueEx(key, "")
+            if not str(val or "").strip():
+                return False
+        except Exception:
+            return False
+        finally:
+            if key is not None:
+                try:
+                    wreg.CloseKey(key)
+                except Exception:
+                    pass
+    return True
+
+
+def set_explorer_context_menu_enabled(enable: bool) -> tuple[bool, str]:
+    """Mendaftarkan atau menghapus 4 verb menu klik kanan Windows File Explorer di HKCU secara idempoten."""
+    if sys.platform != "win32":
+        return False, "Windows Explorer context menu is only supported on Windows."
+    wreg = _get_winreg_module()
+    if wreg is None:
+        return False, "Windows Registry module unavailable."
+
+    want = bool(enable)
+    if want:
+        exe_path = get_gui_executable_path()
+        if not exe_path:
+            return False, "GUI executable not found"
+        ico_candidate = os.path.join(os.path.dirname(exe_path), "app_icon.ico")
+        icon_path = ico_candidate if os.path.isfile(ico_candidate) else f"{exe_path},0"
+        try:
+            for subkey, display_name, cli_flag in _EXPLORER_CTX_SHELL_TARGETS:
+                key = None
+                cmd_key = None
+                try:
+                    key = wreg.CreateKey(wreg.HKEY_CURRENT_USER, subkey)
+                    wreg.SetValueEx(key, "", 0, wreg.REG_SZ, display_name)
+                    wreg.SetValueEx(key, "Icon", 0, wreg.REG_SZ, icon_path)
+                    wreg.SetValueEx(key, "MultiSelectModel", 0, wreg.REG_SZ, "Single")
+                finally:
+                    if key is not None:
+                        try:
+                            wreg.CloseKey(key)
+                        except Exception:
+                            pass
+                try:
+                    cmd_key = wreg.CreateKey(wreg.HKEY_CURRENT_USER, rf"{subkey}\command")
+                    wreg.SetValueEx(cmd_key, "", 0, wreg.REG_SZ, f'"{exe_path}" {cli_flag} "%1"')
+                finally:
+                    if cmd_key is not None:
+                        try:
+                            wreg.CloseKey(cmd_key)
+                        except Exception:
+                            pass
+            _ensure_toast_aumid_registered(icon_path=icon_path)
+            if config_manager:
+                cfg = config_manager.load_or_create_config()
+                cfg["explorer_context_menu_enabled"] = True
+                config_manager.save_config(cfg)
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
+    else:
+        try:
+            for subkey, _display_name, _cli_flag in _EXPLORER_CTX_SHELL_TARGETS:
+                for target_key in (rf"{subkey}\command", subkey):
+                    try:
+                        wreg.DeleteKey(wreg.HKEY_CURRENT_USER, target_key)
+                    except FileNotFoundError:
+                        pass
+                    except PermissionError as exc:
+                        return False, str(exc)
+                    except OSError as exc:
+                        if getattr(exc, "winerror", None) == 5:
+                            return False, str(exc)
+            if config_manager:
+                cfg = config_manager.load_or_create_config()
+                cfg["explorer_context_menu_enabled"] = False
+                config_manager.save_config(cfg)
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
+
+
+def _handle_explorer_context_menu_setting(body=None):
+    """Menangani POST /api/settings/explorer_context_menu secara terautentikasi."""
+    payload = body if isinstance(body, dict) else {}
+    if "enabled" in payload:
+        want = bool(payload["enabled"])
+        ok, err = set_explorer_context_menu_enabled(want)
+        actual_state = is_explorer_context_menu_enabled()
+        if ok:
+            return 200, {"success": True, "enabled": actual_state}
+        return 500, {
+            "success": False,
+            "enabled": actual_state,
+            "error": err or "Failed to update Windows Explorer context menu.",
+        }
+    return 200, {"success": True, "enabled": is_explorer_context_menu_enabled()}
+
+
+def _build_load_settings_payload() -> dict:
+    """Menyusun payload /api/load_settings terpusat bagi handler GET dan POST."""
+    cfg = config_manager.load_or_create_config()
+    return {
+        "autostart": is_autorun_enabled(),
+        "explorerContextMenuEnabled": is_explorer_context_menu_enabled(),
+        "openDashboard": bool(cfg.get("open_dashboard_on_launch", False)),
+        "autoMountSmb": bool(cfg.get("auto_mount_smb", True)),
+        "autoZeroTier": bool(cfg.get("auto_zerotier", True)),
+        "autoCleanOnExit": bool(cfg.get("auto_clean_cache", True)),
+        "autoCheckUpdate": bool(cfg.get("auto_check_update", True)),
+        "appEntryOpen": str(cfg.get("app_entry_open", "window")),
+        "showTraffic": bool(cfg.get("show_traffic", True)),
+        "autoOpenMiniTray": bool(cfg.get("auto_open_mini_tray", True)),
+        "fileManagerClickTarget": str(cfg.get("file_manager_click_target", "explorer")),
+        "language": str(cfg.get("language", "en")),
+        "theme": str(cfg.get("theme", "dark")) if str(cfg.get("theme", "")).lower() in ("dark", "light") else "dark",
+        "dpapiActive": bool(config_manager.is_dpapi_supported()),
+        "firstRunSetup": bool(config_manager.evaluate_first_run_setup(cfg)),
+        "backend": _get_backend_health_info(cfg),
+    }
+
+
 
 
 
@@ -25956,6 +26099,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     "networks": zt_nets
                 }
             })
+        elif path in ("/api/load_settings", "/api/get_settings"):
+            self._send_json(_build_load_settings_payload())
         else:
             self._send_json({"error": "Not Found"}, status=404)
 
@@ -32256,117 +32401,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
         if path in ("/api/load_settings", "/api/get_settings"):
-
-
-
-
-
-
-
-            cfg = config_manager.load_or_create_config()
-
-
-
-
-
-
-
-            self._send_json({
-
-
-
-
-
-
-
-                "autostart": is_autorun_enabled(),
-
-
-
-
-
-
-
-                "openDashboard": bool(cfg.get("open_dashboard_on_launch", False)),
-
-
-
-
-
-
-
-                "autoMountSmb": bool(cfg.get("auto_mount_smb", True)),
-
-
-
-
-
-
-
-                "autoZeroTier": bool(cfg.get("auto_zerotier", True)),
-
-
-
-
-
-
-
-                "autoCleanOnExit": bool(cfg.get("auto_clean_cache", True)),
-
-
-
-
-
-
-
-                "autoCheckUpdate": bool(cfg.get("auto_check_update", True)),
-
-
-
-
-
-
-
-                "appEntryOpen": str(cfg.get("app_entry_open", "window")),
-
-
-
-
-
-
-
-                "showTraffic": bool(cfg.get("show_traffic", True)),
-
-
-
-                "autoOpenMiniTray": bool(cfg.get("auto_open_mini_tray", True)),
-
-
-
-                "fileManagerClickTarget": str(cfg.get("file_manager_click_target", "explorer")),
-
-
-
-                "language": str(cfg.get("language", "en")),
-                "theme": str(cfg.get("theme", "dark")) if str(cfg.get("theme", "")).lower() in ("dark", "light") else "dark",
-                "dpapiActive": bool(config_manager.is_dpapi_supported()),
-                "firstRunSetup": bool(config_manager.evaluate_first_run_setup(cfg)),
-        "backend": _get_backend_health_info(cfg),
-
-
-
-
-
-
-
-            })
-
-
-
-
-
-
-
+            self._send_json(_build_load_settings_payload())
             return
 
 
@@ -33077,6 +33112,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/shares/quick":
             status_code, res = _handle_share_quick(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/settings/explorer_context_menu":
+            status_code, res = _handle_explorer_context_menu_setting(body)
             self._send_json(res, status=status_code)
             return
 

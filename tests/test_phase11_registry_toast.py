@@ -1,3 +1,4 @@
+import copy
 import ctypes
 import http.client
 import http.server
@@ -449,6 +450,204 @@ class TestQuickShareAndToast(_BaseRegistryToastTestCase):
         self.assertEqual(st2, 200)
         self.assertFalse(d2["ok"])
         mock_toast_off.assert_not_called()
+
+
+class TestExplorerRegistryAndInstaller(_BaseRegistryToastTestCase):
+    def _make_winreg_module(self, hive):
+        mod = types.ModuleType("winreg")
+        mod.HKEY_CURRENT_USER = hive.HKEY_CURRENT_USER
+        mod.KEY_READ = hive.KEY_READ
+        mod.KEY_WRITE = hive.KEY_WRITE
+        mod.KEY_ALL_ACCESS = hive.KEY_ALL_ACCESS
+        mod.REG_SZ = hive.REG_SZ
+        mod.OpenKey = hive.OpenKey
+        mod.CreateKey = hive.CreateKey
+        mod.QueryValueEx = hive.QueryValueEx
+        mod.SetValueEx = hive.SetValueEx
+        mod.DeleteKey = hive.DeleteKey
+        mod.CloseKey = hive.CloseKey
+        return mod
+
+    def test_registry_enable_disable_idempotency_and_aumid(self):
+        hive = _FakeWinRegHive()
+        wreg_mod = self._make_winreg_module(hive)
+        app_dir = os.path.join(self.tmp_dir.name, "app")
+        os.makedirs(app_dir, exist_ok=True)
+        exe_path = os.path.join(app_dir, "MyServer-Beta.exe")
+        ico_path = os.path.join(app_dir, "app_icon.ico")
+        with open(exe_path, "wb") as f:
+            f.write(b"MZ")
+        with open(ico_path, "wb") as f:
+            f.write(b"ICO")
+
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "winreg", wreg_mod), \
+             patch.object(core, "get_gui_executable_path", return_value=exe_path):
+            self.assertFalse(core.is_explorer_context_menu_enabled())
+
+            ok1, err1 = core.set_explorer_context_menu_enabled(True)
+            self.assertTrue(ok1, err1)
+            self.assertEqual(err1, "")
+            self.assertTrue(core.is_explorer_context_menu_enabled())
+            snapshot = copy.deepcopy(hive.keys)
+
+            # Double enable overwrites cleanly with identical values
+            ok2, err2 = core.set_explorer_context_menu_enabled(True)
+            self.assertTrue(ok2, err2)
+            self.assertEqual(hive.keys, snapshot)
+
+            expected = [
+                (r"Software\Classes\*\shell\MyServerShare", "Share via MyServer", "--share"),
+                (r"Software\Classes\*\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
+                (r"Software\Classes\Directory\shell\MyServerShare", "Share via MyServer", "--share"),
+                (r"Software\Classes\Directory\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
+            ]
+            for subkey, display_name, flag in expected:
+                self.assertEqual(hive.keys[subkey][""][1], display_name)
+                self.assertEqual(hive.keys[subkey]["Icon"][1], ico_path)
+                self.assertEqual(hive.keys[subkey]["MultiSelectModel"][1], "Single")
+                self.assertEqual(
+                    hive.keys[rf"{subkey}\command"][""][1],
+                    f'"{exe_path}" {flag} "%1"',
+                )
+
+            aumid_key = r"Software\Classes\AppUserModelId\com.algithaproject.myserver.companion.beta"
+            self.assertEqual(hive.keys[aumid_key]["DisplayName"][1], "MyServer")
+            self.assertEqual(hive.keys[aumid_key]["IconUri"][1], ico_path)
+
+            # Double disable is idempotent even when keys are already absent
+            ok3, err3 = core.set_explorer_context_menu_enabled(False)
+            self.assertTrue(ok3, err3)
+            self.assertFalse(core.is_explorer_context_menu_enabled())
+            for subkey, _, _ in expected:
+                self.assertNotIn(subkey, hive.keys)
+                self.assertNotIn(rf"{subkey}\command", hive.keys)
+
+            ok4, err4 = core.set_explorer_context_menu_enabled(False)
+            self.assertTrue(ok4, err4)
+            self.assertFalse(core.is_explorer_context_menu_enabled())
+
+    def test_registry_icon_fallback_and_failure_handling(self):
+        hive = _FakeWinRegHive()
+        wreg_mod = self._make_winreg_module(hive)
+        exe_only = os.path.join(self.tmp_dir.name, "no_ico_dir", "MyServer-Beta.exe")
+
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "winreg", wreg_mod), \
+             patch.object(core, "get_gui_executable_path", return_value=""):
+            ok_no_exe, err_no_exe = core.set_explorer_context_menu_enabled(True)
+            self.assertFalse(ok_no_exe)
+            self.assertIn("GUI executable", err_no_exe)
+
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "winreg", wreg_mod), \
+             patch.object(core, "get_gui_executable_path", return_value=exe_only):
+            ok_fb, err_fb = core.set_explorer_context_menu_enabled(True)
+            self.assertTrue(ok_fb, err_fb)
+            self.assertEqual(
+                hive.keys[r"Software\Classes\*\shell\MyServerShare"]["Icon"][1],
+                f"{exe_only},0",
+            )
+
+        hive.raise_on_create = PermissionError("Access is denied")
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "winreg", wreg_mod), \
+             patch.object(core, "get_gui_executable_path", return_value=exe_only):
+            ok_perm, err_perm = core.set_explorer_context_menu_enabled(True)
+            self.assertFalse(ok_perm)
+            self.assertIn("Access is denied", err_perm)
+
+    def test_http_explorer_context_menu_and_load_settings(self):
+        hive = _FakeWinRegHive()
+        wreg_mod = self._make_winreg_module(hive)
+        app_dir = os.path.join(self.tmp_dir.name, "http_app")
+        os.makedirs(app_dir, exist_ok=True)
+        exe_path = os.path.join(app_dir, "MyServer-Beta.exe")
+        with open(exe_path, "wb") as f:
+            f.write(b"MZ")
+
+        st_unauth, _, body_unauth = self._raw_http(
+            "POST",
+            "/api/settings/explorer_context_menu",
+            payload={"enabled": True},
+        )
+        self.assertEqual(st_unauth, 401)
+        self.assertIs(body_unauth.get("success"), False)
+
+        auth_hdr = {"X-MyServer-Core-Token": core._CORE_AUTH_TOKEN}
+
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "winreg", wreg_mod), \
+             patch.object(core, "get_gui_executable_path", return_value=exe_path):
+            st_get0, _, load_get0 = self._raw_http("GET", "/api/load_settings", headers=auth_hdr)
+            self.assertEqual(st_get0, 200)
+            self.assertIs(load_get0.get("explorerContextMenuEnabled"), False)
+
+            st_en, _, body_en = self._raw_http(
+                "POST",
+                "/api/settings/explorer_context_menu",
+                payload={"enabled": True},
+                headers=auth_hdr,
+            )
+            self.assertEqual(st_en, 200)
+            self.assertTrue(body_en["success"])
+            self.assertTrue(body_en["enabled"])
+
+            st_get1, _, load_get1 = self._raw_http("GET", "/api/load_settings", headers=auth_hdr)
+            self.assertEqual(st_get1, 200)
+            self.assertIs(load_get1.get("explorerContextMenuEnabled"), True)
+
+            st_post1, _, load_post1 = self._raw_http(
+                "POST", "/api/load_settings", payload={}, headers=auth_hdr
+            )
+            self.assertEqual(st_post1, 200)
+            self.assertIs(load_post1.get("explorerContextMenuEnabled"), True)
+
+            st_dis, _, body_dis = self._raw_http(
+                "POST",
+                "/api/settings/explorer_context_menu",
+                payload={"enabled": False},
+                headers=auth_hdr,
+            )
+            self.assertEqual(st_dis, 200)
+            self.assertTrue(body_dis["success"])
+            self.assertFalse(body_dis["enabled"])
+
+            st_get2, _, load_get2 = self._raw_http("GET", "/api/load_settings", headers=auth_hdr)
+            self.assertEqual(st_get2, 200)
+            self.assertIs(load_get2.get("explorerContextMenuEnabled"), False)
+
+    def test_installer_iss_contains_explorer_verbs_and_matches_generator(self):
+        import build_installer_package
+
+        iss_path = os.path.join(REPO_ROOT, "installer.iss")
+        with open(iss_path, "r", encoding="utf-8") as f:
+            iss_text = f.read()
+
+        self.assertEqual(
+            iss_text,
+            build_installer_package.render_installer_iss(
+                build_installer_package.VERSION, build_installer_package.APP_NAME
+            ),
+        )
+        self.assertIn('Name: "explorercontextmenu"', iss_text)
+        self.assertIn("[Registry]", iss_text)
+        for subkey in (
+            r"Software\Classes\*\shell\MyServerShare",
+            r"Software\Classes\*\shell\MyServerQuickShare",
+            r"Software\Classes\Directory\shell\MyServerShare",
+            r"Software\Classes\Directory\shell\MyServerQuickShare",
+        ):
+            self.assertIn(f'Root: HKCU; Subkey: "{subkey}"', iss_text)
+            self.assertIn(f'Root: HKCU; Subkey: "{subkey}\\command"', iss_text)
+        self.assertIn('ValueName: "MultiSelectModel"; ValueData: "Single"', iss_text)
+        self.assertIn("Flags: uninsdeletekey", iss_text)
+        self.assertIn(
+            r'Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.algithaproject.myserver.companion.beta"',
+            iss_text,
+        )
+        self.assertIn('--share ""%1""', iss_text)
+        self.assertIn('--quick-share ""%1""', iss_text)
 
 
 if __name__ == "__main__":

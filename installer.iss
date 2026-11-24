@@ -47,6 +47,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "explorercontextmenu"; Description: "Add 'Share via MyServer' and 'Quick Share via MyServer' to Windows File Explorer context menu"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
 Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
@@ -68,6 +69,26 @@ Type: filesandordirs; Name: "{app}\bin\easytier"
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"; Tasks: desktopicon
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerShare"; ValueType: string; ValueName: ""; ValueData: "Share via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerShare"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerShare"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerShare\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --share ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerQuickShare"; ValueType: string; ValueName: ""; ValueData: "Quick Share via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerQuickShare"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerQuickShare"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerQuickShare\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --quick-share ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerShare"; ValueType: string; ValueName: ""; ValueData: "Share via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerShare"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerShare"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerShare\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --share ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare"; ValueType: string; ValueName: ""; ValueData: "Quick Share via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --quick-share ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.algithaproject.myserver.companion.beta"; ValueType: string; ValueName: "DisplayName"; ValueData: "MyServer"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.algithaproject.myserver.companion.beta"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\app_icon.ico"
 
 [Run]
 Filename: "msiexec.exe"; Parameters: "/i ""{app}\resources\deps\zerotier\ZeroTier One.msi"" /qn /norestart"; StatusMsg: "Installing ZeroTier One service..."; Flags: runhidden waituntilterminated; Check: NeedsZeroTierInstall

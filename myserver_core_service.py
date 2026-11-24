@@ -18106,9 +18106,224 @@ def _write_windows_clipboard(text):
         return False
 
 
+_TOAST_AUMID = "com.algithaproject.myserver.companion.beta"
+
+# Skrip PowerShell statis: title/body/AUMID/level dikirim HANYA via env vars dan di-escape XML
+_WINRT_TOAST_PS_SCRIPT = r"""
+$title = $env:MYSERVER_TOAST_TITLE
+$body  = $env:MYSERVER_TOAST_BODY
+$appId = $env:MYSERVER_TOAST_AUMID
+try {
+    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+    [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+    $escTitle = [System.Security.SecurityElement]::Escape($title)
+    $escBody  = [System.Security.SecurityElement]::Escape($body)
+    $xmlStr = "<toast><visual><binding template='ToastText02'><text id='1'>$escTitle</text><text id='2'>$escBody</text></binding></visual></toast>"
+    $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $doc.LoadXml($xmlStr)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
+} catch {
+    Add-Type -AssemblyName System.Windows.Forms
+    $notify = New-Object System.Windows.Forms.NotifyIcon
+    $notify.Icon = [System.Drawing.SystemIcons]::Information
+    $notify.BalloonTipIcon = if ($env:MYSERVER_TOAST_LEVEL -eq "error") { "Warning" } else { "Info" }
+    $notify.BalloonTipTitle = $title
+    $notify.BalloonTipText = $body
+    $notify.Visible = $true
+    $notify.ShowBalloonTip(4000)
+    Start-Sleep -Seconds 1
+    $notify.Dispose()
+}
+"""
+
+
+def _get_winreg_module():
+    """Mengembalikan modul winreg (atau stub pengujian jika dimuat pada Linux)."""
+    if winreg is not None:
+        return winreg
+    return sys.modules.get("winreg")
+
+
+def _ensure_toast_aumid_registered(icon_path=None):
+    """Mendaftarkan HKCU AppUserModelId untuk WinRT Toast unpackaged secara best-effort."""
+    if sys.platform != "win32":
+        return False
+    wreg = _get_winreg_module()
+    if wreg is None:
+        return False
+    resolved_icon = str(icon_path or "").strip()
+    if not resolved_icon:
+        try:
+            exe_path = get_gui_executable_path()
+            if exe_path:
+                cand = os.path.join(os.path.dirname(exe_path), "app_icon.ico")
+                if os.path.isfile(cand):
+                    resolved_icon = cand
+        except Exception:
+            resolved_icon = ""
+    subkey = rf"Software\Classes\AppUserModelId\{_TOAST_AUMID}"
+    key = None
+    try:
+        key = wreg.CreateKey(wreg.HKEY_CURRENT_USER, subkey)
+        wreg.SetValueEx(key, "DisplayName", 0, wreg.REG_SZ, "MyServer")
+        if resolved_icon:
+            wreg.SetValueEx(key, "IconUri", 0, wreg.REG_SZ, resolved_icon)
+        return True
+    except Exception:
+        return False
+    finally:
+        if key is not None:
+            try:
+                wreg.CloseKey(key)
+            except Exception:
+                pass
+
+
+def _show_windows_toast(title: str, body: str, level: str = "info") -> bool:
+    """Menampilkan Windows Toast Notification secara aman-injeksi melalui variabel lingkungan."""
+    _ensure_toast_aumid_registered()
+    if sys.platform != "win32":
+        return False
+    env = dict(os.environ)
+    env["MYSERVER_TOAST_TITLE"] = str(title or "")
+    env["MYSERVER_TOAST_BODY"] = str(body or "")
+    env["MYSERVER_TOAST_AUMID"] = _TOAST_AUMID
+    env["MYSERVER_TOAST_LEVEL"] = "error" if str(level or "").strip().lower() == "error" else "info"
+    try:
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", _WINRT_TOAST_PS_SCRIPT],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000,
+        )
+        return True
+    except Exception as exc:
+        if logger_manager:
+            logger_manager.log_debug(f"[ShareToast] Gagal menampilkan Windows Toast: {exc}")
+        return False
+
+
+def _format_share_toast_copy(code: str, lang: str = "id", basename: str = "") -> tuple[str, str]:
+    """Memformat judul dan isi Windows Toast dwibahasa (EN/ID) sesuai kontrak UI Phase 11."""
+    clean_code = str(code or "INVALID_PATH").strip().upper()
+    is_en = str(lang or "id").strip().lower() == "en"
+    clean_base = str(basename or "").strip()
+    prefix = f"{clean_base} · " if clean_base else ""
+
+    if clean_code == "OK_PUBLIC":
+        if is_en:
+            return ("Share link copied to clipboard", f"{prefix}Unlimited · No password")
+        return ("Tautan berbagi disalin ke clipboard", f"{prefix}Tanpa batas · Tanpa sandi")
+
+    if clean_code == "OK_LAN_FALLBACK":
+        if is_en:
+            return ("Share link copied to clipboard", f"{prefix}Local LAN URL only (Public Base URL not set)")
+        return ("Tautan berbagi disalin ke clipboard", f"{prefix}Tautan LAN lokal saja (Public Base URL belum diatur)")
+
+    table = {
+        "LOCAL_DRIVE": {
+            "en": (
+                "Cannot Share This Item",
+                "Only files or folders on a MyServer SMB drive can be shared. Move the item to a MyServer drive first.",
+            ),
+            "id": (
+                "Tidak Dapat Membagikan Item Ini",
+                "Hanya file atau folder pada drive SMB MyServer yang dapat dibagikan. Pindahkan item ke drive MyServer terlebih dahulu.",
+            ),
+        },
+        "FOREIGN_NAS": {
+            "en": (
+                "Cannot Share This Item",
+                "Only files or folders on a MyServer SMB drive can be shared. Move the item to a MyServer drive first.",
+            ),
+            "id": (
+                "Tidak Dapat Membagikan Item Ini",
+                "Hanya file atau folder pada drive SMB MyServer yang dapat dibagikan. Pindahkan item ke drive MyServer terlebih dahulu.",
+            ),
+        },
+        "SHARE_NOT_MOUNTED_IN_BACKEND": {
+            "en": (
+                "Storage Share Not Accessible by Backend",
+                "This ZimaOS share is not mounted under /app/storage in MyServer Backend. Add the volume in ZimaOS Docker Settings.",
+            ),
+            "id": (
+                "Partisi Tidak Terpasang di Backend",
+                "Share ZimaOS ini belum ter-mount ke /app/storage di MyServer Backend. Tambahkan volume melalui Settings Docker ZimaOS.",
+            ),
+        },
+        "MULTI_ITEM_DROP": {
+            "en": (
+                "Select One Item Only",
+                "Drag or right-click 1 file or 1 folder at a time to create a share link.",
+            ),
+            "id": (
+                "Pilih Satu Item Saja",
+                "Seret atau klik kanan 1 file atau 1 folder sekaligus untuk membuat tautan berbagi.",
+            ),
+        },
+        "SERVER_OFFLINE": {
+            "en": (
+                "MyServer Backend Unreachable",
+                "Cannot create share link while server or Backend is offline. Check connection in MyServer Companion.",
+            ),
+            "id": (
+                "MyServer Backend Tidak Terjangkau",
+                "Tidak dapat membuat tautan saat server atau Backend offline. Periksa koneksi di MyServer Companion.",
+            ),
+        },
+        "BACKEND_OFFLINE": {
+            "en": (
+                "MyServer Backend Unreachable",
+                "Cannot create share link while server or Backend is offline. Check connection in MyServer Companion.",
+            ),
+            "id": (
+                "MyServer Backend Tidak Terjangkau",
+                "Tidak dapat membuat tautan saat server atau Backend offline. Periksa koneksi di MyServer Companion.",
+            ),
+        },
+        "UNAUTHENTICATED_SESSION": {
+            "en": (
+                "Backend Login Required",
+                "Open MyServer Companion → Storage & Files to sign in to your Backend account before sharing.",
+            ),
+            "id": (
+                "Login Akun Backend Diperlukan",
+                "Buka MyServer Companion → Penyimpanan & Berkas untuk masuk ke akun Backend sebelum berbagi.",
+            ),
+        },
+        "FORBIDDEN_PATH": {
+            "en": (
+                "Sharing Permission Denied",
+                "Your Backend account does not have permission to share this storage partition. Contact your administrator.",
+            ),
+            "id": (
+                "Izin Berbagi Ditolak",
+                "Akun Backend Anda tidak memiliki izin untuk membagikan partisi ini. Hubungi administrator server.",
+            ),
+        },
+        "INVALID_PATH": {
+            "en": (
+                "Cannot Share This Item",
+                "Invalid or unsupported file path.",
+            ),
+            "id": (
+                "Tidak Dapat Membagikan Item Ini",
+                "Jalur file tidak valid atau tidak didukung.",
+            ),
+        },
+    }
+    entry = table.get(clean_code, table["INVALID_PATH"])
+    return entry["en" if is_en else "id"]
+
+
 def _notify_share_error_hook(err_code, err_message, raw_path=""):
-    """Hook opsional untuk menampilkan notifikasi Toast kesalahan pada Plan 11-04."""
-    return False
+    """Menampilkan Windows Toast Notification terlokalisasi saat resolusi share gagal."""
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    lang = str((cfg or {}).get("language", "id") or "id").strip().lower()
+    title, msg = _format_share_toast_copy(err_code, lang=lang)
+    return _show_windows_toast(title, msg, level="error")
 
 
 def _handle_share_resolve(body=None):
@@ -18410,6 +18625,97 @@ def _handle_share_copy_clipboard(body=None):
     if not isinstance(text, str) or not text:
         return 400, {"success": False, "error": "Text is required."}
     return 200, {"success": bool(_write_windows_clipboard(text))}
+
+
+def _handle_share_quick(body=None):
+    """Menangani POST /api/shares/quick tanpa jendela UI dengan preset tetap Unlimited / tanpa sandi."""
+    payload = body if isinstance(body, dict) else {}
+    raw_path = payload.get("path")
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    lang = str((cfg or {}).get("language", "id") or "id").strip().lower()
+
+    r_ok, r_res = _resolve_smb_share_target(raw_path, cfg=cfg)
+    if not r_ok:
+        err_info = r_res if isinstance(r_res, dict) else {"code": "INVALID_PATH", "message": "Unable to resolve path."}
+        err_code = err_info.get("code", "INVALID_PATH")
+        err_msg = err_info.get("message", "Unable to resolve path.")
+        title, msg = _format_share_toast_copy(err_code, lang=lang)
+        _show_windows_toast(title, msg, level="error")
+        return 200, {
+            "success": False,
+            "ok": False,
+            "code": err_code,
+            "message": err_msg,
+            "toast_title": title,
+            "toast_body": msg,
+        }
+
+    canonical_rel = r_res["canonical_rel"]
+    basename = str(r_res.get("basename") or "").strip()
+    matched_srv = _select_target_server(cfg, target_server_id=r_res.get("server_id"))
+    backend_url = r_res.get("backend_url") or _resolve_share_backend_url(cfg, matched_srv)
+
+    st_code, resp_data, _ = _backend_share_request(
+        matched_srv,
+        cfg,
+        "/api/v1/storage/shares",
+        method="POST",
+        json_body={"path": canonical_rel, "expires_in_hours": None, "password": None},
+        backend_url=backend_url,
+    )
+
+    if st_code not in (200, 201) or not isinstance(resp_data, dict):
+        if st_code == 0 or st_code >= 500:
+            err_code = "BACKEND_OFFLINE"
+            default_err = "MyServer Backend is offline or unreachable."
+        elif st_code == 401:
+            err_code = "UNAUTHENTICATED_SESSION"
+            default_err = "Backend session is unauthenticated or expired."
+        elif st_code == 403:
+            err_code = "FORBIDDEN_PATH"
+            default_err = "Access denied."
+        elif st_code == 404:
+            err_code = "SHARE_NOT_MOUNTED_IN_BACKEND"
+            default_err = "Item or storage share not found."
+        else:
+            err_code = "BACKEND_OFFLINE"
+            default_err = f"Backend error (HTTP {st_code})."
+        detail = (
+            (resp_data.get("detail") or resp_data.get("error") or default_err)
+            if isinstance(resp_data, dict)
+            else default_err
+        )
+        title, msg = _format_share_toast_copy(err_code, lang=lang)
+        _show_windows_toast(title, msg, level="error")
+        return 200, {
+            "success": False,
+            "ok": False,
+            "code": err_code,
+            "error": detail,
+            "toast_title": title,
+            "toast_body": msg,
+        }
+
+    share = resp_data.get("share") if isinstance(resp_data.get("share"), dict) else resp_data
+    raw_share_url = (share.get("share_url") if isinstance(share, dict) else "") or ""
+    full_url, is_lan_fallback = _assemble_share_url(raw_share_url, backend_url)
+
+    copied = bool(_write_windows_clipboard(full_url)) if full_url else False
+    toast_code = "OK_LAN_FALLBACK" if is_lan_fallback else "OK_PUBLIC"
+    title, msg = _format_share_toast_copy(toast_code, lang=lang, basename=basename)
+    _show_windows_toast(title, msg, level="info")
+
+    return 200, {
+        "success": True,
+        "ok": True,
+        "code": toast_code,
+        "share": share,
+        "share_url": full_url,
+        "is_lan_fallback": bool(is_lan_fallback),
+        "clipboard_copied": copied,
+        "toast_title": title,
+        "toast_body": msg,
+    }
 
 
 def _scan_compose_apps_now():
@@ -32766,6 +33072,11 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/shares/copy_clipboard":
             status_code, res = _handle_share_copy_clipboard(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/quick":
+            status_code, res = _handle_share_quick(body)
             self._send_json(res, status=status_code)
             return
 

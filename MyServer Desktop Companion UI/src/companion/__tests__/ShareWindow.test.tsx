@@ -608,4 +608,85 @@ describe("ShareWindow (Surface 1: E1-E4, SHAR-03, SECH-02, SECH-03)", () => {
     expect(within(secondRow).getByRole("button", { name: I18N.id.share_btn_keep_link })).toBeInTheDocument()
     expect(within(secondRow).getByRole("button", { name: I18N.id.share_btn_revoke_link })).toBeInTheDocument()
   })
+
+  it("WR-02: does not re-run hydrateTarget/fetchShares when loadSettings changes language to id, and ignores stale listShares responses", async () => {
+    const firstTarget = makeTarget({ basename: "first.pdf", canonical_rel: "DATA/first.pdf" })
+    const secondTarget = makeTarget({ basename: "second.pdf", canonical_rel: "DATA/second.pdf" })
+
+    const settingsDeferred = createDeferred<any>()
+    const firstListDeferred = createDeferred<ShareListResponse>()
+    const secondListDeferred = createDeferred<ShareListResponse>()
+
+    const getShareWindowTarget = vi.fn(async () => firstTarget)
+    const listShares = vi
+      .fn()
+      .mockImplementationOnce(() => firstListDeferred.promise)
+      .mockImplementationOnce(() => secondListDeferred.promise)
+
+    const api = makeTestApi({
+      loadSettings: vi.fn(() => settingsDeferred.promise),
+      getShareWindowTarget,
+      listShares,
+    })
+    setCompanionApi(api)
+
+    render(<ShareWindow />)
+
+    await waitFor(() => {
+      expect(listShares).toHaveBeenCalledTimes(1)
+    })
+    expect(getShareWindowTarget).toHaveBeenCalledTimes(1)
+
+    // Switch language asynchronously from "en" -> "id": must NOT re-trigger hydrateTarget or listShares
+    await act(async () => {
+      settingsDeferred.resolve({
+        autostart: true,
+        openDashboard: false,
+        autoMountSmb: true,
+        autoZeroTier: true,
+        autoCleanOnExit: true,
+        language: "id" as const,
+        theme: "dark" as const,
+        explorerContextMenuEnabled: false,
+      })
+    })
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: I18N.id.share_cta_create })).toBeInTheDocument()
+    })
+    expect(getShareWindowTarget).toHaveBeenCalledTimes(1)
+    expect(listShares).toHaveBeenCalledTimes(1)
+
+    // Re-target while first listShares is still pending, then resolve second BEFORE first
+    act(() => {
+      window.dispatchEvent(new CustomEvent("myserver:share-target", { detail: secondTarget }))
+    })
+    await waitFor(() => {
+      expect(listShares).toHaveBeenCalledTimes(2)
+    })
+
+    await act(async () => {
+      secondListDeferred.resolve({
+        success: true,
+        shares: [makeShare({ token: "tok_fresh", target_path: "DATA/second.pdf" })],
+        public_base_url: "https://fresh.example.com",
+        is_admin: true,
+      })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId("active-share-row-tok_fresh")).toBeInTheDocument()
+    })
+
+    // Now resolve the stale first request with is_admin: false and different shares — must be ignored
+    await act(async () => {
+      firstListDeferred.resolve({
+        success: true,
+        shares: [makeShare({ token: "tok_stale", target_path: "DATA/first.pdf" })],
+        public_base_url: "",
+        is_admin: false,
+      })
+    })
+    expect(screen.getByTestId("active-share-row-tok_fresh")).toBeInTheDocument()
+    expect(screen.queryByTestId("active-share-row-tok_stale")).toBeNull()
+    expect(screen.getByLabelText(/Public Base URL/i)).toHaveValue("https://fresh.example.com")
+  })
 })

@@ -136,6 +136,9 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
   const passwordId = useId()
   const baseUrlId = useId()
   const t = useMemo(() => getTranslation(language), [language])
+  const tRef = useRef(t)
+  tRef.current = t
+  const fetchSeqRef = useRef(0)
 
   const showToast = useCallback((text: string, tone: "info" | "success" | "error" | "warning" = "info") => {
     setToast({ text, tone })
@@ -211,7 +214,7 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
           if (resolved.code === "SERVER_OFFLINE" || resolved.code === "BACKEND_OFFLINE") {
             setIsOnline(false)
           }
-          setTargetError(mapShareErrorMessage(resolved.code, resolved.message, t))
+          setTargetError(mapShareErrorMessage(resolved.code, resolved.message, tRef.current))
           setTargetLoading(false)
           return
         }
@@ -219,7 +222,7 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
         setTargetLoading(false)
       } catch (err) {
         if (!active) return
-        setTargetError(err instanceof Error ? err.message : t("share_win_no_target"))
+        setTargetError(err instanceof Error ? err.message : tRef.current("share_win_no_target"))
         setTargetLoading(false)
       }
     }
@@ -228,11 +231,12 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
     return () => {
       active = false
     }
-  }, [initialTarget, t])
+  }, [initialTarget])
 
   const fetchShares = useCallback(
     async (activeTarget: ShareTargetInfo | null) => {
       if (!activeTarget) return
+      const seq = ++fetchSeqRef.current
       setSharesLoading(true)
       setSharesError(null)
       try {
@@ -240,6 +244,7 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
           serverId: activeTarget.server_id,
           targetPath: activeTarget.canonical_rel,
         })
+        if (seq !== fetchSeqRef.current) return
         if (res.success) {
           setIsOnline(true)
           setShares(Array.isArray(res.shares) ? res.shares : [])
@@ -249,17 +254,20 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
         } else {
           setIsAdmin(false)
           setShares([])
-          setSharesError(res.error || t("share_active_fetch_error"))
+          setSharesError(res.error || tRef.current("share_active_fetch_error"))
         }
       } catch (err) {
+        if (seq !== fetchSeqRef.current) return
         setIsAdmin(false)
         setShares([])
-        setSharesError(err instanceof Error ? err.message : t("share_active_fetch_error"))
+        setSharesError(err instanceof Error ? err.message : tRef.current("share_active_fetch_error"))
       } finally {
-        setSharesLoading(false)
+        if (seq === fetchSeqRef.current) {
+          setSharesLoading(false)
+        }
       }
     },
-    [t],
+    [],
   )
 
   useEffect(() => {

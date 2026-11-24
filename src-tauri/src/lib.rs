@@ -1308,10 +1308,10 @@ mod tests {
             parse_share_cli_action(&[
                 exe,
                 "--share".into(),
-                "\\\\192.168.1.10\\Disk1\\Folder\"".into()
+                "\\\\nas-host.local\\Disk1\\Folder\"".into()
             ]),
             Some(ShareCliAction::Share(
-                "\\\\192.168.1.10\\Disk1\\Folder\\".into()
+                "\\\\nas-host.local\\Disk1\\Folder\\".into()
             ))
         );
     }

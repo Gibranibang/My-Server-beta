@@ -746,9 +746,11 @@ fn open_or_focus_share_window(
     app: &AppHandle,
     target_json: serde_json::Value,
 ) -> Result<(), String> {
-    let state = app.state::<ShareWindowState>();
-    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = Some(target_json.clone());
+    {
+        let state = app.state::<ShareWindowState>();
+        let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(target_json.clone());
+    }
 
     if let Some(wv) = app.get_webview_window("share-window") {
         let json_str = serde_json::to_string(&target_json)
@@ -763,7 +765,7 @@ fn open_or_focus_share_window(
         return Ok(());
     }
 
-    let win = WebviewWindowBuilder::new(
+    let win = match WebviewWindowBuilder::new(
         app,
         "share-window",
         WebviewUrl::App("index.html?window=share".into()),
@@ -777,7 +779,15 @@ fn open_or_focus_share_window(
     .always_on_top(false)
     .center()
     .build()
-    .map_err(|e| format!("Gagal membuka share-window: {}", e))?;
+    {
+        Ok(w) => w,
+        Err(e) => {
+            let state = app.state::<ShareWindowState>();
+            let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = None;
+            return Err(format!("Gagal membuka share-window: {}", e));
+        }
+    };
 
     set_window_taskbar_icon(&win);
     let _ = win.show();
@@ -875,7 +885,7 @@ async fn handle_share_cli_action(
 }
 
 #[tauri::command]
-fn open_share_window(app: AppHandle, target: serde_json::Value) -> Result<(), String> {
+async fn open_share_window(app: AppHandle, target: serde_json::Value) -> Result<(), String> {
     open_or_focus_share_window(&app, target)
 }
 

@@ -199,7 +199,7 @@ class TestRustAndCapabilitiesContract(unittest.TestCase):
             "fn open_or_focus_share_window(",
             "async fn wait_for_core_service_ready(",
             "async fn handle_share_cli_action(",
-            "fn open_share_window(",
+            "async fn open_share_window(",
             "fn close_share_window(",
             "fn get_share_window_target(",
             "pub fn run()",
@@ -235,6 +235,16 @@ class TestRustAndCapabilitiesContract(unittest.TestCase):
 
         # New window branch centers once on initial creation
         self.assertIn(".center()", fn_block)
+
+        # CR-01: ShareWindowState mutex must be scoped and dropped before get_webview_window / WebviewWindowBuilder
+        lock_block = _extract_block(fn_block, "{\n        let state = app.state::<ShareWindowState>();")
+        self.assertIn("*guard = Some(target_json.clone());", lock_block)
+        lock_end = fn_block.find(lock_block) + len(lock_block)
+        get_wv_pos = fn_block.find('app.get_webview_window("share-window")')
+        builder_pos = fn_block.find("WebviewWindowBuilder::new(")
+        self.assertLess(lock_end, get_wv_pos)
+        self.assertLess(lock_end, builder_pos)
+        self.assertIn("*guard = None;", fn_block)
 
     def test_04_close_requested_isolates_share_window_before_prevent_close(self):
         close_block = _extract_block(self.lib_rs, "tauri::WindowEvent::CloseRequested { api, .. } => {")

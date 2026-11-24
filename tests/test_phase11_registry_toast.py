@@ -557,6 +557,26 @@ class TestExplorerRegistryAndInstaller(_BaseRegistryToastTestCase):
             self.assertFalse(ok_perm)
             self.assertIn("Access is denied", err_perm)
 
+        # WR-04: disable propagates non-ENOENT OSErrors (e.g. winerror 145 / 5), ignores winerror 2
+        hive.raise_on_create = None
+        err_145 = OSError("The directory is not empty")
+        err_145.winerror = 145
+        hive.raise_on_delete = err_145
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "winreg", wreg_mod):
+            ok_145, msg_145 = core.set_explorer_context_menu_enabled(False)
+            self.assertFalse(ok_145)
+            self.assertIn("not empty", msg_145)
+
+        err_2 = OSError("The system cannot find the file specified")
+        err_2.winerror = 2
+        hive.raise_on_delete = err_2
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "winreg", wreg_mod):
+            ok_2, msg_2 = core.set_explorer_context_menu_enabled(False)
+            self.assertTrue(ok_2, msg_2)
+            self.assertEqual(msg_2, "")
+
     def test_http_explorer_context_menu_and_load_settings(self):
         hive = _FakeWinRegHive()
         wreg_mod = self._make_winreg_module(hive)

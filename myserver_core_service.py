@@ -2356,11 +2356,10 @@ def set_explorer_context_menu_enabled(enable: bool) -> tuple[bool, str]:
                         wreg.DeleteKey(wreg.HKEY_CURRENT_USER, target_key)
                     except FileNotFoundError:
                         pass
-                    except PermissionError as exc:
-                        return False, str(exc)
                     except OSError as exc:
-                        if getattr(exc, "winerror", None) == 5:
-                            return False, str(exc)
+                        if getattr(exc, "winerror", None) == 2:
+                            continue
+                        return False, str(exc)
             if config_manager:
                 cfg = config_manager.load_or_create_config()
                 cfg["explorer_context_menu_enabled"] = False

@@ -409,7 +409,7 @@ class TestShareResolver(_BaseShareCoreTestCase):
         cfg["servers"][0].pop("backend_smb_auth", None)
         config_manager.save_config(cfg)
         with core._BACKEND_JWT_CACHE_LOCK:
-            core._BACKEND_JWT_CACHE[("srv_1", "http://192.168.1.10:8080", "zimaos_share")] = {"token": "stale_jwt", "fail_until": 0.0}
+            core._BACKEND_JWT_CACHE[("srv_1", "http://192.168.1.10:8080", "zimaos_share", "admin_ops")] = {"token": "stale_jwt", "fail_until": 0.0}
 
         calls = []
 
@@ -472,6 +472,60 @@ class TestShareResolver(_BaseShareCoreTestCase):
         self.assertEqual(seen_bearer_tokens, ["Bearer zimaos_admin_jwt"])
         self.assertNotIn("stale_staff", seen_auth_users)
         self.assertNotIn("Bearer stale_backend_tok", seen_bearer_tokens)
+
+    def test_zimaos_jwt_cache_key_isolates_active_profile_username(self):
+        """CR-03: Switching active_profile from Admin to non-admin misses Admin JWT in _BACKEND_JWT_CACHE."""
+        cfg = config_manager.load_or_create_config()
+        cfg["servers"][0]["credentials"]["Guest"] = {
+            "username": "guest_user",
+            "password": config_manager.encrypt_credential("GuestSecret!1"),
+        }
+        cfg["servers"][0]["profiles"] = ["Admin", "Guest"]
+        cfg["servers"][0]["active_profile"] = "Admin"
+        config_manager.save_config(cfg)
+
+        seen_calls = []
+
+        def _fake_backend(url, method="GET", json_body=None, headers=None, timeout=5.0, retries=1):
+            if url.endswith("/api/v1/auth/verify"):
+                uname = (json_body or {}).get("username")
+                seen_calls.append(("verify", uname))
+                tok = "jwt_admin" if uname == "admin_ops" else "jwt_guest"
+                role = "admin" if uname == "admin_ops" else "user"
+                return True, {"access_token": tok, "role": role}, 200
+            if url.endswith("/api/v1/storage/disks"):
+                auth = (headers or {}).get("Authorization")
+                seen_calls.append(("disks", auth))
+                is_adm = auth == "Bearer jwt_admin"
+                return True, {
+                    "disks": [{"name": "Disk1", "relative_path": "Disk1", "mount_point": "/app/storage/Disk1", "is_accessible": True}],
+                    "is_admin": is_adm,
+                }, 200
+            return False, {}, 404
+
+        with patch.object(core, "_backend_http_request", side_effect=_fake_backend):
+            ok_adm, res_adm = core._resolve_smb_share_target(r"\\192.168.1.10\Disk1\a.txt")
+            self.assertTrue(ok_adm)
+            self.assertTrue(res_adm["is_admin"])
+
+            # Switch active_profile to Guest
+            cfg2 = config_manager.load_or_create_config()
+            cfg2["servers"][0]["active_profile"] = "Guest"
+            config_manager.save_config(cfg2)
+
+            ok_gst, res_gst = core._resolve_smb_share_target(r"\\192.168.1.10\Disk1\a.txt")
+            self.assertTrue(ok_gst)
+            self.assertFalse(res_gst["is_admin"])
+
+        self.assertEqual(
+            seen_calls,
+            [
+                ("verify", "admin_ops"),
+                ("disks", "Bearer jwt_admin"),
+                ("verify", "guest_user"),
+                ("disks", "Bearer jwt_guest"),
+            ],
+        )
 
     def test_non_admin_missing_disk_probe_and_offline_errors(self):
         """Empty disks + non-admin browse 403 -> FORBIDDEN_PATH, 404 -> SHARE_NOT_MOUNTED_IN_BACKEND; 503/0 -> BACKEND_OFFLINE."""

@@ -17959,7 +17959,7 @@ def _backend_share_request(matched_srv, cfg, endpoint, method="GET", json_body=N
     if not uname or not pwd:
         return 401, {"success": False, "needsAuth": True, "error": "Kredensial server belum dikonfigurasi."}, ""
 
-    cache_key = (str(srv_id), clean_base, "zimaos_share")
+    cache_key = (str(srv_id), clean_base, "zimaos_share", uname.lower())
     token = ""
     with _BACKEND_JWT_CACHE_LOCK:
         cached = _BACKEND_JWT_CACHE.get(cache_key)

@@ -290,6 +290,11 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
       if (changed) {
         setGeneratedLink(null)
         setJustCopied(false)
+        setPassword("")
+        setShowPassword(false)
+        setExpiryMode("unlimited")
+        setCustomHours("48")
+        setBaseUrlError(null)
       }
     }
 

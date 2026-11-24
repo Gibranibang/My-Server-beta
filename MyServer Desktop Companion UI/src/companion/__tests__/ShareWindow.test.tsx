@@ -742,4 +742,39 @@ describe("ShareWindow (Surface 1: E1-E4, SHAR-03, SECH-02, SECH-03)", () => {
     expect(screen.getByRole("status")).toHaveTextContent(I18N.en.share_copied_toast)
     expect(within(card).getByText(I18N.en.share_copied_badge)).toBeInTheDocument()
   })
+
+  it("IN-01: resets password, showPassword, expiryMode, and customHours when re-targeted to a different path", async () => {
+    const firstTarget = makeTarget({ basename: "first.pdf", canonical_rel: "DATA/first.pdf" })
+    const secondTarget = makeTarget({ basename: "second.pdf", canonical_rel: "DATA/second.pdf" })
+    const api = makeTestApi()
+    setCompanionApi(api)
+
+    render(<ShareWindow initialTarget={firstTarget} />)
+    await waitFor(() => {
+      expect(screen.getByText(I18N.en.share_active_empty_title)).toBeInTheDocument()
+    })
+
+    const pwdInput = screen.getByPlaceholderText(I18N.en.share_password_placeholder) as HTMLInputElement
+    fireEvent.change(pwdInput, { target: { value: "top-secret" } })
+    fireEvent.click(screen.getByRole("button", { name: I18N.en.share_password_show_aria }))
+    expect(pwdInput.type).toBe("text")
+    expect(pwdInput.value).toBe("top-secret")
+
+    fireEvent.click(screen.getByRole("radio", { name: I18N.en.share_expiry_custom }))
+    const customInput = screen.getByLabelText(I18N.en.share_expiry_custom) as HTMLInputElement
+    fireEvent.change(customInput, { target: { value: "12" } })
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("myserver:share-target", { detail: secondTarget }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTitle("second.pdf")).toBeInTheDocument()
+    })
+    const resetPwdInput = screen.getByPlaceholderText(I18N.en.share_password_placeholder) as HTMLInputElement
+    expect(resetPwdInput.value).toBe("")
+    expect(resetPwdInput.type).toBe("password")
+    expect(screen.getByRole("radio", { name: I18N.en.share_expiry_unlimited })).toHaveAttribute("aria-checked", "true")
+    expect(screen.queryByLabelText(I18N.en.share_expiry_custom)).toBeNull()
+  })
 })

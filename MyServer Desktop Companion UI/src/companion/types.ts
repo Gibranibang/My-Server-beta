@@ -195,6 +195,7 @@ export interface Settings {
   theme?: "dark" | "light"
   autoCheckUpdate?: boolean
   firstRunSetup?: boolean
+  explorerContextMenuEnabled?: boolean
 }
 
 export type ChecklistKey = "lan" | "bios" | "standby"
@@ -499,3 +500,118 @@ export interface WizardDraft {
   syncthingDone: boolean
   vmDone: boolean
 }
+
+export type ShareErrorCode =
+  | "INVALID_PATH"
+  | "LOCAL_DRIVE"
+  | "FOREIGN_NAS"
+  | "SHARE_NOT_MOUNTED_IN_BACKEND"
+  | "MULTI_ITEM_DROP"
+  | "SERVER_OFFLINE"
+  | "BACKEND_OFFLINE"
+  | "UNAUTHENTICATED_SESSION"
+  | "FORBIDDEN_PATH"
+  | "UNKNOWN_ERROR"
+
+export interface ShareTargetInfo {
+  server_id: string
+  server_name: string
+  disk_name: string
+  share_name: string
+  canonical_rel: string
+  basename: string
+  is_dir: boolean
+  is_admin?: boolean
+  backend_url?: string
+  smb_source?: "backend" | "zimaos"
+  raw_path?: string
+}
+
+export interface ShareResolveResult {
+  ok: boolean
+  code?: ShareErrorCode
+  message?: string
+  target?: ShareTargetInfo
+}
+
+export interface PublicShareItem {
+  token: string
+  target_path: string
+  is_dir?: boolean
+  label?: string | null
+  share_url: string
+  resolved_url?: string
+  is_lan_fallback?: boolean
+  expires_at?: string | null
+  password_protected?: boolean
+  revoked?: boolean
+  download_count?: number
+  created_at?: string
+  owner_username?: string
+}
+
+export interface ShareListResponse {
+  success: boolean
+  shares: PublicShareItem[]
+  public_base_url: string
+  is_admin: boolean
+  username?: string
+  backend_url?: string
+  error?: string
+}
+
+export interface ShareCreatePayload {
+  path: string
+  server_id?: string
+  password?: string | null
+  expires_in_hours?: number | null
+  label?: string | null
+  copy_to_clipboard?: boolean
+}
+
+export interface ShareCreateResult {
+  success: boolean
+  share?: PublicShareItem
+  share_url?: string
+  is_lan_fallback?: boolean
+  clipboard_copied?: boolean
+  error?: string
+  code?: ShareErrorCode
+}
+
+export interface QuickShareResult {
+  success: boolean
+  ok?: boolean
+  code?: ShareErrorCode | "OK_PUBLIC" | "OK_LAN_FALLBACK"
+  share?: PublicShareItem
+  share_url?: string
+  is_lan_fallback?: boolean
+  clipboard_copied?: boolean
+  toast_title?: string
+  toast_body?: string
+  error?: string
+}
+
+export interface ShareSettingsResult {
+  success: boolean
+  public_base_url?: string
+  status?: number
+  error?: string
+}
+
+export interface ShareRevokeResult {
+  success: boolean
+  already_revoked?: boolean
+  error?: string
+}
+
+export interface ExplorerContextMenuResult {
+  success: boolean
+  enabled: boolean
+  error?: string
+}
+
+export type MiniTrayDragDropDetail =
+  | { type: "enter"; count: number }
+  | { type: "drop"; paths: string[] }
+  | { type: "leave" }

@@ -19,6 +19,15 @@ import type {
   FileManagerSourceStatus,
   FileManagerSourcePayload,
   ExplorerOpenResult,
+  ShareTargetInfo,
+  ShareResolveResult,
+  ShareListResponse,
+  ShareCreatePayload,
+  ShareCreateResult,
+  QuickShareResult,
+  ShareSettingsResult,
+  ShareRevokeResult,
+  ExplorerContextMenuResult,
 } from "./types"
 
 
@@ -653,7 +662,12 @@ export function createRealApi(): CompanionApi {
             const resolvedTheme = (s.theme === "light" || s.theme === "dark")
               ? s.theme
               : (cachedTheme === "light" || cachedTheme === "dark" ? cachedTheme : DEFAULT_SETTINGS.theme)
-            currentSettings = { ...DEFAULT_SETTINGS, ...s, theme: resolvedTheme }
+            currentSettings = {
+              ...DEFAULT_SETTINGS,
+              ...s,
+              theme: resolvedTheme,
+              explorerContextMenuEnabled: Boolean(s.explorerContextMenuEnabled),
+            }
             return currentSettings
           }
         } catch (err) {
@@ -2585,6 +2599,199 @@ export function createRealApi(): CompanionApi {
         }
       }
       return { success: false, message: "Core API unavailable" }
+    },
+
+    async resolveSharePath(path: string): Promise<ShareResolveResult> {
+      try {
+        const res = await callCoreApi("shares/resolve", { path })
+        if (res && typeof res === "object") {
+          return res as ShareResolveResult
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          code: "UNKNOWN_ERROR",
+          message: extractErrorMessage(err, "Unable to resolve path."),
+        }
+      }
+      return { ok: false, code: "UNKNOWN_ERROR", message: "Core API unavailable" }
+    },
+
+    async listShares(opts?: { serverId?: string; targetPath?: string }): Promise<ShareListResponse> {
+      try {
+        const res = await callCoreApi("shares/list", {
+          server_id: opts?.serverId,
+          target_path: opts?.targetPath,
+        })
+        if (res && typeof res === "object") {
+          return {
+            success: Boolean(res.success),
+            shares: Array.isArray(res.shares) ? res.shares : [],
+            public_base_url: typeof res.public_base_url === "string" ? res.public_base_url : "",
+            is_admin: Boolean(res.is_admin),
+            username: typeof res.username === "string" ? res.username : undefined,
+            backend_url: typeof res.backend_url === "string" ? res.backend_url : undefined,
+            error: typeof res.error === "string" ? res.error : undefined,
+          }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          shares: [],
+          public_base_url: "",
+          is_admin: false,
+          error: extractErrorMessage(err, "Failed to load active share links."),
+        }
+      }
+      return {
+        success: false,
+        shares: [],
+        public_base_url: "",
+        is_admin: false,
+        error: "Core API unavailable",
+      }
+    },
+
+    async createShare(payload: ShareCreatePayload): Promise<ShareCreateResult> {
+      try {
+        // Never forward public_base_url from client — Backend enforces admin-only config (SECH-03)
+        const cleanPayload: Record<string, unknown> = {
+          path: payload.path,
+          server_id: payload.server_id,
+          password: payload.password ?? null,
+          expires_in_hours: payload.expires_in_hours ?? null,
+          label: payload.label ?? null,
+          copy_to_clipboard: payload.copy_to_clipboard ?? true,
+        }
+        const res = await callCoreApi("shares/create", cleanPayload)
+        if (res && typeof res === "object") {
+          return res as ShareCreateResult
+        }
+      } catch (err) {
+        return {
+          success: false,
+          code: "UNKNOWN_ERROR",
+          error: extractErrorMessage(err, "Failed to create share link."),
+        }
+      }
+      return { success: false, code: "UNKNOWN_ERROR", error: "Core API unavailable" }
+    },
+
+    async quickSharePath(path: string): Promise<QuickShareResult> {
+      try {
+        const res = await callCoreApi("shares/quick", { path })
+        if (res && typeof res === "object") {
+          return res as QuickShareResult
+        }
+      } catch (err) {
+        return {
+          success: false,
+          ok: false,
+          code: "UNKNOWN_ERROR",
+          error: extractErrorMessage(err, "Failed to create quick share link."),
+        }
+      }
+      return {
+        success: false,
+        ok: false,
+        code: "UNKNOWN_ERROR",
+        error: "Core API unavailable",
+      }
+    },
+
+    async revokeShare(token: string, serverId?: string): Promise<ShareRevokeResult> {
+      try {
+        const res = await callCoreApi("shares/revoke", { token, server_id: serverId })
+        if (res && typeof res === "object") {
+          return res as ShareRevokeResult
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: extractErrorMessage(err, "Failed to revoke share link."),
+        }
+      }
+      return { success: false, error: "Core API unavailable" }
+    },
+
+    async updateShareSettings(publicBaseUrl: string, serverId?: string): Promise<ShareSettingsResult> {
+      try {
+        const res = await callCoreApi("shares/settings", {
+          public_base_url: publicBaseUrl,
+          server_id: serverId,
+        })
+        if (res && typeof res === "object") {
+          return res as ShareSettingsResult
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: extractErrorMessage(err, "Failed to update Public Base URL."),
+        }
+      }
+      return { success: false, error: "Core API unavailable" }
+    },
+
+    async copyShareClipboard(text: string): Promise<boolean> {
+      if (!text) return false
+      try {
+        const res = await callCoreApi("shares/copy_clipboard", { text })
+        if (res && res.success === true) {
+          return true
+        }
+      } catch {
+        // Fall back to WebView clipboard API
+      }
+      try {
+        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text)
+          return true
+        }
+      } catch {
+        // Clipboard unavailable
+      }
+      return false
+    },
+
+    async setExplorerContextMenuEnabled(enabled: boolean): Promise<ExplorerContextMenuResult> {
+      const res = await callCoreApi("settings/explorer_context_menu", { enabled })
+      if (!res || typeof res !== "object" || res.success === false) {
+        throw new Error(extractErrorMessage(res, "Failed to update Windows Explorer menu"))
+      }
+      const nextEnabled = res.enabled !== undefined ? Boolean(res.enabled) : Boolean(enabled)
+      currentSettings = { ...currentSettings, explorerContextMenuEnabled: nextEnabled }
+      return { success: true, enabled: nextEnabled }
+    },
+
+    async openShareWindow(target: ShareTargetInfo): Promise<void> {
+      const invoke = getTauriInvoke()
+      if (!invoke) return
+      await invoke("open_share_window", { target })
+    },
+
+    async closeShareWindow(): Promise<void> {
+      const invoke = getTauriInvoke()
+      if (!invoke) return
+      try {
+        await invoke("close_share_window")
+      } catch (err) {
+        console.warn("[RealApi] closeShareWindow error:", extractErrorMessage(err, "Failed to close share window"))
+      }
+    },
+
+    async getShareWindowTarget(): Promise<ShareTargetInfo | null> {
+      const invoke = getTauriInvoke()
+      if (!invoke) return null
+      try {
+        const res = await invoke("get_share_window_target")
+        if (res && typeof res === "object") {
+          return res as ShareTargetInfo
+        }
+        return null
+      } catch (err) {
+        console.warn("[RealApi] getShareWindowTarget error:", extractErrorMessage(err, "Failed to read share target"))
+        return null
+      }
     },
   }
 

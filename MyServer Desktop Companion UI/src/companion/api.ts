@@ -18,6 +18,16 @@ import type {
   FileManagerSourceStatus,
   FileManagerSourcePayload,
   ExplorerOpenResult,
+  ShareTargetInfo,
+  ShareResolveResult,
+  PublicShareItem,
+  ShareListResponse,
+  ShareCreatePayload,
+  ShareCreateResult,
+  QuickShareResult,
+  ShareSettingsResult,
+  ShareRevokeResult,
+  ExplorerContextMenuResult,
 } from "./types"
 
 import { APP_VERSION, APP_CHANNEL } from "./version"
@@ -390,6 +400,29 @@ export interface CompanionApi {
 
   completeWizard(): Promise<{ success: boolean; firstRunSetup?: boolean; message?: string; error?: string }>
 
+  /** Phase 11: Windows File Explorer Native Share & Quick Share */
+  resolveSharePath(path: string): Promise<ShareResolveResult>
+
+  listShares(opts?: { serverId?: string; targetPath?: string }): Promise<ShareListResponse>
+
+  createShare(payload: ShareCreatePayload): Promise<ShareCreateResult>
+
+  quickSharePath(path: string): Promise<QuickShareResult>
+
+  revokeShare(token: string, serverId?: string): Promise<ShareRevokeResult>
+
+  updateShareSettings(publicBaseUrl: string, serverId?: string): Promise<ShareSettingsResult>
+
+  copyShareClipboard(text: string): Promise<boolean>
+
+  setExplorerContextMenuEnabled(enabled: boolean): Promise<ExplorerContextMenuResult>
+
+  openShareWindow(target: ShareTargetInfo): Promise<void>
+
+  closeShareWindow(): Promise<void>
+
+  getShareWindowTarget(): Promise<ShareTargetInfo | null>
+
 }
 
 
@@ -479,6 +512,8 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
 
   autoCheckUpdate: true,
+
+  explorerContextMenuEnabled: false,
 
 }
 
@@ -571,6 +606,42 @@ export function createMockApi(): CompanionApi {
     smbMode: "zimaos",
     needsAuth: false,
   }
+
+  let mockPublicBaseUrl = "https://nas.example.com"
+  const mockIsAdmin = true
+  let mockShareCounter = 1
+  let mockShareTarget: ShareTargetInfo | null =
+    typeof window !== "undefined" && window.location.search.includes("window=share")
+      ? {
+          server_id: "srv_mock_1",
+          server_name: "Server Utama",
+          disk_name: "DATA",
+          share_name: "DATA",
+          canonical_rel: "DATA/Documents/Report.pdf",
+          basename: "Report.pdf",
+          is_dir: false,
+          is_admin: true,
+          backend_url: "http://192.168.1.10:8085",
+          smb_source: "zimaos",
+        }
+      : null
+  let mockShares: PublicShareItem[] = [
+    {
+      token: "demo1234",
+      target_path: "DATA/Documents/Report.pdf",
+      is_dir: false,
+      label: "Report.pdf",
+      share_url: "https://nas.example.com/s/demo1234",
+      resolved_url: "https://nas.example.com/s/demo1234",
+      is_lan_fallback: false,
+      expires_at: null,
+      password_protected: false,
+      revoked: false,
+      download_count: 3,
+      created_at: "2026-11-24T10:00:00Z",
+      owner_username: "admin",
+    },
+  ]
 
   let powerTimer: number | undefined
 
@@ -1354,6 +1425,206 @@ export function createMockApi(): CompanionApi {
     async completeWizard() {
       settings = { ...settings, firstRunSetup: false }
       return { success: true, firstRunSetup: false }
+    },
+
+    async resolveSharePath(path: string) {
+      const clean = typeof path === "string" ? path.trim().replace(/^["']|["']$/g, "") : ""
+      if (!clean || clean.includes("\0") || /(^|[\\/])\.\.($|[\\/])/.test(clean)) {
+        return { ok: false, code: "INVALID_PATH", message: "Invalid or unsupported file path." }
+      }
+      if (power === "offline") {
+        return {
+          ok: false,
+          code: "SERVER_OFFLINE",
+          message: "Cannot create share link while server or Backend is offline.",
+        }
+      }
+      if (/^[a-dA-D]:/.test(clean)) {
+        return {
+          ok: false,
+          code: "LOCAL_DRIVE",
+          message: "Only files or folders on a MyServer SMB drive can be shared.",
+        }
+      }
+      const norm = clean
+        .replace(/\\/g, "/")
+        .replace(/^[A-Za-z]:\/?/, "")
+        .replace(/^\/+/, "")
+      const canonical = norm.startsWith("DATA/") ? norm : norm ? `DATA/${norm}` : "DATA"
+      const segs = canonical.split("/").filter(Boolean)
+      const basename = segs[segs.length - 1] || "DATA"
+      return {
+        ok: true,
+        target: {
+          server_id: "srv_mock_1",
+          server_name: "Server Utama",
+          disk_name: "DATA",
+          share_name: "DATA",
+          canonical_rel: canonical,
+          basename,
+          is_dir: !basename.includes("."),
+          is_admin: mockIsAdmin,
+          backend_url: "http://192.168.1.10:8085",
+          smb_source: "zimaos",
+          raw_path: path,
+        },
+      }
+    },
+
+    async listShares(opts) {
+      const base = (mockPublicBaseUrl || "http://192.168.1.10:8085").replace(/\/+$/, "")
+      const isLanFallback = !mockPublicBaseUrl
+      const targetNorm = opts?.targetPath
+        ? opts.targetPath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+        : null
+      const filtered = mockShares
+        .filter((s) => !s.revoked)
+        .filter((s) => (targetNorm ? s.target_path === targetNorm : true))
+        .map((s) => {
+          const url = `${base}/s/${s.token}`
+          return {
+            ...s,
+            share_url: url,
+            resolved_url: url,
+            is_lan_fallback: isLanFallback,
+          }
+        })
+      return {
+        success: true,
+        shares: filtered,
+        public_base_url: mockPublicBaseUrl,
+        is_admin: mockIsAdmin,
+        username: "admin",
+        backend_url: "http://192.168.1.10:8085",
+      }
+    },
+
+    async createShare(payload) {
+      const cleanPath = typeof payload.path === "string" ? payload.path.trim() : ""
+      if (!cleanPath) {
+        return { success: false, code: "INVALID_PATH", error: "Invalid or empty path." }
+      }
+      const token = `mock${++mockShareCounter}${Math.random().toString(36).slice(2, 6)}`
+      const base = (mockPublicBaseUrl || "http://192.168.1.10:8085").replace(/\/+$/, "")
+      const isLanFallback = !mockPublicBaseUrl
+      const shareUrl = `${base}/s/${token}`
+      const expiresAt =
+        typeof payload.expires_in_hours === "number" && payload.expires_in_hours > 0
+          ? new Date(Date.now() + payload.expires_in_hours * 3600 * 1000).toISOString()
+          : null
+      const segs = cleanPath.replace(/\\/g, "/").split("/").filter(Boolean)
+      const label = payload.label || segs[segs.length - 1] || cleanPath
+      const item: PublicShareItem = {
+        token,
+        target_path: segs.join("/"),
+        is_dir: !label.includes("."),
+        label,
+        share_url: shareUrl,
+        resolved_url: shareUrl,
+        is_lan_fallback: isLanFallback,
+        expires_at: expiresAt,
+        password_protected: Boolean(payload.password && payload.password.trim()),
+        revoked: false,
+        download_count: 0,
+        created_at: new Date().toISOString(),
+        owner_username: "admin",
+      }
+      mockShares = [item, ...mockShares]
+      return {
+        success: true,
+        share: item,
+        share_url: shareUrl,
+        is_lan_fallback: isLanFallback,
+        clipboard_copied: payload.copy_to_clipboard !== false,
+      }
+    },
+
+    async quickSharePath(path: string) {
+      const resolved = await this.resolveSharePath(path)
+      if (!resolved.ok || !resolved.target) {
+        return {
+          success: false,
+          ok: false,
+          code: resolved.code || "INVALID_PATH",
+          error: resolved.message || "Unable to resolve path.",
+        }
+      }
+      const created = await this.createShare({
+        path: resolved.target.canonical_rel,
+        server_id: resolved.target.server_id,
+        password: null,
+        expires_in_hours: null,
+        copy_to_clipboard: true,
+      })
+      if (!created.success || !created.share_url) {
+        return {
+          success: false,
+          ok: false,
+          code: created.code || "UNKNOWN_ERROR",
+          error: created.error || "Failed to create quick share link.",
+        }
+      }
+      return {
+        success: true,
+        ok: true,
+        code: created.is_lan_fallback ? "OK_LAN_FALLBACK" : "OK_PUBLIC",
+        share: created.share,
+        share_url: created.share_url,
+        is_lan_fallback: created.is_lan_fallback,
+        clipboard_copied: true,
+        toast_title:
+          settings.language === "en"
+            ? "Share link copied to clipboard"
+            : "Tautan berbagi disalin ke clipboard",
+        toast_body: resolved.target.basename,
+      }
+    },
+
+    async revokeShare(token: string) {
+      const idx = mockShares.findIndex((s) => s.token === token && !s.revoked)
+      if (idx === -1) {
+        return { success: false, already_revoked: true, error: "Share link not found." }
+      }
+      mockShares = mockShares.filter((s) => s.token !== token)
+      return { success: true }
+    },
+
+    async updateShareSettings(publicBaseUrl: string) {
+      if (!mockIsAdmin) {
+        return { success: false, status: 403, error: "Only administrators may update Public Base URL." }
+      }
+      mockPublicBaseUrl = (publicBaseUrl || "").trim().replace(/\/+$/, "")
+      return { success: true, public_base_url: mockPublicBaseUrl }
+    },
+
+    async copyShareClipboard(text: string) {
+      if (!text) return false
+      try {
+        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text)
+        }
+      } catch {
+        // ignore in mock/jsdom
+      }
+      return true
+    },
+
+    async setExplorerContextMenuEnabled(enabled: boolean) {
+      const next = Boolean(enabled)
+      settings = { ...settings, explorerContextMenuEnabled: next }
+      return { success: true, enabled: next }
+    },
+
+    async openShareWindow(target: ShareTargetInfo) {
+      mockShareTarget = target
+    },
+
+    async closeShareWindow() {
+      mockShareTarget = null
+    },
+
+    async getShareWindowTarget() {
+      return mockShareTarget
     },
 
   }

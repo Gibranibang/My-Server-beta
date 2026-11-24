@@ -1103,6 +1103,46 @@ pub fn run() {
                 }
                 let _ = window.hide();
             }
+            tauri::WindowEvent::DragDrop(drop_event) => {
+                if window.label() != "main" {
+                    return;
+                }
+                let wizard_active = window
+                    .app_handle()
+                    .state::<wizard_state::WizardWindowState>()
+                    .is_active();
+                if wizard_active {
+                    return;
+                }
+                if let Some(wv) = window.app_handle().get_webview_window("main") {
+                    let payload = match drop_event {
+                        tauri::DragDropEvent::Enter { paths, .. } => Some(serde_json::json!({
+                            "type": "enter",
+                            "count": paths.len(),
+                        })),
+                        tauri::DragDropEvent::Drop { paths, .. } => {
+                            let strs: Vec<String> =
+                                paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                            Some(serde_json::json!({
+                                "type": "drop",
+                                "paths": strs,
+                            }))
+                        }
+                        tauri::DragDropEvent::Leave { .. } => Some(serde_json::json!({
+                            "type": "leave",
+                        })),
+                        _ => None,
+                    };
+                    if let Some(val) = payload {
+                        if let Ok(json_str) = serde_json::to_string(&val) {
+                            let _ = wv.eval(&format!(
+                                "window.dispatchEvent(new CustomEvent('myserver:drag-drop', {{ detail: {} }}));",
+                                json_str
+                            ));
+                        }
+                    }
+                }
+            }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
@@ -1196,5 +1236,70 @@ mod tests {
         assert!(t1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         assert!(t2.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         assert_ne!(t1, t2);
+    }
+
+    #[test]
+    fn parse_share_cli_action_parses_share_and_quick_share_forms() {
+        let exe = "MyServer-Beta.exe".to_string();
+        assert_eq!(
+            parse_share_cli_action(&[exe.clone(), "--share".into(), "Z:\\docs\\a.pdf".into()]),
+            Some(ShareCliAction::Share("Z:\\docs\\a.pdf".into()))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[exe.clone(), "--share=Z:\\docs\\b.pdf".into()]),
+            Some(ShareCliAction::Share("Z:\\docs\\b.pdf".into()))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[exe.clone(), "--quick-share".into(), "Y:\\media".into()]),
+            Some(ShareCliAction::QuickShare("Y:\\media".into()))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[exe, "--quick-share=Y:\\media\\clip.mp4".into()]),
+            Some(ShareCliAction::QuickShare("Y:\\media\\clip.mp4".into()))
+        );
+    }
+
+    #[test]
+    fn parse_share_cli_action_sanitizes_quotes_spaces_and_drive_root_artifact() {
+        let exe = "MyServer-Beta.exe".to_string();
+        assert_eq!(
+            parse_share_cli_action(&[
+                exe.clone(),
+                "--share".into(),
+                "\"Z:\\Folder With Spaces\\file name.txt\"".into()
+            ]),
+            Some(ShareCliAction::Share(
+                "Z:\\Folder With Spaces\\file name.txt".into()
+            ))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[exe.clone(), "--share".into(), "Z:\"".into()]),
+            Some(ShareCliAction::Share("Z:\\".into()))
+        );
+        assert_eq!(
+            parse_share_cli_action(&[exe, "--quick-share=Z:\"".into()]),
+            Some(ShareCliAction::QuickShare("Z:\\".into()))
+        );
+    }
+
+    #[test]
+    fn parse_share_cli_action_returns_none_for_missing_empty_or_unrelated_args() {
+        let exe = "MyServer-Beta.exe".to_string();
+        assert_eq!(parse_share_cli_action(&[]), None);
+        assert_eq!(parse_share_cli_action(&[exe.clone()]), None);
+        assert_eq!(parse_share_cli_action(&[exe.clone(), "--share".into()]), None);
+        assert_eq!(
+            parse_share_cli_action(&[exe.clone(), "--share".into(), "   ".into()]),
+            None
+        );
+        assert_eq!(parse_share_cli_action(&[exe.clone(), "--share=".into()]), None);
+        assert_eq!(
+            parse_share_cli_action(&[exe.clone(), "--quick-share".into(), "\"\"".into()]),
+            None
+        );
+        assert_eq!(
+            parse_share_cli_action(&[exe, "--minimized".into(), "--foo=bar".into()]),
+            None
+        );
     }
 }

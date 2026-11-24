@@ -1,4 +1,4 @@
-import { useState, useEffect, Component, type ComponentType, type ErrorInfo, type ReactNode } from "react"
+import { useState, useEffect, useRef, Component, type ComponentType, type ErrorInfo, type ReactNode } from "react"
 import {
   ArrowLeft,
   ExternalLink,
@@ -6,7 +6,9 @@ import {
   Moon,
   PanelTopOpen,
   Power,
+  Share2,
   Sun,
+  WifiOff,
   X,
 } from "lucide-react"
 import FlyoutShell, { FlyoutHeader, HeaderTitle } from "./FlyoutShell"
@@ -14,7 +16,7 @@ import TrayDock from "./TrayDock"
 import { NoticeProvider, SERVER_IP, SERVER_URL, useCompanion, useNotice } from "./store"
 import { getTranslation } from "./i18n"
 import { Button, IconBadge, IconButton } from "./ui"
-import type { ViewId } from "./types"
+import type { MiniTrayDragDropDetail, ShareErrorCode, ViewId } from "./types"
 import AppsView from "./views/AppsView"
 import BackupView from "./views/BackupView"
 import FilesView from "./views/FilesView"
@@ -168,7 +170,29 @@ function TrayPlaceholder({
   )
 }
 
-function CompanionFrame({
+function mapShareErrorCodeToI18nKey(code?: ShareErrorCode | string): string {
+  switch (code) {
+    case "LOCAL_DRIVE":
+      return "share_err_local_drive"
+    case "FOREIGN_NAS":
+      return "share_err_foreign_nas"
+    case "SHARE_NOT_MOUNTED_IN_BACKEND":
+      return "share_err_unmounted"
+    case "MULTI_ITEM_DROP":
+      return "share_err_multi_item"
+    case "SERVER_OFFLINE":
+    case "BACKEND_OFFLINE":
+      return "share_err_offline"
+    case "UNAUTHENTICATED_SESSION":
+      return "share_err_unauthenticated"
+    case "FORBIDDEN_PATH":
+      return "share_err_forbidden"
+    default:
+      return "share_err_invalid_path"
+  }
+}
+
+export function CompanionFrame({
   view,
   onViewChange,
 }: {
@@ -176,13 +200,108 @@ function CompanionFrame({
   onViewChange: (view: ViewId) => void
 }) {
   const api = getCompanionApi()
-  const { settings, setSetting, isOnline } = useCompanion()
+  const { settings, setSetting, isOnline, wizardOpen } = useCompanion()
   const t = getTranslation(settings?.language)
   const isId = settings?.language === "id"
   const activeTheme = settings?.theme === "light" ? "light" : "dark"
   const [windowState, setWindowState] = useState<WindowState>("open")
+  const [dragHoverActive, setDragHoverActive] = useState(false)
+  const resolvingDropRef = useRef(false)
   const { notify } = useNotice()
+  const isOnlineRef = useRef(isOnline)
+  isOnlineRef.current = isOnline
+  const notifyRef = useRef(notify)
+  notifyRef.current = notify
+  const languageRef = useRef(settings?.language)
+  languageRef.current = settings?.language
   const open = windowState === "open"
+
+  const isNativeTauriMain =
+    typeof window !== "undefined" &&
+    Boolean((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__) &&
+    (() => {
+      const params = new URLSearchParams(window.location.search)
+      return (
+        params.get("window") !== "share" &&
+        params.get("canvas") !== "1" &&
+        params.get("board") !== "1"
+      )
+    })()
+
+  useEffect(() => {
+    if (!open || wizardOpen || !isNativeTauriMain) {
+      setDragHoverActive(false)
+      return
+    }
+
+    const handleBlur = () => {
+      setDragHoverActive(false)
+    }
+
+    const handleDragDrop = (event: Event) => {
+      const detail = (event as CustomEvent<MiniTrayDragDropDetail | undefined>).detail
+      if (!detail || typeof detail !== "object") return
+
+      if (detail.type === "enter") {
+        setDragHoverActive(true)
+        return
+      }
+
+      if (detail.type === "leave") {
+        setDragHoverActive(false)
+        return
+      }
+
+      if (detail.type === "drop") {
+        setDragHoverActive(false)
+        const paths = Array.isArray(detail.paths) ? detail.paths.filter(Boolean) : []
+        if (paths.length === 0) {
+          return
+        }
+
+        const translate = getTranslation(languageRef.current)
+        if (paths.length > 1) {
+          notifyRef.current(translate("share_err_multi_item"), "danger")
+          return
+        }
+
+        if (!isOnlineRef.current) {
+          notifyRef.current(translate("share_err_offline"), "danger")
+          return
+        }
+
+        if (resolvingDropRef.current) {
+          return
+        }
+
+        resolvingDropRef.current = true
+        void (async () => {
+          try {
+            const companionApi = getCompanionApi()
+            const res = await companionApi.resolveSharePath(paths[0])
+            if (res?.ok && res.target) {
+              await companionApi.openShareWindow(res.target)
+            } else {
+              const key = mapShareErrorCodeToI18nKey(res?.code)
+              notifyRef.current(getTranslation(languageRef.current)(key), "danger")
+            }
+          } catch {
+            notifyRef.current(getTranslation(languageRef.current)("share_err_invalid_path"), "danger")
+          } finally {
+            resolvingDropRef.current = false
+          }
+        })()
+      }
+    }
+
+    window.addEventListener("myserver:drag-drop", handleDragDrop)
+    window.addEventListener("blur", handleBlur)
+    return () => {
+      window.removeEventListener("myserver:drag-drop", handleDragDrop)
+      window.removeEventListener("blur", handleBlur)
+      setDragHoverActive(false)
+    }
+  }, [open, wizardOpen, isNativeTauriMain])
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", activeTheme)
@@ -307,7 +426,7 @@ function CompanionFrame({
     <div
       data-theme={activeTheme}
       data-server-status={isOnline ? "online" : "offline"}
-      className="flex items-start gap-[13.1px] companion-fit bg-[#0E100A] data-[theme=light]:bg-white rounded-[16px] overflow-hidden select-none border border-[#262626] data-[theme=light]:border-[#E2E8F0] shadow-2xl p-0"
+      className="relative flex items-start gap-[13.1px] companion-fit bg-[#0E100A] data-[theme=light]:bg-white rounded-[16px] overflow-hidden select-none border border-[#262626] data-[theme=light]:border-[#E2E8F0] shadow-2xl p-0"
     >
       {open ? (
         <>
@@ -328,6 +447,46 @@ function CompanionFrame({
           state={windowState}
           onRestore={() => setWindowState("open")}
         />
+      )}
+      {open && !wizardOpen && dragHoverActive && (
+        <div
+          data-testid="mini-tray-drop-overlay"
+          className="absolute inset-0 z-50 rounded-[16px] bg-surface/92 backdrop-blur-xs p-4 flex items-center justify-center"
+        >
+          <div
+            className={`flex h-full w-full flex-col items-center justify-center gap-4 rounded-card border-2 border-dashed p-6 text-center transition-colors duration-150 ${
+              isOnline
+                ? "border-brand bg-brand/5"
+                : "border-danger bg-danger-soft/40"
+            }`}
+          >
+            <span
+              className={`flex size-12 items-center justify-center rounded-full ${
+                isOnline
+                  ? "bg-brand/15 text-brand"
+                  : "bg-danger-soft text-danger-ink"
+              }`}
+            >
+              {isOnline ? (
+                <Share2 className="size-6" aria-hidden />
+              ) : (
+                <WifiOff className="size-6" aria-hidden />
+              )}
+            </span>
+            <div className="space-y-1">
+              <p
+                className={`text-heading font-semibold ${
+                  isOnline ? "text-ink" : "text-danger-ink"
+                }`}
+              >
+                {t(isOnline ? "drop_title_online" : "drop_title_offline")}
+              </p>
+              <p className="text-caption font-normal text-ink-subtle">
+                {t(isOnline ? "drop_sub_online" : "drop_sub_offline")}
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

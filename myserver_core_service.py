@@ -18231,9 +18231,10 @@ def _write_windows_clipboard(text):
     except Exception:
         pass
 
+    proc = None
     try:
         proc = subprocess.Popen(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Set-Clipboard -Value $input"],
+            [_resolve_windows_powershell_exe(), "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Set-Clipboard -Value $input"],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -18241,8 +18242,23 @@ def _write_windows_clipboard(text):
         )
         proc.communicate(input=text.encode("utf-8"), timeout=4.0)
         return proc.returncode == 0
+    except subprocess.TimeoutExpired:
+        if proc is not None:
+            try:
+                proc.kill()
+                proc.communicate(timeout=1.0)
+            except Exception:
+                pass
+        return False
     except Exception:
         return False
+
+
+def _resolve_windows_powershell_exe() -> str:
+    """Mengembalikan path penuh powershell.exe di System32 bila tersedia, atau fallback 'powershell.exe'."""
+    sys_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    cand = os.path.join(sys_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return cand if os.path.isfile(cand) else "powershell.exe"
 
 
 _TOAST_AUMID = "com.algithaproject.myserver.companion.beta"
@@ -18331,7 +18347,7 @@ def _show_windows_toast(title: str, body: str, level: str = "info") -> bool:
     env["MYSERVER_TOAST_LEVEL"] = "error" if str(level or "").strip().lower() == "error" else "info"
     try:
         subprocess.Popen(
-            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", _WINRT_TOAST_PS_SCRIPT],
+            [_resolve_windows_powershell_exe(), "-NoProfile", "-WindowStyle", "Hidden", "-Command", _WINRT_TOAST_PS_SCRIPT],
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -419,6 +419,43 @@ class TestQuickShareAndToast(_BaseRegistryToastTestCase):
         self.assertEqual(kwargs["env"]["MYSERVER_TOAST_LEVEL"], "info")
         self.assertEqual(kwargs["creationflags"], 0x08000000)
 
+    def test_clipboard_timeout_kills_powershell_and_toast_prefers_system32_exe(self):
+        # IN-02: _write_windows_clipboard kills timed-out PowerShell child
+        class _HangingProc:
+            def __init__(self):
+                self.killed = False
+                self.returncode = -1
+                self.calls = 0
+
+            def communicate(self, input=None, timeout=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise core.subprocess.TimeoutExpired(cmd="powershell.exe", timeout=timeout or 4.0)
+                return b"", b""
+
+            def kill(self):
+                self.killed = True
+
+        hanging = _HangingProc()
+        with patch.object(core.sys, "platform", "win32"), \
+             patch.object(core.subprocess, "Popen", return_value=hanging):
+            self.assertFalse(core._write_windows_clipboard("https://example.com"))
+        self.assertTrue(hanging.killed)
+
+        # IN-02: _show_windows_toast prefers System32 powershell.exe when file exists
+        fake_root = os.path.join(self.tmp_dir.name, "WinRoot")
+        ps_path = os.path.join(fake_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+        os.makedirs(os.path.dirname(ps_path), exist_ok=True)
+        with open(ps_path, "wb") as f:
+            f.write(b"MZ")
+
+        with patch.dict(core.os.environ, {"SystemRoot": fake_root}), \
+             patch.object(core.sys, "platform", "win32"), \
+             patch.object(core, "_ensure_toast_aumid_registered", return_value=True), \
+             patch.object(core.subprocess, "Popen") as mock_popen:
+            self.assertTrue(core._show_windows_toast("Title", "Body", level="info"))
+        self.assertEqual(mock_popen.call_args[0][0][0], ps_path)
+
     def test_resolve_notify_on_error_hook(self):
         cfg = config_manager.load_or_create_config()
         cfg["language"] = "en"

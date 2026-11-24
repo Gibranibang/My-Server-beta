@@ -292,7 +292,7 @@ class TestRustAndCapabilitiesContract(unittest.TestCase):
         self.assertNotEqual(parse_pos, -1)
         self.assertNotEqual(restore_pos, -1)
         self.assertLess(parse_pos, restore_pos)
-        self.assertIn("handle_share_cli_action", si_section)
+        self.assertIn("handle_share_cli_action(app_handle, action, true)", si_section)
         self.assertIn("return;", si_section[:restore_pos])
 
         # Cold-start setup suppresses should_auto_open when cli_share_action is present

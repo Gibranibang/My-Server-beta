@@ -931,7 +931,7 @@ pub fn run() {
             trace_log("single_instance callback triggered!");
             if let Some(action) = parse_share_cli_action(&args) {
                 let app_handle = app.clone();
-                tauri::async_runtime::spawn(handle_share_cli_action(app_handle, action, false));
+                tauri::async_runtime::spawn(handle_share_cli_action(app_handle, action, true));
                 return;
             }
             if let Some(win) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {

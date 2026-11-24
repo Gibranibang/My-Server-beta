@@ -3,7 +3,8 @@ mod wizard_state;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow,
+    AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -683,6 +684,222 @@ fn restore_or_present_window(app: &AppHandle, win: &WebviewWindow) {
     }
 }
 
+#[derive(Default)]
+pub struct ShareWindowState(std::sync::Mutex<Option<serde_json::Value>>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShareCliAction {
+    Share(String),
+    QuickShare(String),
+}
+
+fn sanitize_cli_share_path(raw: &str) -> Option<String> {
+    let mut s = raw.trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    while s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        s = s[1..s.len() - 1].trim().to_string();
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'"' {
+        s = format!("{}:\\", bytes[0] as char);
+    } else if s.ends_with("\\\"")
+        && s.len() >= 4
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+    {
+        s.pop();
+    }
+    let trimmed = s.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn parse_share_cli_action(args: &[String]) -> Option<ShareCliAction> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if let Some(val) = arg.strip_prefix("--quick-share=") {
+            return sanitize_cli_share_path(val).map(ShareCliAction::QuickShare);
+        }
+        if arg == "--quick-share" {
+            let next = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+            return sanitize_cli_share_path(next).map(ShareCliAction::QuickShare);
+        }
+        if let Some(val) = arg.strip_prefix("--share=") {
+            return sanitize_cli_share_path(val).map(ShareCliAction::Share);
+        }
+        if arg == "--share" {
+            let next = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+            return sanitize_cli_share_path(next).map(ShareCliAction::Share);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn open_or_focus_share_window(
+    app: &AppHandle,
+    target_json: serde_json::Value,
+) -> Result<(), String> {
+    let state = app.state::<ShareWindowState>();
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(target_json.clone());
+
+    if let Some(wv) = app.get_webview_window("share-window") {
+        let json_str = serde_json::to_string(&target_json)
+            .map_err(|e| format!("Gagal serialisasi target share: {}", e))?;
+        let _ = wv.eval(&format!(
+            "window.dispatchEvent(new CustomEvent('myserver:share-target', {{ detail: {} }}));",
+            json_str
+        ));
+        let _ = wv.unminimize();
+        let _ = wv.show();
+        let _ = wv.set_focus();
+        return Ok(());
+    }
+
+    let win = WebviewWindowBuilder::new(
+        app,
+        "share-window",
+        WebviewUrl::App("index.html?window=share".into()),
+    )
+    .title("Share via MyServer")
+    .inner_size(400.0, 560.0)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(false)
+    .center()
+    .build()
+    .map_err(|e| format!("Gagal membuka share-window: {}", e))?;
+
+    set_window_taskbar_icon(&win);
+    let _ = win.show();
+    let _ = win.set_focus();
+    Ok(())
+}
+
+async fn wait_for_core_service_ready(max_wait_ms: u64) -> bool {
+    tauri::async_runtime::spawn_blocking(move || -> bool {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        use std::time::{Duration, Instant};
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 48123));
+        let deadline = Instant::now() + Duration::from_millis(max_wait_ms);
+        loop {
+            if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(300)) {
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+                let req = "GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:48123\r\nConnection: close\r\n\r\n";
+                if stream.write_all(req.as_bytes()).is_ok() {
+                    let mut buf = [0u8; 256];
+                    if let Ok(n) = stream.read(&mut buf) {
+                        let head = String::from_utf8_lossy(&buf[..n]);
+                        if head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200") {
+                            return true;
+                        }
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn handle_share_cli_action(
+    app: AppHandle,
+    action: ShareCliAction,
+    wait_for_core: bool,
+) {
+    if wait_for_core {
+        let ready = wait_for_core_service_ready(15000).await;
+        if !ready {
+            trace_log("handle_share_cli_action: Core Service not ready within 15000ms");
+            return;
+        }
+    }
+
+    match action {
+        ShareCliAction::Share(path) => {
+            trace_log(&format!("handle_share_cli_action: Share path={}", path));
+            match call_core_api(
+                "shares/resolve".to_string(),
+                serde_json::json!({ "path": path, "notify_on_error": true }),
+            )
+            .await
+            {
+                Ok(res) => {
+                    let ok = res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if ok {
+                        if let Some(target) = res.get("target").filter(|v| v.is_object()) {
+                            if let Err(e) = open_or_focus_share_window(&app, target.clone()) {
+                                trace_log(&format!("open_or_focus_share_window error: {}", e));
+                            }
+                        } else {
+                            trace_log("shares/resolve ok=true but target object missing");
+                        }
+                    } else {
+                        let code = res.get("code").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
+                        trace_log(&format!("shares/resolve rejected: code={}", code));
+                    }
+                }
+                Err(e) => {
+                    trace_log(&format!("shares/resolve call_core_api error: {}", e));
+                }
+            }
+        }
+        ShareCliAction::QuickShare(path) => {
+            trace_log(&format!("handle_share_cli_action: QuickShare path={}", path));
+            if let Err(e) = call_core_api(
+                "shares/quick".to_string(),
+                serde_json::json!({ "path": path }),
+            )
+            .await
+            {
+                trace_log(&format!("shares/quick call_core_api error: {}", e));
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn open_share_window(app: AppHandle, target: serde_json::Value) -> Result<(), String> {
+    open_or_focus_share_window(&app, target)
+}
+
+#[tauri::command]
+fn close_share_window(app: AppHandle) -> Result<(), String> {
+    {
+        let state = app.state::<ShareWindowState>();
+        let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
+    if let Some(wv) = app.get_webview_window("share-window") {
+        wv.close()
+            .map_err(|e| format!("Gagal menutup share-window: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_share_window_target(app: AppHandle) -> Option<serde_json::Value> {
+    let state = app.state::<ShareWindowState>();
+    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    guard.clone()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -697,8 +914,14 @@ pub fn run() {
     trace_log("app_lib::run entered");
     let app = tauri::Builder::default()
         .manage(wizard_state::WizardWindowState::default())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .manage(ShareWindowState::default())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             trace_log("single_instance callback triggered!");
+            if let Some(action) = parse_share_cli_action(&args) {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(handle_share_cli_action(app_handle, action, false));
+                return;
+            }
             if let Some(win) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
                 restore_or_present_window(app, &win);
             } else {
@@ -824,12 +1047,15 @@ pub fn run() {
                 .unwrap_or(true);
             trace_log(&format!("setup: should_auto_open: {}", should_auto_open));
 
+            let raw_cli_args: Vec<String> = std::env::args().collect();
+            let cli_share_action = parse_share_cli_action(&raw_cli_args);
+
             if open_wizard {
                 app.state::<wizard_state::WizardWindowState>().set_active(true);
                 if let Some(win) = main_win.or_else(|| app.webview_windows().into_values().next()) {
                     show_centered_wizard(&win, Some(460.0), Some(560.0));
                 }
-            } else if should_auto_open {
+            } else if should_auto_open && cli_share_action.is_none() {
                 if let Some(win) = main_win.or_else(|| app.webview_windows().into_values().next()) {
                     apply_position_above_taskbar(&win);
                     let win_clone = win.clone();
@@ -843,11 +1069,25 @@ pub fn run() {
                 }
             }
 
+            if let Some(action) = cli_share_action {
+                if !open_wizard {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(handle_share_cli_action(app_handle, action, true));
+                }
+            }
+
             trace_log("setup hook finished successfully");
             Ok(())
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "share-window" {
+                    trace_log("share-window CloseRequested -> closing share-window only");
+                    let state = window.app_handle().state::<ShareWindowState>();
+                    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+                    *guard = None;
+                    return;
+                }
                 trace_log("window CloseRequested -> hiding");
                 if !ALLOW_EXIT.load(Ordering::SeqCst) {
                     api.prevent_close();
@@ -876,7 +1116,10 @@ pub fn run() {
             set_wizard_mode,
             open_app_window,
             open_in_browser,
-            call_core_api
+            call_core_api,
+            open_share_window,
+            close_share_window,
+            get_share_window_target
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

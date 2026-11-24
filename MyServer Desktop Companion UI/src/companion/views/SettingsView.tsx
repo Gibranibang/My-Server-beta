@@ -10,6 +10,7 @@ import {
   Folder,
   FolderOpen,
   HardDrive,
+  Info,
   Languages,
   Lock,
   Network,
@@ -17,6 +18,7 @@ import {
   RefreshCw,
   Rocket,
   RotateCcw,
+  Share2,
   ShieldCheck,
   Sparkles,
   type LucideIcon,
@@ -118,12 +120,51 @@ export default function SettingsView() {
     isCustom: false,
   })
   const [details, setDetails] = useState<ServerDetails | null>(null)
+  const explorerCtxId = useId()
+  const [contextMenuBusy, setContextMenuBusy] = useState(false)
+  const [contextMenuChecked, setContextMenuChecked] = useState(
+    Boolean(settings.explorerContextMenuEnabled),
+  )
 
+  useEffect(() => {
+    setContextMenuChecked(Boolean(settings.explorerContextMenuEnabled))
+  }, [settings.explorerContextMenuEnabled])
 
   const t = getTranslation(settings?.language)
   const isId = settings?.language === "id"
   const activeVersion = APP_VERSION
   const activeChannel = details?.appChannel || APP_CHANNEL
+
+  const handleToggleExplorerContextMenu = async (next: boolean) => {
+    if (contextMenuBusy) return
+    const prev = contextMenuChecked
+    setContextMenuBusy(true)
+    setContextMenuChecked(next)
+    try {
+      const res = await getCompanionApi().setExplorerContextMenuEnabled(next)
+      if (res?.success === false) {
+        throw new Error(res.error || "Registry error")
+      }
+      const settled = res?.enabled !== undefined ? Boolean(res.enabled) : next
+      setContextMenuChecked(settled)
+      void setSetting("explorerContextMenuEnabled", settled).catch(() => undefined)
+      notify(
+        t(settled ? "explorer_ctx_enabled_toast" : "explorer_ctx_disabled_toast"),
+        "success",
+      )
+    } catch (err) {
+      setContextMenuChecked(prev)
+      notify(
+        t("explorer_ctx_error_toast").replace(
+          "{error}",
+          errorText(err, settings?.language),
+        ),
+        "danger",
+      )
+    } finally {
+      setContextMenuBusy(false)
+    }
+  }
 
   useEffect(() => {
     api.getLogDirectory?.().then((info) => {
@@ -773,13 +814,44 @@ export default function SettingsView() {
             </div>
 
             {/* Storage & Network Startup Toggles */}
-            <div className="overflow-hidden rounded-tile border border-line bg-surface">
+            <div className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
               <SettingToggleRow
                 icon={HardDrive}
                 label={t("autoMountSmb_label")}
                 caption={t(settings.autoMountSmb ? "autoMountSmb_on" : "autoMountSmb_off")}
                 settingKey="autoMountSmb"
               />
+              <div className="flex items-center gap-2.5 px-3 py-2 transition-colors duration-150 hover:bg-surface-sunken">
+                <Share2
+                  className="size-4 shrink-0 text-ink-subtle"
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <label htmlFor={explorerCtxId} className="min-w-0 flex-1 cursor-pointer">
+                  <span className="block text-label font-medium text-ink">
+                    {t("explorer_ctx_label")}
+                  </span>
+                  <span className="block text-micro text-ink-subtle">
+                    {t(contextMenuChecked ? "explorer_ctx_on" : "explorer_ctx_off")}
+                  </span>
+                </label>
+                <Toggle
+                  id={explorerCtxId}
+                  label={t("explorer_ctx_label")}
+                  checked={contextMenuChecked}
+                  disabled={contextMenuBusy}
+                  onChange={(next) => void handleToggleExplorerContextMenu(next)}
+                />
+              </div>
+              <div
+                data-testid="explorer-ctx-win11-hint"
+                className="border-t border-line/60 bg-surface-sunken px-4 py-2 flex items-start gap-2"
+              >
+                <Info className="size-4 shrink-0 text-info-ink" aria-hidden />
+                <p className="text-caption font-normal text-ink-subtle">
+                  {t("explorer_ctx_win11_hint")}
+                </p>
+              </div>
             </div>
           </div>
         </AccordionSection>

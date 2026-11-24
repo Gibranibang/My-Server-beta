@@ -22,7 +22,7 @@ import zipfile
 BASE_BETA = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(BASE_BETA, "dist")
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
-VERSION = "4.6.13"
+VERSION = "4.6.14"
 APP_NAME = "My-Server by algitha BETA"
 
 ZEROTIER_MSI_FILENAME = "ZeroTier One.msi"
@@ -409,12 +409,21 @@ end;
 procedure TryGracefulAppShutdown();
 var
   Http: Variant;
+  TokenPath: String;
+  CoreTokenAnsi: AnsiString;
+  CoreToken: String;
 begin
   try
+    CoreToken := '';
+    TokenPath := ExpandConstant('{{localappdata}}\\MyServer\\core.token');
+    if FileExists(TokenPath) and LoadStringFromFile(TokenPath, CoreTokenAnsi) then
+      CoreToken := Trim(String(CoreTokenAnsi));
     Http := CreateOleObject('WinHttp.WinHttpRequest.5.1');
     Http.SetTimeouts(500, 500, 1000, 1000);
     Http.Open('POST', 'http://127.0.0.1:48123/api/quit_app', False);
     Http.SetRequestHeader('Content-Type', 'application/json');
+    if CoreToken <> '' then
+      Http.SetRequestHeader('X-MyServer-Core-Token', CoreToken);
     Http.Send('{{}}');
     Sleep(1200);
   except

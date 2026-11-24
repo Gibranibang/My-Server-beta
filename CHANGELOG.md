@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.6.14 - Beta] - 2026-11-24
+
+- Desktop & Tauri v4.6.14 (Localhost Auth, Strict CORS & Safe Opener): Menerbitkan token CSPRNG per-boot antara Tauri (`BCryptGenRandom` / `MYSERVER_CORE_TOKEN` / `X-MyServer-Core-Token`) dan Core Service (`hmac.compare_digest` fail-closed + dukungan `core.token` untuk Inno Setup `TryGracefulAppShutdown`), membatasi `Access-Control-Allow-Origin` khusus WebView Tauri (`tauri.localhost`), memvalidasi HTTPS + allowlist rilis resmi GitHub (`Gibranibang/`) beserta setiap hop redirect `30x` di `/api/download_and_install_update`, serta mengganti `cmd /c start` pada `open_in_browser` dengan validator ketat `http://`/`https://` + Win32 `ShellExecuteW`.
+- Backend v1.4.14 (Bootstrap Lock, Role Admin & Control-Plane ACL): Mengunci permanen `POST /api/v1/auth/bootstrap` saat login pass-through ZimaOS (`bootstrap_locked` + `smb_password_enc`), mempertahankan role `admin` ZimaOS lintas re-login/refresh & menegakkan `token_version` DB (`tv`), menegakkan kontrol admin-only di `vms`, `smb/mode`, & `public_base_url` serta ownership per-user (`tasks`, `devices`, `backup`) dengan paritas penuh `dev_server.py`, menyembunyikan edit `Public Base URL` non-admin di `explorer.html`, dan otomatis mencabut `public_shares` saat pemilik akun dihapus.
+
 ## [v4.6.13 - Beta] - 2026-11-24
 
 - Backend v1.4.13 (Samba Engine, VM Smart Reset & Backup GC): Mengarahkan stderr `smbd` ke log berbatas ukuran, mendukung reload `smbd-*.pid`, mengunci watchdog + rollback host `smbd`, menjaga `token_version` JWT pada switch SMB, menegakkan gate `sleep_vm_provider()` di `execute_smart_reset()` + ambang `<30m` + `shlex.quote(password)`, serta menghentikan penghapusan paksa file upload `.part` aktif & memperbaiki retensi `upload_sessions`/`_active_sessions`.

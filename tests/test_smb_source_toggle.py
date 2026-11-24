@@ -675,9 +675,9 @@ class TestCoreServiceSmbSourceAndD07(unittest.TestCase):
     def _req(self, method, path, payload=None):
         url = f"http://127.0.0.1:{self.core_port}{path}"
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
-        headers = {}
+        headers = {"X-MyServer-Core-Token": core.get_core_auth_token()}
         if data is not None:
-            headers = {"Content-Type": "application/json", "Content-Length": str(len(data))}
+            headers.update({"Content-Type": "application/json", "Content-Length": str(len(data))})
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=6) as resp:

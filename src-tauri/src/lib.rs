@@ -5,9 +5,130 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    OnceLock,
+};
 
 static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
+static CORE_AUTH_TOKEN: OnceLock<String> = OnceLock::new();
+static CORE_SPAWNED_BY_TAURI: AtomicBool = AtomicBool::new(false);
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn fallback_entropy_bytes(buf: &mut [u8]) {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let addr = (&CORE_AUTH_TOKEN as *const OnceLock<String>) as usize as u128;
+    let mut state = nanos ^ pid.rotate_left(37) ^ addr.rotate_left(73) ^ 0x9e3779b97f4a7c15_u128;
+    for chunk in buf.chunks_mut(8) {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state = state.wrapping_mul(0x5851f42d4c957f2d_u128).wrapping_add(1);
+        let bytes = (state as u64).to_le_bytes();
+        chunk.copy_from_slice(&bytes[..chunk.len()]);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn generate_csprng_hex_token() -> String {
+    #[allow(non_snake_case)]
+    #[link(name = "bcrypt")]
+    unsafe extern "system" {
+        fn BCryptGenRandom(
+            hAlgorithm: *mut core::ffi::c_void,
+            pbBuffer: *mut u8,
+            cbBuffer: u32,
+            dwFlags: u32,
+        ) -> i32;
+    }
+    const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
+    let mut buf = [0u8; 32];
+    let status = unsafe {
+        BCryptGenRandom(
+            core::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status < 0 {
+        trace_log(&format!("BCryptGenRandom fallback status={}", status));
+        fallback_entropy_bytes(&mut buf);
+    }
+    bytes_to_hex(&buf)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn generate_csprng_hex_token() -> String {
+    use std::io::Read;
+    let mut buf = [0u8; 32];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        if f.read_exact(&mut buf).is_ok() {
+            return bytes_to_hex(&buf);
+        }
+    }
+    trace_log("/dev/urandom read failed; using fallback entropy");
+    fallback_entropy_bytes(&mut buf);
+    bytes_to_hex(&buf)
+}
+
+fn get_or_init_core_token() -> &'static str {
+    CORE_AUTH_TOKEN.get_or_init(generate_csprng_hex_token).as_str()
+}
+
+fn core_token_file_path() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("LOCALAPPDATA")
+            .ok()
+            .map(|p| std::path::PathBuf::from(p).join("MyServer").join("core.token"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+            return Some(
+                std::path::PathBuf::from(local_appdata)
+                    .join("MyServer")
+                    .join("core.token"),
+            );
+        }
+        std::env::var("HOME").ok().map(|h| {
+            std::path::PathBuf::from(h)
+                .join(".local")
+                .join("share")
+                .join("MyServer")
+                .join("core.token")
+        })
+    }
+}
+
+fn resolve_core_api_token() -> String {
+    if CORE_SPAWNED_BY_TAURI.load(Ordering::SeqCst) {
+        return get_or_init_core_token().to_string();
+    }
+    if let Some(path) = core_token_file_path() {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    get_or_init_core_token().to_string()
+}
 
 fn trace_log(msg: &str) {
     if let Ok(exe) = std::env::current_exe() {
@@ -336,20 +457,115 @@ async fn open_app_window(url: String, title: String) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_external_browser_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("URL tidak boleh kosong".to_string());
+    }
+    if trimmed
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>' | '\\'))
+    {
+        return Err("URL mengandung karakter tidak diizinkan".to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let rest = if lower.starts_with("https://") {
+        &trimmed[8..]
+    } else if lower.starts_with("http://") {
+        &trimmed[7..]
+    } else {
+        return Err("Hanya URL http:// atau https:// yang diizinkan".to_string());
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.starts_with('@') {
+        return Err("Host URL tidak valid".to_string());
+    }
+    let host_port = if let Some((_, after_at)) = authority.rsplit_once('@') {
+        if after_at.is_empty() {
+            return Err("Host URL tidak valid".to_string());
+        }
+        after_at
+    } else {
+        authority
+    };
+    let host = if host_port.starts_with('[') {
+        match host_port.find(']') {
+            Some(end) if end > 1 => {
+                let after_bracket = &host_port[end + 1..];
+                if !after_bracket.is_empty() && !after_bracket.starts_with(':') {
+                    return Err("Host URL tidak valid".to_string());
+                }
+                &host_port[1..end]
+            }
+            _ => return Err("Host URL tidak valid".to_string()),
+        }
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    if host.is_empty() || host.starts_with('.') || host.ends_with('.') || host.contains("..") {
+        return Err("Host URL tidak valid".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn launch_url_windows(validated_url: &str) -> Result<(), String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    #[allow(non_snake_case)]
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut core::ffi::c_void,
+            lpOperation: *const u16,
+            lpFile: *const u16,
+            lpParameters: *const u16,
+            lpDirectory: *const u16,
+            nShowCmd: i32,
+        ) -> isize;
+    }
+    let op: Vec<u16> = OsStr::new("open").encode_wide().chain(Some(0)).collect();
+    let file: Vec<u16> = OsStr::new(validated_url).encode_wide().chain(Some(0)).collect();
+    let rc = unsafe {
+        ShellExecuteW(
+            core::ptr::null_mut(),
+            op.as_ptr(),
+            file.as_ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+            1, // SW_SHOWNORMAL
+        )
+    };
+    if rc <= 32 {
+        return Err(format!("ShellExecuteW gagal membuka URL (kode {})", rc));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn launch_url_non_windows(validated_url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let launcher = "open";
+    #[cfg(not(target_os = "macos"))]
+    let launcher = "xdg-open";
+
+    std::process::Command::new(launcher)
+        .arg(validated_url)
+        .spawn()
+        .map_err(|e| format!("Gagal membuka URL dengan {}: {}", launcher, e))?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn open_in_browser(url: String) -> Result<(), String> {
-    let clean_url = url.trim().to_string();
-    if clean_url.is_empty() {
-        return Ok(());
-    }
+    let validated = validate_external_browser_url(&url)?;
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let _ = std::process::Command::new("cmd")
-            .raw_arg(format!("/c start \"\" \"{}\"", clean_url))
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn();
+        launch_url_windows(&validated)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        launch_url_non_windows(&validated)?;
     }
     Ok(())
 }
@@ -412,9 +628,11 @@ async fn call_core_api(endpoint: String, payload: serde_json::Value) -> Result<s
         stream.set_write_timeout(Some(Duration::from_millis(15000))).ok();
 
         let body = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+        let core_token = resolve_core_api_token();
         let req = format!(
-            "POST /api/{} HTTP/1.1\r\nHost: 127.0.0.1:48123\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/{} HTTP/1.1\r\nHost: 127.0.0.1:48123\r\nContent-Type: application/json\r\nX-MyServer-Core-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             endpoint,
+            core_token,
             body.len(),
             body
         );
@@ -511,13 +729,17 @@ pub fn run() {
                     let mut cmd = std::process::Command::new(candidate);
                     cmd.arg("--parent-pid").arg(std::process::id().to_string());
                     cmd.current_dir(exe_dir);
+                    cmd.env("MYSERVER_CORE_TOKEN", get_or_init_core_token());
                     #[cfg(windows)]
                     {
                         use std::os::windows::process::CommandExt;
                         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
                     }
                     match cmd.spawn() {
-                        Ok(child) => trace_log(&format!("Spawned core child PID: {}", child.id())),
+                        Ok(child) => {
+                            CORE_SPAWNED_BY_TAURI.store(true, Ordering::SeqCst);
+                            trace_log(&format!("Spawned core child PID: {}", child.id()));
+                        }
                         Err(e) => trace_log(&format!("Core spawn error: {}", e)),
                     }
                     break;
@@ -669,4 +891,67 @@ pub fn run() {
         }
     });
     trace_log("app.run() finished");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_external_browser_url_accepts_valid_http_and_https() {
+        assert_eq!(
+            validate_external_browser_url("https://nas.local:8080/share?a=1&b=2").unwrap(),
+            "https://nas.local:8080/share?a=1&b=2"
+        );
+        assert_eq!(
+            validate_external_browser_url("  http://192.0.2.10/ui  ").unwrap(),
+            "http://192.0.2.10/ui"
+        );
+        assert_eq!(
+            validate_external_browser_url("HTTPS://example.com/Path?x=1#frag").unwrap(),
+            "HTTPS://example.com/Path?x=1#frag"
+        );
+    }
+
+    #[test]
+    fn validate_external_browser_url_rejects_dangerous_schemes_and_chars() {
+        for bad in [
+            "",
+            "   ",
+            "file:///C:/Windows/calc.exe",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "ms-msdt:/id PCWDiagnostic",
+            "\\\\server\\share",
+            "https://evil.com\" & calc",
+            "https://evil.com/'test'",
+            "https://evil.com/`id`",
+            "https://evil.com/<script>",
+            "https://example.com/a\nb",
+            "https://example.com/a\0b",
+            "https:///path",
+            "https://@evil.com/path",
+            "https://user@/path",
+            "https://.evil.com/path",
+            "https://evil.com./path",
+            "https://a..b.com/path",
+        ] {
+            assert!(
+                validate_external_browser_url(bad).is_err(),
+                "expected Err for {:?}",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn generate_csprng_hex_token_returns_64_hex_chars() {
+        let t1 = generate_csprng_hex_token();
+        let t2 = generate_csprng_hex_token();
+        assert_eq!(t1.len(), 64);
+        assert_eq!(t2.len(), 64);
+        assert!(t1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(t2.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_ne!(t1, t2);
+    }
 }

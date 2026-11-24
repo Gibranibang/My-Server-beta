@@ -145,7 +145,7 @@ class WizardEndpointsTests(unittest.TestCase):
     def _request_json(self, method, path, payload=None):
         url = f"http://127.0.0.1:{self.port}{path}"
         data = None
-        headers = {}
+        headers = {"X-MyServer-Core-Token": core.get_core_auth_token()}
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"

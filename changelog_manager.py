@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.14",
+        "channel": "Beta",
+        "date": "2026-11-24",
+        "title": "Core Security Hardening: Localhost Auth Token, ShellExecuteW & Backend RBAC (Backend v1.4.14)",
+        "notes": [
+            "Desktop & Tauri v4.6.14 (Localhost Auth, Strict CORS & Safe Opener): Menerbitkan token CSPRNG per-boot antara Tauri (`BCryptGenRandom` / `MYSERVER_CORE_TOKEN` / `X-MyServer-Core-Token`) dan Core Service (`hmac.compare_digest` fail-closed + dukungan `core.token` untuk Inno Setup `TryGracefulAppShutdown`), membatasi `Access-Control-Allow-Origin` khusus WebView Tauri (`tauri.localhost`), memvalidasi HTTPS + allowlist rilis resmi GitHub (`Gibranibang/`) beserta setiap hop redirect `30x` di `/api/download_and_install_update`, serta mengganti `cmd /c start` pada `open_in_browser` dengan validator ketat `http://`/`https://` + Win32 `ShellExecuteW`.",
+            "Backend v1.4.14 (Bootstrap Lock, Role Admin & Control-Plane ACL): Mengunci permanen `POST /api/v1/auth/bootstrap` saat login pass-through ZimaOS (`bootstrap_locked` + `smb_password_enc`), mempertahankan role `admin` ZimaOS lintas re-login/refresh & menegakkan `token_version` DB (`tv`), menegakkan kontrol admin-only di `vms`, `smb/mode`, & `public_base_url` serta ownership per-user (`tasks`, `devices`, `backup`) dengan paritas penuh `dev_server.py`, menyembunyikan edit `Public Base URL` non-admin di `explorer.html`, dan otomatis mencabut `public_shares` saat pemilik akun dihapus."
+        ],
+        "features": [
+            "Per-Boot Core API Auth Token (X-MyServer-Core-Token) & Tauri WebView Strict CORS",
+            "HTTPS + Official GitHub Redirect-Validated Auto-Updater & Shell-Free ShellExecuteW Opener",
+            "Permanent Backend Bootstrap Lock, ZimaOS Admin Persistence & DB token_version Enforcement",
+            "Strict Role/Ownership Control-Plane ACLs & Deleted-Owner Public Share Revocation"
+        ]
+    },
+    {
         "version": "4.6.13",
         "channel": "Beta",
         "date": "2026-11-24",

@@ -258,7 +258,11 @@ class TestPhase09CoreHttpEndpoints(unittest.TestCase):
         req = urllib.request.Request(
             url,
             data=data,
-            headers={"Content-Type": "application/json", "Content-Length": str(len(data))},
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(len(data)),
+                "X-MyServer-Core-Token": core.get_core_auth_token(),
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=5) as resp:

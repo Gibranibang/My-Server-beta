@@ -70,8 +70,10 @@ import argparse
 
 
 
+import hmac
 import ipaddress
 import datetime
+import secrets
 
 
 
@@ -400,7 +402,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.13"
+APP_VERSION_NUMBER = "4.6.14"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -429,6 +431,125 @@ REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 AUTORUN_KEY_NAME = "MyServerCompanion"
+
+
+def _init_core_auth_token() -> str:
+    env_tok = os.environ.get("MYSERVER_CORE_TOKEN", "").strip()
+    return env_tok if env_tok else secrets.token_urlsafe(32)
+
+
+_CORE_AUTH_TOKEN = _init_core_auth_token()
+
+
+def get_core_auth_token() -> str:
+    return _CORE_AUTH_TOKEN
+
+
+_ALLOWED_TAURI_CORS_ORIGINS = frozenset({
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+})
+_ALLOWED_DEV_CORS_ORIGINS = frozenset({
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+})
+
+
+def _resolve_allowed_cors_origin(origin_header: str) -> str:
+    raw = str(origin_header or "").strip()
+    if not raw or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        return ""
+    lowered = raw.lower()
+    if lowered in _ALLOWED_TAURI_CORS_ORIGINS:
+        return raw
+    if os.environ.get("MYSERVER_DEV_CORS", "").strip() == "1" and lowered in _ALLOWED_DEV_CORS_ORIGINS:
+        return raw
+    return ""
+
+
+_OFFICIAL_GITHUB_OWNER = "gibranibang"
+_ALLOWED_GITHUB_RELEASE_CDN_HOSTS = frozenset({
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "github-releases.githubusercontent.com",
+})
+
+
+def validate_official_update_download_url(url: str, allowed_repo: str = "", is_redirect: bool = False) -> str:
+    cleaned = str(url or "").strip()
+    if not cleaned or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in cleaned):
+        raise ValueError("URL unduhan pembaruan kosong atau mengandung karakter tidak valid.")
+    parsed = urllib.parse.urlsplit(cleaned)
+    if (parsed.scheme or "").lower() != "https":
+        raise ValueError("URL unduhan pembaruan wajib menggunakan protokol HTTPS.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL unduhan pembaruan tidak boleh mengandung kredensial.")
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        raise ValueError("Host URL unduhan pembaruan tidak valid.")
+
+    if host == "github.com":
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if len(parts) < 5 or parts[2].lower() != "releases" or parts[3].lower() != "download":
+            raise ValueError("URL GitHub wajib mengarah ke jalur /releases/download/ resmi.")
+        if parts[0].lower() != _OFFICIAL_GITHUB_OWNER:
+            raise ValueError("Pemilik repositori GitHub pembaruan tidak resmi.")
+        if allowed_repo:
+            repo_parts = [p for p in str(allowed_repo).strip("/").split("/") if p]
+            if len(repo_parts) != 2 or repo_parts[0].lower() != _OFFICIAL_GITHUB_OWNER:
+                raise ValueError("Konfigurasi repositori pembaruan resmi tidak valid.")
+            if f"{parts[0]}/{parts[1]}".lower() != f"{repo_parts[0]}/{repo_parts[1]}".lower():
+                raise ValueError("URL unduhan GitHub tidak cocok dengan repositori resmi.")
+        if not is_redirect and not (parsed.path or "").lower().endswith((".exe", ".zip")):
+            raise ValueError("URL aset pembaruan resmi wajib berakhiran .exe atau .zip.")
+        return cleaned
+
+    if host in _ALLOWED_GITHUB_RELEASE_CDN_HOSTS:
+        if not (parsed.path or "").strip("/"):
+            raise ValueError("Jalur aset CDN GitHub tidak valid.")
+        return cleaned
+
+    raise ValueError(f"Host unduhan pembaruan tidak diizinkan: {host}")
+
+
+class _ValidatedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, validator):
+        super().__init__()
+        self._validator = validator
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        abs_url = urllib.parse.urljoin(req.full_url, newurl)
+        self._validator(abs_url, is_redirect=True)
+        return super().redirect_request(req, fp, code, msg, headers, abs_url)
+
+
+def _is_safe_http_url(url: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    trimmed = url.strip()
+    if not trimmed:
+        return False
+    if any(
+        ord(c) < 32 or ord(c) == 127 or c.isspace() or c in ('"', "'", "`", "<", ">", "\\")
+        for c in trimmed
+    ):
+        return False
+    lower = trimmed.lower()
+    if not (lower.startswith("https://") or lower.startswith("http://")):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(trimmed)
+    except Exception:
+        return False
+    if (parsed.scheme or "").lower() not in ("http", "https"):
+        return False
+    if not parsed.netloc or parsed.netloc.startswith("@"):
+        return False
+    host = (parsed.hostname or "").strip()
+    if not host or host.startswith(".") or host.endswith(".") or ".." in host:
+        return False
+    return True
 
 
 
@@ -3497,6 +3618,9 @@ def run_app_window(url, title=None, width=1150, height=750, target_server_id=Non
 
 
 
+            if not _is_safe_http_url(clean_u):
+                raise ValueError("URL tidak diizinkan (hanya http:// atau https://)")
+
             if sys.platform == "win32":
 
 
@@ -4815,12 +4939,15 @@ def _resolve_backend_bearer_token_for_url(url, force_refresh=False):
         if not srv or not srv.get("id"):
             return ""
         srv_id = srv.get("id")
+        req_path = parsed.path or ""
         smb_cfg = config_manager.get_server_smb_source_config(srv) if hasattr(config_manager, "get_server_smb_source_config") else {}
-        stored_tok = str((smb_cfg or {}).get("access_token") or "").strip()
+        smb_role = str((smb_cfg or {}).get("role") or "").strip().lower()
+        prefer_admin_creds = req_path.startswith("/api/v1/vms") and smb_role not in ("admin", "root")
+        stored_tok = "" if prefer_admin_creds else str((smb_cfg or {}).get("access_token") or "").strip()
         if stored_tok and not force_refresh:
             return stored_tok
 
-        cache_key = (str(srv_id), base_url)
+        cache_key = (str(srv_id), base_url, "admin" if prefer_admin_creds else "default")
         now_m = time.monotonic()
         with _BACKEND_JWT_CACHE_LOCK:
             cached = _BACKEND_JWT_CACHE.get(cache_key)
@@ -4830,8 +4957,8 @@ def _resolve_backend_bearer_token_for_url(url, force_refresh=False):
                 if float(cached.get("fail_until") or 0.0) > now_m:
                     return ""
 
-        uname = str((smb_cfg or {}).get("username") or "").strip()
-        pwd = str((smb_cfg or {}).get("password") or "")
+        uname = "" if prefer_admin_creds else str((smb_cfg or {}).get("username") or "").strip()
+        pwd = "" if prefer_admin_creds else str((smb_cfg or {}).get("password") or "")
         if (not uname or not pwd) and hasattr(config_manager, "get_server_credentials"):
             creds_dict = config_manager.get_server_credentials(srv)
             if isinstance(creds_dict, dict):
@@ -4845,7 +4972,7 @@ def _resolve_backend_bearer_token_for_url(url, force_refresh=False):
             fresh_tok = str(v_data.get("access_token") or "").strip()
             with _BACKEND_JWT_CACHE_LOCK:
                 _BACKEND_JWT_CACHE[cache_key] = {"token": fresh_tok, "fail_until": 0.0}
-            if smb_cfg.get("hasCredentials"):
+            if not prefer_admin_creds and smb_cfg.get("hasCredentials"):
                 try:
                     _persist_refreshed_backend_token(srv_id, fresh_tok, v_data)
                 except Exception:
@@ -5352,13 +5479,20 @@ def _get_bundled_backend_version(cfg=None, allow_remote=True, force_remote=False
     return ""
 
 
-def _download_stream_bounded(url, dest_path, headers=None, socket_timeout=25.0, total_timeout=35.0, max_bytes=None):
+def _download_stream_bounded(url, dest_path, headers=None, socket_timeout=25.0, total_timeout=35.0, max_bytes=None, url_validator=None):
     """Download URL to dest_path enforcing both per-read socket timeout and total wall-clock deadline."""
+    if url_validator is not None:
+        url = url_validator(url, is_redirect=False)
     req = urllib.request.Request(url, headers=headers or {}, method="GET")
     deadline = time.monotonic() + max(float(total_timeout), float(socket_timeout), 1.0)
     downloaded = 0
     try:
-        with urllib.request.urlopen(req, timeout=socket_timeout) as resp, open(dest_path, "wb") as out_f:
+        if url_validator is not None:
+            opener = urllib.request.build_opener(_ValidatedRedirectHandler(url_validator))
+            stream_ctx = opener.open(req, timeout=socket_timeout)
+        else:
+            stream_ctx = urllib.request.urlopen(req, timeout=socket_timeout)
+        with stream_ctx as resp, open(dest_path, "wb") as out_f:
             while True:
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"Unduhan melebihi batas waktu total ({int(total_timeout)}s)")
@@ -6397,6 +6531,9 @@ def spawn_app_window(target_url, title=None, width=1150, height=750, server_id=N
 
 
         return False, "URL kosong"
+
+    if not _is_safe_http_url(clean_u):
+        return False, "URL tidak diizinkan (hanya http:// atau https://)"
 
 
 
@@ -17227,6 +17364,18 @@ def _handle_smb_source_request(body=None):
             )
             allowed_from_auth = (v_data or {}).get("allowed_disks") or []
 
+            pre_mode_val = ""
+            if role not in ("admin", "root"):
+                st_ok, st_data, st_code = _backend_http_request(
+                    f"{backend_url.rstrip('/')}/api/v1/smb/status",
+                    method="GET",
+                    headers={"Authorization": f"Bearer {active_token}"},
+                    timeout=5.0,
+                    retries=1,
+                )
+                if st_ok and st_code == 200 and isinstance(st_data, dict):
+                    pre_mode_val = str(st_data.get("mode") or "").strip().lower()
+
             # Step 2 (Client-first Windows teardown BEFORE POST /api/v1/smb/mode!)
             _bump_smb_pipeline_epoch(suppress_auto_sec=8.0)
             server_hosts = _collect_hosts(srv, cfg)
@@ -17236,26 +17385,39 @@ def _handle_smb_source_request(body=None):
             time.sleep(0.3)
 
             # Step 3 (Server switch & disks fetch)
-            m_ok, m_data, m_status = _backend_http_request(
-                f"{backend_url.rstrip('/')}/api/v1/smb/mode",
-                method="POST",
-                json_body={"mode": "backend", "username": uname, "password": pwd},
-                headers={"Authorization": f"Bearer {active_token}"},
-                timeout=5.0,
-                retries=1,
-            )
-            if not m_ok or m_status != 200:
-                raw_m_err = (
-                    (m_data.get("detail") or m_data.get("error") or f"HTTP {m_status}")
-                    if isinstance(m_data, dict)
-                    else str(m_data or f"HTTP {m_status}")
+            if not (role not in ("admin", "root") and pre_mode_val == "backend"):
+                m_ok, m_data, m_status = _backend_http_request(
+                    f"{backend_url.rstrip('/')}/api/v1/smb/mode",
+                    method="POST",
+                    json_body={"mode": "backend", "username": uname, "password": pwd},
+                    headers={"Authorization": f"Bearer {active_token}"},
+                    timeout=5.0,
+                    retries=1,
                 )
-                return (m_status if m_status >= 400 else 502), {
-                    "success": False,
-                    "source": smb_cfg["source"],
-                    "needsAuth": (m_status == 401),
-                    "error": _mask_secret(_mask_secret(raw_m_err, pwd), active_token),
-                }
+                if not m_ok or m_status != 200:
+                    already_backend = False
+                    if m_status == 403:
+                        st2_ok, st2_data, st2_code = _backend_http_request(
+                            f"{backend_url.rstrip('/')}/api/v1/smb/status",
+                            method="GET",
+                            headers={"Authorization": f"Bearer {active_token}"},
+                            timeout=5.0,
+                            retries=1,
+                        )
+                        if st2_ok and st2_code == 200 and isinstance(st2_data, dict):
+                            already_backend = str(st2_data.get("mode") or "").strip().lower() == "backend"
+                    if not already_backend:
+                        raw_m_err = (
+                            (m_data.get("detail") or m_data.get("error") or f"HTTP {m_status}")
+                            if isinstance(m_data, dict)
+                            else str(m_data or f"HTTP {m_status}")
+                        )
+                        return (m_status if m_status >= 400 else 502), {
+                            "success": False,
+                            "source": smb_cfg["source"],
+                            "needsAuth": (m_status == 401),
+                            "error": _mask_secret(_mask_secret(raw_m_err, pwd), active_token),
+                        }
 
             d_ok, d_data, d_status = _backend_http_request(
                 f"{backend_url.rstrip('/')}/api/v1/storage/disks",
@@ -17300,6 +17462,11 @@ def _handle_smb_source_request(body=None):
             srv = _select_target_server(cfg, target_server_id=srv_id) or srv
             smb_cfg = config_manager.get_server_smb_source_config(srv)
             role = smb_cfg.get("role", role)
+            pre_mode_val = (
+                str(pre_data.get("mode") or "").strip().lower()
+                if (pre_status == 200 and isinstance(pre_data, dict))
+                else ""
+            )
 
             # Step 2 (Client-first Windows teardown BEFORE POST /api/v1/smb/mode!)
             _bump_smb_pipeline_epoch(suppress_auto_sec=8.0)
@@ -17310,33 +17477,42 @@ def _handle_smb_source_request(body=None):
             time.sleep(0.3)
 
             # Step 3 (Server switch & disks fetch)
-            m_status, m_data, active_token = _backend_authenticated_request(
-                backend_url,
-                "/api/v1/smb/mode",
-                smb_cfg,
-                srv_id,
-                method="POST",
-                json_body={"mode": "backend", "username": uname, "password": pwd},
-            )
-            if m_status != 200:
-                if isinstance(m_data, dict) and m_data.get("needsAuth"):
-                    return (401 if m_status == 401 else m_status), {
-                        "success": False,
-                        "source": smb_cfg["source"],
-                        "needsAuth": True,
-                        "error": _mask_secret(m_data.get("error") or "Login akun Backend diperlukan.", pwd),
-                    }
-                raw_m_err = (
-                    (m_data.get("detail") or m_data.get("error") or f"HTTP {m_status}")
-                    if isinstance(m_data, dict)
-                    else str(m_data or f"HTTP {m_status}")
+            if not (role not in ("admin", "root") and pre_mode_val == "backend"):
+                m_status, m_data, active_token = _backend_authenticated_request(
+                    backend_url,
+                    "/api/v1/smb/mode",
+                    smb_cfg,
+                    srv_id,
+                    method="POST",
+                    json_body={"mode": "backend", "username": uname, "password": pwd},
                 )
-                return (m_status if m_status >= 400 else 502), {
-                    "success": False,
-                    "source": smb_cfg["source"],
-                    "needsAuth": (m_status == 401),
-                    "error": _mask_secret(_mask_secret(raw_m_err, pwd), active_token),
-                }
+                if m_status != 200:
+                    already_backend = False
+                    if m_status == 403:
+                        re_status, re_data, _ = _backend_authenticated_request(
+                            backend_url, "/api/v1/smb/status", smb_cfg, srv_id, method="GET"
+                        )
+                        if re_status == 200 and isinstance(re_data, dict):
+                            already_backend = str(re_data.get("mode") or "").strip().lower() == "backend"
+                    if not already_backend:
+                        if isinstance(m_data, dict) and m_data.get("needsAuth"):
+                            return (401 if m_status == 401 else m_status), {
+                                "success": False,
+                                "source": smb_cfg["source"],
+                                "needsAuth": True,
+                                "error": _mask_secret(m_data.get("error") or "Login akun Backend diperlukan.", pwd),
+                            }
+                        raw_m_err = (
+                            (m_data.get("detail") or m_data.get("error") or f"HTTP {m_status}")
+                            if isinstance(m_data, dict)
+                            else str(m_data or f"HTTP {m_status}")
+                        )
+                        return (m_status if m_status >= 400 else 502), {
+                            "success": False,
+                            "source": smb_cfg["source"],
+                            "needsAuth": (m_status == 401),
+                            "error": _mask_secret(_mask_secret(raw_m_err, pwd), active_token),
+                        }
 
             cfg = config_manager.load_or_create_config()
             srv = _select_target_server(cfg, target_server_id=srv_id) or srv
@@ -24369,69 +24545,42 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
     def _set_cors_headers(self):
-
-
-
-
-
-
-
-        self.send_header("Access-Control-Allow-Origin", "*")
-
-
-
-
-
-
-
+        origin = (self.headers or {}).get("Origin") if hasattr(self, "headers") else None
+        allowed_origin = _resolve_allowed_cors_origin(origin)
+        if allowed_origin:
+            self.send_header("Access-Control-Allow-Origin", allowed_origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-MyServer-Core-Token, X-Requested-With",
+        )
 
-
-
-
-
-
-
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def _is_core_request_authorized(self) -> bool:
+        hdrs = getattr(self, "headers", None) or {}
+        tok = str(hdrs.get("X-MyServer-Core-Token") or "").strip()
+        if not tok:
+            auth_hdr = str(hdrs.get("Authorization") or "").strip()
+            if auth_hdr.lower().startswith("bearer "):
+                tok = auth_hdr[7:].strip()
+        expected = str(_CORE_AUTH_TOKEN or "")
+        if not tok or not expected:
+            return False
+        return hmac.compare_digest(tok, expected)
 
     def do_OPTIONS(self):
-
-
-
-
-
-
-
-        self.send_response(200)
-
-
-
-
-
-
-
+        hdrs = getattr(self, "headers", None) or {}
+        raw_origin = str(hdrs.get("Origin") or "").strip()
+        if raw_origin and not _resolve_allowed_cors_origin(raw_origin):
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            return
+        self.send_response(204)
         self._set_cors_headers()
-
-
-
-
-
-
-
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
         self.end_headers()
 
 
@@ -24520,11 +24669,6 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-        
-        if path == "/api/get_log_directory":
-            self._send_json(logger_manager.get_log_status() if hasattr(logger_manager, "get_log_status") else {"logDirectory": "", "defaultDirectory": "", "isCustom": False})
-            return
-
         if path == "/api/ping":
 
 
@@ -24534,14 +24678,17 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
             self._send_json({"status": "ok", "app": "MyServer-Core", "version": CORE_VERSION})
+            return
 
+        if not self._is_core_request_authorized():
+            self._send_json({"success": False, "error": "Unauthorized: invalid or missing Core API token"}, 401)
+            return
 
+        if path == "/api/get_log_directory":
+            self._send_json(logger_manager.get_log_status() if hasattr(logger_manager, "get_log_status") else {"logDirectory": "", "defaultDirectory": "", "isCustom": False})
+            return
 
-
-
-
-
-        elif path in ("/api/state", "/api/get_state"):
+        if path in ("/api/state", "/api/get_state"):
 
 
 
@@ -24806,6 +24953,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
         path = urllib.parse.urlparse(self.path).path
+
+        if not self._is_core_request_authorized():
+            self._send_json({"success": False, "error": "Unauthorized: invalid or missing Core API token"}, 401)
+            return
 
 
 
@@ -25213,12 +25364,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
             if target_url:
-
-
-
-
-
-
+                if not _is_safe_http_url(target_url):
+                    self._send_json({"success": False, "message": "URL tidak diizinkan (hanya http:// atau https://)", "error": "URL tidak diizinkan (hanya http:// atau https://)"}, 400)
+                    return
 
                 try:
 
@@ -31518,9 +31666,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/download_and_install_update":
             download_url = (body.get("downloadUrl") or "").strip()
+            cfg = config_manager.load_or_create_config()
+            repo_slug = (cfg.get("github_repo") or "Gibranibang/My-Server-beta").strip() or "Gibranibang/My-Server-beta"
             if not download_url:
-                cfg = config_manager.load_or_create_config()
-                repo_slug = cfg.get("github_repo", "Gibranibang/My-Server-beta")
                 rel_url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
                 try:
                     req = urllib.request.Request(rel_url, headers={"User-Agent": f"MyServer-Companion/{APP_VERSION_NUMBER}", "Accept": "application/vnd.github.v3+json"})
@@ -31540,7 +31688,15 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": "URL berkas rilis pembaruan tidak ditemukan."})
                 return
 
-            is_zip = download_url.lower().endswith(".zip")
+            try:
+                download_url = validate_official_update_download_url(
+                    download_url, allowed_repo=repo_slug, is_redirect=False
+                )
+            except ValueError as val_err:
+                self._send_json({"success": False, "error": str(val_err)}, 400)
+                return
+
+            is_zip = urllib.parse.urlsplit(download_url).path.lower().endswith(".zip")
             suffix = ".zip" if is_zip else ".exe"
             temp_file = os.path.join(os.environ.get("TEMP", os.path.expanduser("~")), f"MyServer_Update_{int(time.time())}{suffix}")
 
@@ -31553,6 +31709,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     socket_timeout=30.0,
                     total_timeout=180.0,
                     max_bytes=512 * 1024 * 1024,
+                    url_validator=lambda u, is_redirect=False: validate_official_update_download_url(
+                        u, allowed_repo=repo_slug, is_redirect=is_redirect
+                    ),
                 )
                 if downloaded_bytes < 1024:
                     raise ValueError(f"Berkas unduhan pembaruan tidak lengkap ({downloaded_bytes} bytes)")
@@ -36170,6 +36329,7 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
     port_file = os.path.join(app_data, "core.port")
+    token_file = os.path.join(app_data, "core.token")
 
 
 
@@ -36289,7 +36449,7 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
 
-    # Simpan info port untuk Tauri
+    # Simpan info port & token per-boot untuk Tauri / installer
 
 
 
@@ -36306,6 +36466,14 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
         f.write(str(actual_port))
+
+    with open(token_file, "w", encoding="utf-8") as tf:
+        tf.write(_CORE_AUTH_TOKEN)
+    try:
+        if os.name != "nt":
+            os.chmod(token_file, 0o600)
+    except Exception:
+        pass
 
 
 
@@ -36638,31 +36806,12 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
 
 
-        try:
-
-
-
-
-
-
-
-            os.remove(port_file)
-
-
-
-
-
-
-
-        except Exception:
-
-
-
-
-
-
-
-            pass
+        for _cleanup_path in (port_file, token_file):
+            try:
+                if os.path.exists(_cleanup_path):
+                    os.remove(_cleanup_path)
+            except Exception:
+                pass
 
 
 

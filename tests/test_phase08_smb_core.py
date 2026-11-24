@@ -399,7 +399,11 @@ class TestCoreServicePhase08(unittest.TestCase):
                 req = urllib.request.Request(
                     f"http://127.0.0.1:{port}{path}",
                     data=data,
-                    headers={"Content-Type": "application/json", "Content-Length": str(len(data))},
+                    headers={
+                        "Content-Type": "application/json",
+                        "Content-Length": str(len(data)),
+                        "X-MyServer-Core-Token": core.get_core_auth_token(),
+                    },
                     method="POST",
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
@@ -545,7 +549,11 @@ class TestCoreServicePhase08(unittest.TestCase):
                 req = urllib.request.Request(
                     f"http://127.0.0.1:{port}{ep}",
                     data=data,
-                    headers={"Content-Type": "application/json", "Content-Length": str(len(data))},
+                    headers={
+                        "Content-Type": "application/json",
+                        "Content-Length": str(len(data)),
+                        "X-MyServer-Core-Token": core.get_core_auth_token(),
+                    },
                     method="POST",
                 )
                 with patch.object(core.threading, "Thread", side_effect=_capture_thread), \

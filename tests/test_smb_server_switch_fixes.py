@@ -347,7 +347,10 @@ class TestSmbServerSwitchAndDiskFixes(unittest.TestCase):
         handler = core.CoreApiHandler.__new__(core.CoreApiHandler)
         handler.path = "/api/switch_server"
         handler.rfile = io.BytesIO(json.dumps({"serverId": "srv_b"}).encode("utf-8"))
-        handler.headers = {"Content-Length": str(len(json.dumps({"serverId": "srv_b"})))}
+        handler.headers = {
+            "Content-Length": str(len(json.dumps({"serverId": "srv_b"}))),
+            "X-MyServer-Core-Token": core.get_core_auth_token(),
+        }
         sent = {}
         handler._send_json = lambda obj, code=200: sent.update({"obj": obj, "code": code})
 

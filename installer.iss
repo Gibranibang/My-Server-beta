@@ -3,7 +3,7 @@
 ; Industry Standard Windows Setup Engine
 
 #define MyAppName "My-Server by algitha BETA"
-#define MyAppVersion "4.6.13"
+#define MyAppVersion "4.6.14"
 #define MyAppPublisher "Algitha Project"
 #define MyAppURL "https://github.com/Gibranibang/My-Server-beta"
 #define MyAppExeName "MyServer-Beta.exe"
@@ -21,7 +21,7 @@ DefaultDirName={code:GetInstallDir}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=dist
-OutputBaseFilename=MyServer-v4.6.13-Beta-Setup
+OutputBaseFilename=MyServer-v4.6.14-Beta-Setup
 SetupIconFile=app_icon.ico
 Compression=lzma2/max
 SolidCompression=yes
@@ -132,12 +132,21 @@ end;
 procedure TryGracefulAppShutdown();
 var
   Http: Variant;
+  TokenPath: String;
+  CoreTokenAnsi: AnsiString;
+  CoreToken: String;
 begin
   try
+    CoreToken := '';
+    TokenPath := ExpandConstant('{localappdata}\MyServer\core.token');
+    if FileExists(TokenPath) and LoadStringFromFile(TokenPath, CoreTokenAnsi) then
+      CoreToken := Trim(String(CoreTokenAnsi));
     Http := CreateOleObject('WinHttp.WinHttpRequest.5.1');
     Http.SetTimeouts(500, 500, 1000, 1000);
     Http.Open('POST', 'http://127.0.0.1:48123/api/quit_app', False);
     Http.SetRequestHeader('Content-Type', 'application/json');
+    if CoreToken <> '' then
+      Http.SetRequestHeader('X-MyServer-Core-Token', CoreToken);
     Http.Send('{}');
     Sleep(1200);
   except

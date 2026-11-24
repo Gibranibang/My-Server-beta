@@ -258,6 +258,7 @@ class TestShareResolver(_BaseShareCoreTestCase):
             r"\\192.168.1.10\Disk1\..\etc\passwd",
             r"\\192.168.1.10",
             "relative/path/without/drive.txt",
+            "é:\\foo",
         ]
         with patch.object(smb_mount_manager, "_get_wnet_remote_unc", side_effect=AssertionError("Win32 should not run")), \
              patch.object(core, "_backend_http_request", side_effect=AssertionError("Backend should not run")):

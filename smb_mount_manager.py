@@ -467,7 +467,7 @@ def resolve_local_path_to_smb_unc(raw_path):
         )
 
     # Windows drive-letter path: X: or X:\...
-    if len(p) >= 2 and p[0].isalpha() and p[1] == ":" and (len(p) == 2 or p[2] == "\\"):
+    if len(p) >= 2 and p[0].isascii() and p[0].isalpha() and p[1] == ":" and (len(p) == 2 or p[2] == "\\"):
         drive_letter = p[0].upper()
         local_segs = [s for s in p[2:].split("\\") if s]
         if any(s == ".." for s in local_segs):

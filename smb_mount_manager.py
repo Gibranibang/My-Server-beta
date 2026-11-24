@@ -412,6 +412,111 @@ def _get_wnet_remote_unc(drive_letter):
         return (-1, "")
 
 
+def resolve_local_path_to_smb_unc(raw_path):
+    """
+    Layer-1 non-blocking (< 1 ms) resolver from a Windows local drive or UNC path
+    to normalized SMB UNC components. Never spawns subprocesses or calls disk_usage.
+    """
+    if not isinstance(raw_path, str) or "\x00" in raw_path:
+        return (False, "INVALID_PATH")
+
+    p = raw_path.strip()
+    if not p:
+        return (False, "INVALID_PATH")
+
+    # Strip accidental outer/trailing double quotes (e.g. Explorer `"Z:\"` -> `Z:"`)
+    while p.startswith('"') or p.endswith('"'):
+        p = p.strip('"').strip()
+    if not p:
+        return (False, "INVALID_PATH")
+
+    p = p.replace("/", "\\")
+    if p[:8].upper() == "\\\\?\\UNC\\":
+        p = "\\\\" + p[8:]
+    elif p.startswith("\\\\?\\"):
+        p = p[4:]
+
+    p = p.strip()
+    if not p:
+        return (False, "INVALID_PATH")
+
+    # Direct UNC path: \\host\share[\sub...]
+    if p.startswith("\\\\"):
+        segs = [s for s in p[2:].split("\\") if s]
+        if len(segs) < 2:
+            return (False, "INVALID_PATH")
+        if any(s == ".." for s in segs):
+            return (False, "INVALID_PATH")
+        host = segs[0].strip().lower()
+        share = segs[1].strip()
+        if not host or not share or host == "." or share == ".":
+            return (False, "INVALID_PATH")
+        sub_parts = [s for s in segs[2:] if s and s != "."]
+        norm_unc = f"\\\\{host}\\{share}"
+        if sub_parts:
+            norm_unc += "\\" + "\\".join(sub_parts)
+        return (
+            True,
+            {
+                "unc_host": host,
+                "share_name": share,
+                "sub_parts": sub_parts,
+                "unc_path": norm_unc,
+                "source_kind": "unc",
+            },
+        )
+
+    # Windows drive-letter path: X: or X:\...
+    if len(p) >= 2 and p[0].isalpha() and p[1] == ":" and (len(p) == 2 or p[2] == "\\"):
+        drive_letter = p[0].upper()
+        local_segs = [s for s in p[2:].split("\\") if s]
+        if any(s == ".." for s in local_segs):
+            return (False, "INVALID_PATH")
+
+        ret_code, remote_unc = _get_wnet_remote_unc(f"{drive_letter}:")
+        if ret_code not in (0, 1201, 1203) or not isinstance(remote_unc, str) or not remote_unc.strip():
+            return (False, "LOCAL_DRIVE")
+
+        norm_remote = remote_unc.strip().replace("/", "\\")
+        if norm_remote[:8].upper() == "\\\\?\\UNC\\":
+            norm_remote = "\\\\" + norm_remote[8:]
+        if not norm_remote.startswith("\\\\"):
+            return (False, "LOCAL_DRIVE")
+
+        unc_segs = [s for s in norm_remote[2:].split("\\") if s]
+        if len(unc_segs) < 2:
+            return (False, "LOCAL_DRIVE")
+        if any(s == ".." for s in unc_segs):
+            return (False, "INVALID_PATH")
+
+        unc_host = unc_segs[0].strip().lower()
+        share_name = unc_segs[1].strip()
+        if not unc_host or not share_name or unc_host == "." or share_name == ".":
+            return (False, "INVALID_PATH")
+
+        base_sub_parts = [s for s in unc_segs[2:] if s and s != "."]
+        local_sub_parts = [s for s in local_segs if s != "."]
+        combined_sub_parts = base_sub_parts + local_sub_parts
+
+        full_unc = f"\\\\{unc_host}\\{share_name}"
+        if combined_sub_parts:
+            full_unc += "\\" + "\\".join(combined_sub_parts)
+
+        return (
+            True,
+            {
+                "unc_host": unc_host,
+                "share_name": share_name,
+                "sub_parts": combined_sub_parts,
+                "unc_path": full_unc,
+                "drive_letter": f"{drive_letter}:",
+                "source_kind": "drive",
+            },
+        )
+
+    return (False, "INVALID_PATH")
+
+
 def _candidate_network_letters():
     """
     Daftar huruf drive (Z: mundur ke D:) yang berpotensi network drive: bit GetLogicalDrives aktif

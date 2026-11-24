@@ -17685,6 +17685,555 @@ _cached_compose_apps = []
 
 
 
+_SHARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _collect_server_share_identities(srv, cfg, is_active=False):
+    """Mengumpulkan himpunan identitas host/IP huruf kecil yang sah milik satu entri server."""
+    ids = set()
+    if not isinstance(srv, dict):
+        return ids
+
+    if srv.get("name"):
+        name_val = str(srv.get("name") or "").strip().lower()
+        if name_val:
+            ids.add(name_val)
+
+    for field in ("host", "ip", "zerotier_ip", "zerotier_virtual_ip", "easytier_virtual_ip", "remote_ip"):
+        raw = str(srv.get(field) or "").strip()
+        if raw:
+            h = _extract_host_from_url(raw).lower()
+            if h:
+                ids.add(h)
+
+    for conn in (srv.get("connections") or []):
+        if isinstance(conn, dict):
+            for ckey in ("url", "address"):
+                raw_u = str(conn.get(ckey) or "").strip()
+                if raw_u:
+                    h = _extract_host_from_url(raw_u).lower()
+                    if h:
+                        ids.add(h)
+
+    if is_active:
+        try:
+            active_u, _ = get_active_resolved_route(cfg)
+            if active_u:
+                h_act = _extract_host_from_url(active_u).lower()
+                if h_act:
+                    ids.add(h_act)
+        except Exception:
+            pass
+
+        try:
+            rem_ip = get_active_remote_ip(srv, cfg)
+            if rem_ip:
+                h_rem = _extract_host_from_url(rem_ip).lower()
+                if h_rem:
+                    ids.add(h_rem)
+        except Exception:
+            pass
+
+        try:
+            host_lock = getattr(smb_mount_manager, "_smb_host_cache_lock", None)
+            if host_lock is not None:
+                with host_lock:
+                    cached_smb = dict(getattr(smb_mount_manager, "_cached_resolved_smb_host", {}) or {})
+            else:
+                cached_smb = dict(getattr(smb_mount_manager, "_cached_resolved_smb_host", {}) or {})
+            resolved_smb = str(cached_smb.get("resolved") or "").strip()
+            if resolved_smb:
+                h_res = _extract_host_from_url(resolved_smb).lower()
+                if h_res:
+                    ids.add(h_res)
+        except Exception:
+            pass
+
+        try:
+            alias_fn = getattr(smb_mount_manager, "get_active_1219_aliases", None)
+            aliases = alias_fn() if callable(alias_fn) else {}
+            if isinstance(aliases, dict):
+                for orig_h, alias_h in aliases.items():
+                    ko = _extract_host_from_url(str(orig_h or "")).lower()
+                    ka = _extract_host_from_url(str(alias_h or "")).lower()
+                    if (ko and ko in ids) or (ka and ka in ids):
+                        if ko:
+                            ids.add(ko)
+                        if ka:
+                            ids.add(ka)
+        except Exception:
+            pass
+
+    ids.discard("")
+    return ids
+
+
+def _resolve_share_backend_url(cfg, srv):
+    """Menentukan URL API Backend (LAN-first) untuk server target."""
+    if not isinstance(srv, dict):
+        return ""
+    srv_id = srv.get("id")
+    raw_url = _get_active_server_backend_url(cfg, target_server_id=srv_id) or ""
+    if not raw_url:
+        return ""
+    try:
+        au, _ = get_active_resolved_route(cfg)
+        h, is_dom, zt_ip = _resolve_smb_route_params(srv, au)
+        if _is_wan_host_safe(_extract_host_from_url(raw_url)):
+            fb = smb_mount_manager.resolve_smb_host(h, srv.get("connections", []), is_dom, zt_ip) or ""
+            if fb and not _is_wan_host_safe(fb):
+                return smb_mount_manager._normalize_backend_api_url(raw_url, fallback_host=fb).rstrip("/")
+    except Exception:
+        pass
+    return str(raw_url).strip().rstrip("/")
+
+
+def _backend_share_request(matched_srv, cfg, endpoint, method="GET", json_body=None, backend_url=None):
+    """
+    Mengirim permintaan terautentikasi ke Backend dengan isolasi kredensial ketat (SECH-03):
+    - smb_source == 'backend': HANYA memakai backend_smb_auth (_backend_authenticated_request), tidak pernah fallback ke ZimaOS.
+    - smb_source == 'zimaos': memakai backend_smb_auth jika tersedia, atau JWT dari kredensial profil ZimaOS via /api/v1/auth/verify.
+    """
+    if not isinstance(matched_srv, dict):
+        return 400, {"success": False, "error": "Server target tidak ditemukan."}, ""
+    srv_id = matched_srv.get("id") or "default"
+    clean_base = str(backend_url or _resolve_share_backend_url(cfg, matched_srv) or "").strip().rstrip("/")
+    if not clean_base:
+        return 0, {"success": False, "error": "URL Backend tidak tersedia."}, ""
+
+    ep = endpoint if str(endpoint).startswith("/") else f"/{endpoint}"
+    smb_cfg = config_manager.get_server_smb_source_config(matched_srv) if config_manager else {"source": "zimaos"}
+    smb_source = str((smb_cfg or {}).get("source") or "zimaos").strip().lower()
+
+    if smb_source == "backend":
+        return _backend_authenticated_request(
+            clean_base, ep, smb_cfg, srv_id, method=method, json_body=json_body
+        )
+
+    if (smb_cfg or {}).get("access_token") or (smb_cfg or {}).get("hasCredentials"):
+        return _backend_authenticated_request(
+            clean_base, ep, smb_cfg, srv_id, method=method, json_body=json_body
+        )
+
+    creds = config_manager.get_server_credentials(matched_srv) if (config_manager and hasattr(config_manager, "get_server_credentials")) else {}
+    uname = str((creds or {}).get("username") or "").strip()
+    pwd = str((creds or {}).get("password") or "")
+    if not uname or not pwd:
+        return 401, {"success": False, "needsAuth": True, "error": "Kredensial server belum dikonfigurasi."}, ""
+
+    cache_key = (str(srv_id), clean_base, "zimaos_share")
+    token = ""
+    with _BACKEND_JWT_CACHE_LOCK:
+        cached = _BACKEND_JWT_CACHE.get(cache_key)
+        if isinstance(cached, dict) and cached.get("token"):
+            token = str(cached["token"]).strip()
+
+    verified_now = False
+    if not token:
+        v_status, v_data = _verify_backend_account(clean_base, uname, pwd)
+        verified_now = True
+        if v_status == 200 and isinstance(v_data, dict) and v_data.get("access_token"):
+            token = str(v_data.get("access_token") or "").strip()
+            with _BACKEND_JWT_CACHE_LOCK:
+                _BACKEND_JWT_CACHE[cache_key] = {"token": token, "fail_until": 0.0}
+        else:
+            err_msg = _mask_secret((v_data or {}).get("error") or "Autentikasi Backend diperlukan.", pwd)
+            return v_status, {"success": False, "needsAuth": (v_status == 401), "error": err_msg}, ""
+
+    ok, data, status_code = _backend_http_request(
+        f"{clean_base}{ep}",
+        method=method,
+        json_body=json_body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=5.0,
+        retries=1,
+    )
+
+    if status_code == 401 and not verified_now:
+        with _BACKEND_JWT_CACHE_LOCK:
+            _BACKEND_JWT_CACHE.pop(cache_key, None)
+        v_status, v_data = _verify_backend_account(clean_base, uname, pwd)
+        if v_status == 200 and isinstance(v_data, dict) and v_data.get("access_token"):
+            token = str(v_data.get("access_token") or "").strip()
+            with _BACKEND_JWT_CACHE_LOCK:
+                _BACKEND_JWT_CACHE[cache_key] = {"token": token, "fail_until": 0.0}
+            ok, data, status_code = _backend_http_request(
+                f"{clean_base}{ep}",
+                method=method,
+                json_body=json_body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5.0,
+                retries=1,
+            )
+        else:
+            err_msg = _mask_secret((v_data or {}).get("error") or "Sesi Backend kedaluwarsa.", pwd)
+            return v_status, {"success": False, "needsAuth": (v_status == 401), "error": err_msg}, ""
+
+    if isinstance(data, dict):
+        return status_code, data, token
+    return status_code, {"raw": _mask_secret(_mask_secret(str(data), pwd), token)}, token
+
+
+def _assemble_share_url(raw_share_url, backend_url):
+    """Mengubah relative '/s/{token}' menjadi URL lengkap dengan bendera is_lan_fallback."""
+    raw = str(raw_share_url or "").strip()
+    base = str(backend_url or "").strip().rstrip("/")
+    if raw.lower().startswith(("http://", "https://")):
+        return (raw, False)
+    if raw.startswith("/"):
+        return (f"{base}{raw}" if base else raw, True)
+    if raw:
+        return (f"{base}/{raw}" if base else raw, True)
+    return ("", bool(base))
+
+
+def _resolve_smb_share_target(raw_path, cfg=None):
+    """
+    Resolver 3-lapis dari path Explorer/UNC ke canonical_rel Backend dan konteks server.
+    Selalu mengembalikan 2-tuple: (True, target_dict) atau (False, {"code": ..., "message": ...}).
+    """
+    l1_ok, l1_res = smb_mount_manager.resolve_local_path_to_smb_unc(raw_path)
+    if not l1_ok:
+        err_code = l1_res if isinstance(l1_res, str) and l1_res else "INVALID_PATH"
+        err_messages = {
+            "INVALID_PATH": "Invalid or unsupported file path.",
+            "LOCAL_DRIVE": "Only files on MyServer network drives can be shared.",
+        }
+        return (False, {"code": err_code, "message": err_messages.get(err_code, "Unable to resolve path.")})
+
+    unc_host = str(l1_res.get("unc_host") or "").strip().lower()
+    share_name = str(l1_res.get("share_name") or "").strip()
+    sub_parts = list(l1_res.get("sub_parts") or [])
+    unc_path = str(l1_res.get("unc_path") or "")
+
+    if cfg is None:
+        cfg = config_manager.load_or_create_config() if config_manager else {}
+    servers = [s for s in (cfg.get("servers") or []) if isinstance(s, dict)]
+    active_srv = config_manager.get_active_server(cfg) if (config_manager and hasattr(config_manager, "get_active_server")) else None
+
+    ordered_servers = []
+    seen_ids = set()
+    if isinstance(active_srv, dict):
+        ordered_servers.append((active_srv, True))
+        if active_srv.get("id"):
+            seen_ids.add(active_srv.get("id"))
+    for srv in servers:
+        sid = srv.get("id")
+        if sid and sid in seen_ids:
+            continue
+        if srv is active_srv:
+            continue
+        ordered_servers.append((srv, False))
+
+    matched_srv = None
+    for srv, is_active in ordered_servers:
+        identities = _collect_server_share_identities(srv, cfg, is_active=is_active)
+        if unc_host in identities:
+            matched_srv = srv
+            break
+
+    if matched_srv is None:
+        return (False, {"code": "FOREIGN_NAS", "message": "This network drive does not belong to a configured MyServer."})
+
+    backend_url = _resolve_share_backend_url(cfg, matched_srv)
+    if not backend_url:
+        return (False, {"code": "SERVER_OFFLINE", "message": "MyServer backend URL is unreachable or server is offline."})
+
+    st_code, disks_data, _ = _backend_share_request(
+        matched_srv, cfg, "/api/v1/storage/disks", method="GET", backend_url=backend_url
+    )
+    if st_code == 0 or st_code >= 500:
+        return (False, {"code": "BACKEND_OFFLINE", "message": "MyServer Backend is offline or unreachable."})
+    if st_code == 401:
+        return (False, {"code": "UNAUTHENTICATED_SESSION", "message": "Backend session is unauthenticated or expired."})
+    if st_code == 403:
+        return (False, {"code": "FORBIDDEN_PATH", "message": "Access to this storage partition is forbidden."})
+    if st_code != 200 or not isinstance(disks_data, dict):
+        return (False, {"code": "BACKEND_OFFLINE", "message": f"Unexpected Backend response (HTTP {st_code})."})
+
+    disks = disks_data.get("disks") or []
+    is_admin = bool(disks_data.get("is_admin", False))
+    share_lower = share_name.lower()
+
+    matched_disk = None
+    for d in disks:
+        if not isinstance(d, dict):
+            continue
+        d_name = str(d.get("name") or "").strip().lower()
+        d_rel = str(d.get("relative_path") or "").strip().strip("/\\").lower()
+        d_mp = str(d.get("mount_point") or "").rstrip("/\\")
+        d_mp_base = os.path.basename(d_mp).strip().lower() if d_mp else ""
+        if share_lower and (
+            share_lower == d_name
+            or (d_rel and share_lower == d_rel)
+            or (d_mp_base and share_lower == d_mp_base)
+        ):
+            matched_disk = d
+            break
+
+    if matched_disk is not None and matched_disk.get("is_accessible") is False:
+        return (False, {"code": "FORBIDDEN_PATH", "message": "Access to this storage partition is forbidden."})
+
+    if matched_disk is None:
+        if not is_admin:
+            b_code, _, _ = _backend_share_request(
+                matched_srv,
+                cfg,
+                f"/api/v1/storage/browse?path={urllib.parse.quote(share_name, safe='')}",
+                method="GET",
+                backend_url=backend_url,
+            )
+            if b_code == 403:
+                return (False, {"code": "FORBIDDEN_PATH", "message": "Access to this storage partition is forbidden."})
+            if b_code == 401:
+                return (False, {"code": "UNAUTHENTICATED_SESSION", "message": "Backend session is unauthenticated or expired."})
+        return (False, {"code": "SHARE_NOT_MOUNTED_IN_BACKEND", "message": "SMB share is not mounted in MyServer Backend storage."})
+
+    disk_rel = str(matched_disk.get("relative_path") or "").strip().strip("/\\")
+    canonical_parts = [p for p in [disk_rel, *sub_parts] if p]
+    canonical_rel = "/".join(canonical_parts)
+    if not canonical_rel:
+        return (False, {"code": "INVALID_PATH", "message": "Target path cannot be empty."})
+
+    basename = sub_parts[-1] if sub_parts else (str(matched_disk.get("name") or share_name).strip() or share_name)
+    is_dir = False
+    if not sub_parts:
+        is_dir = True
+    else:
+        raw_clean = str(raw_path or "").strip().strip('"')
+        if raw_clean.endswith(("\\", "/")):
+            is_dir = True
+        else:
+            try:
+                if sys.platform == "win32" and unc_path and os.path.isdir(unc_path):
+                    is_dir = True
+            except Exception:
+                pass
+
+    smb_cfg = config_manager.get_server_smb_source_config(matched_srv) if config_manager else {}
+    smb_source = str((smb_cfg or {}).get("source") or "zimaos").strip().lower()
+
+    return (
+        True,
+        {
+            "canonical_rel": canonical_rel,
+            "basename": basename,
+            "is_dir": bool(is_dir),
+            "server_id": str(matched_srv.get("id") or ""),
+            "server_name": str(matched_srv.get("name") or matched_srv.get("id") or ""),
+            "disk_name": str(matched_disk.get("name") or share_name),
+            "share_name": share_name,
+            "is_admin": is_admin,
+            "backend_url": backend_url,
+            "smb_source": smb_source,
+            "raw_path": str(raw_path or ""),
+        },
+    )
+
+
+def _write_windows_clipboard(text):
+    """Menulis teks UTF-16LE ke Windows Clipboard melalui Win32 ctypes (< 2 ms) dengan fallback PowerShell stdin."""
+    if not isinstance(text, str) or not text:
+        return False
+    if sys.platform != "win32":
+        return False
+
+    try:
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.restype = ctypes.c_int
+        kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalFree.restype = ctypes.c_void_p
+        user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        user32.OpenClipboard.restype = ctypes.c_int
+        user32.EmptyClipboard.argtypes = []
+        user32.EmptyClipboard.restype = ctypes.c_int
+        user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+        user32.SetClipboardData.restype = ctypes.c_void_p
+        user32.CloseClipboard.argtypes = []
+        user32.CloseClipboard.restype = ctypes.c_int
+
+        opened = False
+        for _ in range(5):
+            if user32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.02)
+
+        if opened:
+            h_mem = None
+            try:
+                encoded = (text + "\x00").encode("utf-16-le")
+                h_mem = kernel32.GlobalAlloc(0x0002, len(encoded))
+                if h_mem:
+                    ptr = kernel32.GlobalLock(h_mem)
+                    if ptr:
+                        ctypes.memmove(ptr, encoded, len(encoded))
+                        kernel32.GlobalUnlock(h_mem)
+                        user32.EmptyClipboard()
+                        if user32.SetClipboardData(13, h_mem):
+                            h_mem = None
+                            return True
+            finally:
+                if h_mem:
+                    try:
+                        kernel32.GlobalFree(h_mem)
+                    except Exception:
+                        pass
+                try:
+                    user32.CloseClipboard()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Set-Clipboard -Value $input"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000,
+        )
+        proc.communicate(input=text.encode("utf-8"), timeout=4.0)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def _handle_share_resolve(body=None):
+    """Menangani POST /api/shares/resolve."""
+    payload = body if isinstance(body, dict) else {}
+    raw_path = payload.get("path")
+    ok, res = _resolve_smb_share_target(raw_path)
+    if ok:
+        return 200, {"ok": True, "target": res}
+    err_info = res if isinstance(res, dict) else {"code": "INVALID_PATH", "message": "Unable to resolve path."}
+    return 200, {
+        "ok": False,
+        "code": err_info.get("code", "INVALID_PATH"),
+        "message": err_info.get("message", "Unable to resolve path."),
+    }
+
+
+def _handle_share_create(body=None):
+    """Menangani POST /api/shares/create (tanpa pernah meneruskan public_base_url dari klien)."""
+    payload = body if isinstance(body, dict) else {}
+    raw_path = payload.get("path")
+    if not isinstance(raw_path, str) or "\x00" in raw_path or not raw_path.strip():
+        return 400, {"success": False, "code": "INVALID_PATH", "error": "Invalid or empty path."}
+
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    req_server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip() or None
+
+    clean_raw = raw_path.strip().strip('"')
+    looks_like_os_path = clean_raw.startswith("\\\\") or (
+        len(clean_raw) >= 2 and clean_raw[0].isalpha() and clean_raw[1] == ":"
+    )
+
+    if req_server_id and not looks_like_os_path:
+        matched_srv = _select_target_server(cfg, target_server_id=req_server_id)
+        if not matched_srv:
+            return 400, {"success": False, "code": "FOREIGN_NAS", "error": "Server target not found."}
+        rel_segs = [s for s in clean_raw.replace("\\", "/").split("/") if s]
+        if not rel_segs or any(s == ".." for s in rel_segs):
+            return 400, {"success": False, "code": "INVALID_PATH", "error": "Invalid relative path."}
+        canonical_rel = "/".join(rel_segs)
+        backend_url = _resolve_share_backend_url(cfg, matched_srv)
+        if not backend_url:
+            return 503, {"success": False, "code": "SERVER_OFFLINE", "error": "Server backend URL unreachable."}
+    else:
+        r_ok, r_res = _resolve_smb_share_target(raw_path, cfg=cfg)
+        if not r_ok:
+            err_code = r_res.get("code", "INVALID_PATH")
+            err_msg = r_res.get("message", "Unable to resolve path.")
+            st_map = {
+                "INVALID_PATH": 400,
+                "LOCAL_DRIVE": 400,
+                "FOREIGN_NAS": 400,
+                "SHARE_NOT_MOUNTED_IN_BACKEND": 404,
+                "FORBIDDEN_PATH": 403,
+                "UNAUTHENTICATED_SESSION": 401,
+                "SERVER_OFFLINE": 503,
+                "BACKEND_OFFLINE": 502,
+            }
+            return st_map.get(err_code, 400), {"success": False, "code": err_code, "error": err_msg}
+        canonical_rel = r_res["canonical_rel"]
+        matched_srv = _select_target_server(cfg, target_server_id=r_res.get("server_id"))
+        backend_url = r_res.get("backend_url") or _resolve_share_backend_url(cfg, matched_srv)
+
+    exp_val = payload.get("expires_in_hours", None)
+    clean_exp = None
+    if exp_val is not None and exp_val != "":
+        if isinstance(exp_val, bool):
+            return 400, {"success": False, "code": "INVALID_EXPIRY", "error": "Invalid expiration hours."}
+        try:
+            hrs = int(exp_val)
+            if float(exp_val) != float(hrs) or hrs < 1 or hrs > 8760:
+                return 400, {"success": False, "code": "INVALID_EXPIRY", "error": "Expiration hours must be between 1 and 8760."}
+            clean_exp = hrs
+        except (TypeError, ValueError):
+            return 400, {"success": False, "code": "INVALID_EXPIRY", "error": "Invalid expiration hours."}
+
+    raw_pwd = payload.get("password", None)
+    clean_pwd = str(raw_pwd).strip() if (isinstance(raw_pwd, str) and raw_pwd.strip()) else None
+
+    backend_body = {
+        "path": canonical_rel,
+        "password": clean_pwd,
+        "expires_in_hours": clean_exp,
+    }
+    if isinstance(payload.get("label"), str) and payload.get("label").strip():
+        backend_body["label"] = payload.get("label").strip()
+
+    st_code, resp_data, _ = _backend_share_request(
+        matched_srv,
+        cfg,
+        "/api/v1/storage/shares",
+        method="POST",
+        json_body=backend_body,
+        backend_url=backend_url,
+    )
+
+    if st_code == 0 or st_code >= 500:
+        return 502, {"success": False, "code": "BACKEND_OFFLINE", "error": "MyServer Backend is offline or unreachable."}
+    if st_code == 401:
+        return 401, {"success": False, "code": "UNAUTHENTICATED_SESSION", "error": "Backend session is unauthenticated or expired."}
+    if st_code == 403:
+        detail = (resp_data.get("detail") or resp_data.get("error") or "Access denied.") if isinstance(resp_data, dict) else "Access denied."
+        return 403, {"success": False, "code": "FORBIDDEN_PATH", "error": detail}
+    if st_code == 404:
+        detail = (resp_data.get("detail") or resp_data.get("error") or "Item not found.") if isinstance(resp_data, dict) else "Item not found."
+        return 404, {"success": False, "code": "NOT_FOUND", "error": detail}
+    if st_code == 400:
+        detail = (resp_data.get("detail") or resp_data.get("error") or "Invalid share request.") if isinstance(resp_data, dict) else "Invalid share request."
+        return 400, {"success": False, "code": "BAD_REQUEST", "error": detail}
+    if st_code not in (200, 201) or not isinstance(resp_data, dict):
+        return (st_code or 502), {"success": False, "code": "BACKEND_ERROR", "error": f"Backend error (HTTP {st_code})."}
+
+    share = resp_data.get("share") if isinstance(resp_data.get("share"), dict) else resp_data
+    raw_share_url = (share.get("share_url") if isinstance(share, dict) else "") or ""
+    full_url, is_lan_fallback = _assemble_share_url(raw_share_url, backend_url)
+
+    copy_requested = bool(payload.get("copy_to_clipboard", True))
+    clipboard_copied = False
+    if copy_requested and full_url:
+        clipboard_copied = bool(_write_windows_clipboard(full_url))
+
+    return 200, {
+        "success": True,
+        "share": share,
+        "share_url": full_url,
+        "is_lan_fallback": bool(is_lan_fallback),
+        "clipboard_copied": bool(clipboard_copied),
+    }
+
+
 def _scan_compose_apps_now():
 
 
@@ -32009,6 +32558,16 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path in ("/api/smb/source", "/api/smb_source"):
             status_code, res = _handle_smb_source_request(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/resolve":
+            status_code, res = _handle_share_resolve(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/create":
+            status_code, res = _handle_share_create(body)
             self._send_json(res, status=status_code)
             return
 

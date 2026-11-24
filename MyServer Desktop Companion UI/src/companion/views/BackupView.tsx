@@ -40,7 +40,7 @@ import {
 import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { getCompanionApi } from "../api"
 import { errorText, useAsyncAction, useCompanion, useNotice } from "../store"
-import type { SyncthingFolderTask, SyncthingFullStatus, ServerItem, Tone } from "../types"
+import type { ServerDetails, SyncthingFolderTask, SyncthingFullStatus, ServerItem, Tone } from "../types"
 import {
   Button,
   Card,
@@ -231,6 +231,7 @@ export default function BackupView() {
   const [selectedServerId, setSelectedServerId] = useState<string>("")
   const [modalTargetServerId, setModalTargetServerId] = useState<string>("")
   const [activeServerId, setActiveServerId] = useState<string>("")
+  const [serverDetails, setServerDetails] = useState<ServerDetails | null>(null)
 
   // REST API Key Config Modal State
   const [apiModal, setApiModal] = useState<"none" | "local" | "server">("none")
@@ -267,6 +268,7 @@ export default function BackupView() {
       if (st) setFullStatus(st)
       if (tk) setTasks(tk)
       if (srvDetails) {
+        setServerDetails(srvDetails)
         if (Array.isArray(srvDetails.servers)) {
           setAvailableServers(srvDetails.servers)
         }
@@ -610,16 +612,36 @@ export default function BackupView() {
   const handleTestConnection = async () => {
     setTestStatus("testing")
     setTestMessage(t("syncthing_testing", "Menguji…"))
+    const extractHost = (raw: string): string => {
+      const trimmed = raw.trim()
+      if (!trimmed) return ""
+      try {
+        const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+        const parsed = new URL(candidate)
+        if (parsed.hostname) return parsed.hostname
+      } catch {
+        // fall through to regex cleanup
+      }
+      return trimmed.replace(/^https?:\/\//i, "").split("/")[0].replace(/:\d+$/, "")
+    }
     try {
       let targetHost = ""
       let targetPort = "8384"
       let useHttps = false
-      if (serverRouteMode === "wan" || (!serverLanIp && serverWanUrl)) {
-        targetHost = serverWanUrl.trim()
+      const resolvedDetails = serverDetails || (await api.getServerDetails().catch(() => null))
+      const inheritedHost = extractHost(resolvedDetails?.activeHost || "")
+      const customLanHost = serverLanMode === "custom" ? extractHost(serverLanIp) : ""
+      const effectiveLanHost = customLanHost || inheritedHost
+
+      if (
+        serverRouteMode === "wan" ||
+        (serverRouteMode === "auto" && !effectiveLanHost && serverWanUrl.trim())
+      ) {
+        targetHost = extractHost(serverWanUrl)
         targetPort = serverWanPort.trim() || "8384"
         useHttps = serverWanHttps
       } else {
-        targetHost = serverLanIp.trim() || (fullStatus?.server?.address || "127.0.0.1")
+        targetHost = effectiveLanHost || "127.0.0.1"
         targetPort = serverLanPort.trim() || "8384"
         useHttps = serverLanHttps
       }
@@ -628,7 +650,8 @@ export default function BackupView() {
         setTestMessage("Target URL atau host kosong")
         return
       }
-      const testUrl = `${useHttps ? "https" : "http"}://${targetHost}:${targetPort}`
+      const cleanHost = extractHost(targetHost)
+      const testUrl = `${useHttps ? "https" : "http"}://${cleanHost}:${targetPort}`
       const res = await api.testSyncthingTarget(testUrl, useHttps)
       if (res && res.online) {
         setTestStatus("online")

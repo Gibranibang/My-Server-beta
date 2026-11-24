@@ -6,6 +6,7 @@ Mengadopsi standar embedded daemon Zima Client v2.3.5 untuk akses remote tanpa b
 """
 
 import atexit
+import copy
 import ctypes
 import hashlib
 import json
@@ -15,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -122,6 +124,11 @@ class EasyTierManager:
         self._binaries = find_easytier_binaries()
         self._cached_summary = None
         self._cached_summary_ts = 0.0
+        self._cli_cache = {}
+        self._cli_verb_pref = {}
+        self._local_host_ips_cache = None
+        self._local_host_ips_ts = 0.0
+        self._peer_reach_cache = {}
 
     def is_available(self):
         """Memeriksa apakah biner EasyTier tersedia di sistem."""
@@ -294,20 +301,33 @@ class EasyTierManager:
 
             creationflags = 0x08000000 if os.name == "nt" else 0
             try:
-                log_dir = os.path.expandvars(r"%LOCALAPPDATA%\MyServer\logs")
-                os.makedirs(log_dir, exist_ok=True)
-                stdout_log = open(os.path.join(log_dir, "easytier.stdout.log"), "w", encoding="utf-8")
-                stderr_log = open(os.path.join(log_dir, "easytier.stderr.log"), "w", encoding="utf-8")
-
                 if use_no_tun or is_admin or os.name != "nt":
                     # Mode tanpa TUN atau sudah Admin: dapat langsung dijalankan tanpa prompt UAC
-                    self._proc = subprocess.Popen(
-                        cmd,
-                        cwd=working_dir,
-                        stdout=stdout_log,
-                        stderr=stderr_log,
-                        creationflags=creationflags
-                    )
+                    local_app_data = os.environ.get("LOCALAPPDATA") if os.name == "nt" else None
+                    if local_app_data:
+                        log_dir = os.path.join(local_app_data, "MyServer", "logs")
+                    else:
+                        log_dir = os.path.join(tempfile.gettempdir(), "MyServer", "logs")
+                    stdout_log = None
+                    stderr_log = None
+                    try:
+                        os.makedirs(log_dir, exist_ok=True)
+                        stdout_log = open(os.path.join(log_dir, "easytier.stdout.log"), "w", encoding="utf-8")
+                        stderr_log = open(os.path.join(log_dir, "easytier.stderr.log"), "w", encoding="utf-8")
+                        self._proc = subprocess.Popen(
+                            cmd,
+                            cwd=working_dir,
+                            stdout=stdout_log,
+                            stderr=stderr_log,
+                            creationflags=creationflags
+                        )
+                    finally:
+                        for fh in (stdout_log, stderr_log):
+                            if fh is not None:
+                                try:
+                                    fh.close()
+                                except Exception:
+                                    pass
                 else:
                     # Mode dengan TUN membutuhkan elevasi UAC untuk membuat Wintun interface
                     logger.info("Proses berjalan tanpa hak Admin -> Meluncurkan EasyTier dengan elevasi ShellExecuteW RunAs...")
@@ -348,6 +368,8 @@ class EasyTierManager:
                 if self._is_rpc_reachable():
                     self._tun_active = not bool(use_no_tun)
                     self._no_tun_fallback = bool(use_no_tun or _from_tun_fallback)
+                    self._cli_cache.clear()
+                    self._peer_reach_cache.clear()
                     return True, "EasyTier aktif."
 
                 # Jika UAC gagal atau TUN gagal dibuat, coba fallback otomatis ke mode --no-tun
@@ -399,6 +421,11 @@ class EasyTierManager:
         self._no_tun_fallback = False
         self._cached_summary = None
         self._cached_summary_ts = 0.0
+        self._cli_cache = {}
+        self._cli_verb_pref = {}
+        self._local_host_ips_cache = None
+        self._local_host_ips_ts = 0.0
+        self._peer_reach_cache = {}
         self._kill_orphaned_daemon()
         return True, "EasyTier daemon berhasil dihentikan."
 
@@ -455,6 +482,37 @@ class EasyTierManager:
         except Exception as e:
             return None, str(e)
 
+    def _query_cli_cached(self, cache_key, primary_args, fallback_args, ttl_sec=2.0):
+        """Menjalankan query easytier-cli dengan memori subcommand & TTL cache singkat untuk mencegah badai fork."""
+        now_m = time.time() if getattr(time.time, "__module__", "time") != "time" else time.monotonic()
+        with self._lock:
+            entry = self._cli_cache.get(cache_key)
+            if entry is not None and (now_m - entry[0]) < ttl_sec:
+                return entry[1], None
+            pref = self._cli_verb_pref.get(cache_key)
+
+        arg_order = [primary_args, fallback_args]
+        if pref == tuple(fallback_args):
+            arg_order = [fallback_args, primary_args]
+
+        data = None
+        err = None
+        used_args = None
+        for idx, cand_args in enumerate(arg_order):
+            data, err = self.run_cli(list(cand_args))
+            if data is not None:
+                used_args = tuple(cand_args)
+                break
+            if idx == 0 and arg_order[1] == arg_order[0]:
+                break
+
+        with self._lock:
+            if used_args is not None:
+                self._cli_verb_pref[cache_key] = used_args
+                now_store = time.time() if getattr(time.time, "__module__", "time") != "time" else time.monotonic()
+                self._cli_cache[cache_key] = (now_store, data)
+        return data, err
+
     def get_node_info(self):
         """Mengambil data status node lokal."""
         if not self.is_running():
@@ -465,9 +523,7 @@ class EasyTierManager:
                 "uptime": 0
             }
 
-        data, err = self.run_cli(["node", "info"])
-        if not data:
-            data, err = self.run_cli(["node"])
+        data, err = self._query_cli_cached("node", ["node", "info"], ["node"], ttl_sec=2.0)
         uptime = int(time.time() - self._start_time) if self._start_time else 0
         if data and isinstance(data, dict):
             raw_vip = data.get("virtual_ipv4") or data.get("ipv4_addr") or data.get("ipv4") or self._ipv4 or "10.126.126.2"
@@ -496,9 +552,7 @@ class EasyTierManager:
         if not self.is_running():
             return []
 
-        data, err = self.run_cli(["peer", "list"])
-        if not data:
-            data, err = self.run_cli(["peer"])
+        data, err = self._query_cli_cached("peers", ["peer", "list"], ["peer"], ttl_sec=2.0)
         if isinstance(data, list):
             return data
         elif isinstance(data, dict):
@@ -513,9 +567,7 @@ class EasyTierManager:
         if not self.is_running():
             return []
 
-        data, err = self.run_cli(["route", "list"])
-        if not data:
-            data, err = self.run_cli(["route"])
+        data, err = self._query_cli_cached("routes", ["route", "list"], ["route"], ttl_sec=2.0)
         if isinstance(data, list):
             return data
         elif isinstance(data, dict):
@@ -533,6 +585,24 @@ class EasyTierManager:
         """Mengembalikan Network Name jaringan EasyTier yang sedang aktif berjalan."""
         return self._network_name
 
+    def _get_local_machine_ips(self):
+        """Membaca daftar IP adaptor lokal dengan TTL 30s (tanpa query DNS hostname berulang)."""
+        host_fn_mocked = getattr(socket.gethostbyname_ex, "__module__", "socket") != "socket"
+        now_m = time.monotonic()
+        if not host_fn_mocked and self._local_host_ips_cache is not None and (now_m - self._local_host_ips_ts) < 30.0:
+            return set(self._local_host_ips_cache)
+        ips = set()
+        try:
+            h_name = socket.gethostname()
+            for ip_cand in socket.gethostbyname_ex(h_name)[2]:
+                ips.add(ip_cand)
+        except Exception:
+            pass
+        if not host_fn_mocked:
+            self._local_host_ips_cache = set(ips)
+            self._local_host_ips_ts = now_m
+        return ips
+
     def get_peer_ip(self, target_ip=None, target_hostname=None):
         """
         Mencari alamat IPv4 dari peer server di jaringan mesh EasyTier.
@@ -549,12 +619,7 @@ class EasyTierManager:
         local_ips = {"127.0.0.1", "0.0.0.0"}
         if local_ip:
             local_ips.add(local_ip)
-        try:
-            h_name = socket.gethostname()
-            for ip_cand in socket.gethostbyname_ex(h_name)[2]:
-                local_ips.add(ip_cand)
-        except Exception:
-            pass
+        local_ips.update(self._get_local_machine_ips())
 
         clean_target = str(target_ip or "").split("/")[0].strip()
         if clean_target and clean_target in local_ips:
@@ -613,13 +678,23 @@ class EasyTierManager:
         if peer_ip == local_ip or peer_ip.startswith("127."):
             return False
 
+        conn_mocked = getattr(socket.create_connection, "__module__", "socket") != "socket"
+        now_m = time.monotonic()
+        if not conn_mocked:
+            cached = self._peer_reach_cache.get(peer_ip)
+            if cached is not None and (now_m - cached[1]) < 2.5:
+                return bool(cached[0])
+
         # Uji koneksi TCP nyata ke port HTTP (80)
+        ok_reach = False
         try:
             with socket.create_connection((peer_ip, 80), timeout=timeout):
-                return True
+                ok_reach = True
         except Exception:
-            pass
-        return False
+            ok_reach = False
+        if not conn_mocked:
+            self._peer_reach_cache[peer_ip] = (ok_reach, now_m)
+        return ok_reach
 
     def _extract_peer_ip_from_entries(self, entries, local_ip=""):
         """Menarik IP peer non-lokal pertama langsung dari daftar peers/routes tanpa fork CLI tambahan."""
@@ -640,8 +715,10 @@ class EasyTierManager:
         """Mengambil ringkasan telemetri komprehensif untuk antarmuka UI dengan TTL cache 12s."""
         now = time.time()
         with self._lock:
-            if not force_refresh and self._cached_summary and (now - self._cached_summary_ts) < SUMMARY_CACHE_TTL_SEC:
-                return self._cached_summary
+            if force_refresh:
+                self._cli_cache.clear()
+            elif self._cached_summary and (now - self._cached_summary_ts) < SUMMARY_CACHE_TTL_SEC:
+                return copy.deepcopy(self._cached_summary)
 
         running = self.is_running()
         if not running:
@@ -661,7 +738,7 @@ class EasyTierManager:
             with self._lock:
                 self._cached_summary = res
                 self._cached_summary_ts = now
-            return res
+            return copy.deepcopy(res)
 
         peers = self.get_peers()
         node_info = self.get_node_info()
@@ -688,7 +765,7 @@ class EasyTierManager:
         with self._lock:
             self._cached_summary = res
             self._cached_summary_ts = now
-        return res
+        return copy.deepcopy(res)
 
     def get_status_overview(self, force_refresh=False):
         """Alias untuk get_summary() demi kompatibilitas penuh."""
@@ -776,11 +853,14 @@ class EasyTierManager:
         self._p2p_failure_streak += 1
         if self._p2p_failure_streak >= 3 and not self._disable_p2p:
             logger.warning("[EasyTier] Kegagalan P2P beruntun (%d kali); mengaktifkan fallback --disable-p2p...", self._p2p_failure_streak)
-            self._disable_p2p = True
             if self._last_start_kwargs and self.is_running():
                 kw = dict(self._last_start_kwargs)
                 kw["disable_p2p"] = True
-                self.start(**kw)
+                ok, _ = self.start(**kw)
+                if ok:
+                    self._disable_p2p = True
+            else:
+                self._disable_p2p = True
             return True
         return False
 

@@ -22,7 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import { FooterStatus, TrayChip } from "../FlyoutShell"
-import { getCompanionApi } from "../api"
+import { getCompanionApi, type UpdateInfo } from "../api"
 import { errorText, useAsyncAction, useCompanion, useNotice } from "../store"
 import {
   AccordionSection,
@@ -126,6 +126,9 @@ export default function SettingsView() {
   const activeChannel = details?.appChannel || APP_CHANNEL
 
   useEffect(() => {
+    api.getLogDirectory?.().then((info) => {
+      if (info) setLogDirInfo(info)
+    }).catch(() => {})
     api.getServerDetails().then((d) => {
       setDetails(d)
     }).catch(() => {})

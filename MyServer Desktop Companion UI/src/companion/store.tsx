@@ -15,6 +15,7 @@ import {
   SERVER_URL,
   getCompanionApi,
 } from "./api"
+import { APP_VERSION } from "./version"
 import type {
   ChecklistKey,
   NoticeHistoryItem,
@@ -114,6 +115,11 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     } catch {}
     return DEFAULT_SETTINGS
   })
+  const settingsRef = useRef<Settings>(settings)
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
+  const transitionEpochRef = useRef(0)
   const [syncRequests, setSyncRequests] = useState(0)
   const [transitionState, setTransitionState] = useState<TransitionState>({ active: false, title: "" })
   const [isInitialLoading, setIsInitialLoading] = useState(true)
@@ -183,6 +189,7 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       task: () => Promise<T>,
       options?: { resetMetrics?: boolean },
     ): Promise<T> => {
+      const myEpoch = ++transitionEpochRef.current
       startTransition(title, message)
       const shouldReset = options?.resetMetrics ?? false
       if (shouldReset) {
@@ -196,17 +203,22 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       }
       try {
         const result = await task()
+        if (transitionEpochRef.current !== myEpoch) {
+          return result
+        }
 
         // Progressive auto-refresh for newly mounted SMB drives & fresh metrics
         void (async () => {
           let metricsSettled = false
           let smbSettled = false
           for (let i = 0; i < 24; i++) {
+            if (transitionEpochRef.current !== myEpoch) return
             try {
               const [drivesRes, freshMetrics] = await Promise.allSettled([
                 api.listDrives(),
                 api.refreshMetrics ? api.refreshMetrics() : Promise.resolve(null),
               ])
+              if (transitionEpochRef.current !== myEpoch) return
               if (drivesRes.status === "fulfilled" && Array.isArray(drivesRes.value)) {
                 setDrives(drivesRes.value)
               }
@@ -224,11 +236,13 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
             } catch {
               // ignore
             }
+            if (transitionEpochRef.current !== myEpoch) return
             if (metricsSettled && smbSettled && i >= 6) {
               break
             }
             await new Promise((r) => setTimeout(r, i < 8 ? 350 : 600))
           }
+          if (transitionEpochRef.current !== myEpoch) return
           setMonitoringLoading(false)
           setMetrics((m) => (m.isLoading ? { ...m, isLoading: false } : m))
         })()
@@ -236,7 +250,9 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         await new Promise((r) => setTimeout(r, 200))
         return result
       } finally {
-        endTransition()
+        if (transitionEpochRef.current === myEpoch) {
+          endTransition()
+        }
       }
     },
     [api, startTransition, endTransition],
@@ -418,7 +434,10 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       if (typeof document !== "undefined" && document.hidden) return
       void api.listDrives().then(setDrives).catch(() => undefined)
     }, 15000)
+    let effectDisposed = false
+    let coldStartTimer: ReturnType<typeof setTimeout> | null = null
     const syncDetailsAndMac = (details: any) => {
+      if (effectDisposed) return
       const active = details?.routes?.find((r: any) => r.active)
       if (active && active.url) {
         setServerUrlState(active.url)
@@ -429,6 +448,7 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         void api
           .detectMac()
           .then((found) => {
+            if (effectDisposed) return
             const clean = (found || "").trim().toUpperCase()
             if (clean) {
               setMac(clean)
@@ -442,8 +462,11 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     // Graceful initial home card loading threshold (min 650ms to allow smooth visual render)
     Promise.allSettled([
       api.getServerDetails().then(syncDetailsAndMac),
-      api.listDrives().then(setDrives),
+      api.listDrives().then((d) => {
+        if (!effectDisposed) setDrives(d)
+      }),
       api.loadSettings().then((loaded) => {
+        if (effectDisposed) return
         let effective = loaded
         try {
           const urlParams = new URLSearchParams(window.location.search)
@@ -462,20 +485,22 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
               localStorage.setItem("myserver_theme", loaded.theme)
             }
           }
-          if (effective?.theme) {
+          if (effective?.theme && typeof document !== "undefined") {
             document.documentElement.setAttribute("data-theme", effective.theme)
           }
           if (qLang === "id" || qLang === "en") {
             effective = { ...effective, language: qLang as any }
           }
         } catch {}
-        setSettings(effective)
+        if (!effectDisposed) setSettings(effective)
       }),
       refreshWebApps(),
     ]).finally(() => {
+      if (effectDisposed) return
       const elapsed = Date.now() - coldStartBegin
       const remaining = Math.max(0, 650 - elapsed)
-      setTimeout(() => {
+      coldStartTimer = setTimeout(() => {
+        if (effectDisposed) return
         const isForcedSkeleton = typeof window !== "undefined" && window.location.search.includes("skeleton=1")
         if (isForcedSkeleton) return
         setHomeLoading(false)
@@ -543,6 +568,8 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     window.addEventListener("myserver:refresh", onStoreRefresh)
 
     return () => {
+      effectDisposed = true
+      if (coldStartTimer !== null) clearTimeout(coldStartTimer)
       offMetrics()
       offPower()
       clearInterval(appsInterval)
@@ -595,23 +622,33 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
         setDrives(await api.setAllMounted(mounted)),
       settings,
       setSetting: async (key, v) => {
-        const previous = settings
-        const next = { ...settings, [key]: v }
+        const previousValue = settingsRef.current[key]
+        const nextSnapshot = { ...settingsRef.current, [key]: v }
+        settingsRef.current = nextSnapshot
         if (key === "theme") {
           try {
             localStorage.setItem("myserver_theme", String(v))
             document.documentElement.setAttribute("data-theme", String(v))
           } catch {}
         }
-        setSettings(next)
+        setSettings((prev) => {
+          const next = { ...prev, [key]: v }
+          settingsRef.current = next
+          return next
+        })
         try {
-          await api.saveSettings(next)
+          await api.saveSettings(nextSnapshot)
         } catch (error) {
-          setSettings(previous)
+          setSettings((prev) => {
+            const rolledBack = { ...prev, [key]: previousValue }
+            settingsRef.current = rolledBack
+            return rolledBack
+          })
           throw error
         }
       },
       resetSettings: async () => {
+        settingsRef.current = DEFAULT_SETTINGS
         setSettings(DEFAULT_SETTINGS)
         await api.saveSettings(DEFAULT_SETTINGS)
       },
@@ -773,18 +810,23 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
     return []
   })
   const timer = useRef<number | undefined>(undefined)
+  const nextNoticeIdRef = useRef(0)
 
   const clearNoticeHistory = useCallback(() => {
     setNoticeHistory([])
     try {
       localStorage.removeItem("myserver_notice_history")
-      localStorage.setItem("myserver_last_seen_notice_id", String(Date.now()))
+      localStorage.setItem(
+        "myserver_last_seen_notice_id",
+        String(Math.max(nextNoticeIdRef.current, Date.now() * 1000)),
+      )
     } catch {}
   }, [])
 
   const notify = useCallback((text: string, tone: Tone = "success") => {
     window.clearTimeout(timer.current)
-    const id = Date.now()
+    nextNoticeIdRef.current = Math.max(nextNoticeIdRef.current + 1, Date.now() * 1000)
+    const id = nextNoticeIdRef.current
     const d = new Date()
     const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`
     setNotice({ id, text, tone })

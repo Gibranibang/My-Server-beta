@@ -4,11 +4,13 @@ Modul pengontrol siklus hidup microVM InstaBox (REST API v1), pre-flight wake,
 pelacak batas runtime continuous 8 jam, dan pencegah cooldown (Smart Anti-Cooldown Guard).
 """
 
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import logging
+import math
 import os
 import sys
-from datetime import datetime, timezone
 import time
 import urllib.error
 import urllib.parse
@@ -29,6 +31,45 @@ try:
     import config_manager
 except Exception:
     config_manager = None
+
+
+def _parse_retry_after_seconds(raw_value, default=300):
+    """Parse Retry-After delay-seconds, numeric string, float, HTTP-date, or None safely."""
+    if raw_value is None or isinstance(raw_value, bool):
+        return default
+    if isinstance(raw_value, (int, float)):
+        if math.isnan(raw_value) or math.isinf(raw_value):
+            return default
+        return max(0, int(raw_value))
+    raw_str = str(raw_value).strip()
+    if not raw_str:
+        return default
+    try:
+        val = float(raw_str)
+        if math.isnan(val) or math.isinf(val):
+            return default
+        return max(0, int(val))
+    except ValueError:
+        pass
+    try:
+        target_dt = parsedate_to_datetime(raw_str)
+        if target_dt is None:
+            return default
+        if target_dt.tzinfo is None:
+            target_dt = target_dt.replace(tzinfo=timezone.utc)
+        return max(0, int((target_dt - datetime.now(timezone.utc)).total_seconds()))
+    except Exception:
+        return default
+
+
+def _is_error_response(res):
+    """Check uniformly whether an InstaBox helper/API response represents an error."""
+    return (
+        not isinstance(res, dict)
+        or "error" in res
+        or res.get("status") == "error"
+        or res.get("success") is False
+    )
 
 
 class InstaBoxManager:
@@ -124,38 +165,55 @@ class InstaBoxManager:
 
     @classmethod
     def update_vm(cls, vm_id, updates):
-        """Memperbarui pengaturan VM yang sudah tersimpan."""
+        """Memperbarui pengaturan VM yang sudah tersimpan (di 'vms' maupun 'instabox_vms')."""
         cfg = cls._get_config()
-        vms = cfg.get("instabox_vms", [])
+        allowed_fields = [
+            "name",
+            "apiKey",
+            "machineId",
+            "ip",
+            "sshPort",
+            "antigravityPort",
+            "specs",
+            "status",
+            "runtimeMinutes",
+            "cooldownUntil",
+            "lastActive",
+        ]
         target = None
-        for v in vms:
-            if v.get("id") == vm_id:
-                target = v
-                break
+        for list_key in ("vms", "instabox_vms"):
+            vm_list = cfg.get(list_key)
+            if not isinstance(vm_list, list):
+                continue
+            for v in vm_list:
+                if isinstance(v, dict) and v.get("id") == vm_id:
+                    for f in allowed_fields:
+                        if f in updates:
+                            v[f] = updates[f]
+                    if target is None:
+                        target = v
 
         if not target:
             return None
 
-        # Update field yang diizinkan
-        allowed_fields = ["name", "apiKey", "machineId", "ip", "sshPort", "antigravityPort", "specs", "status", "runtimeMinutes", "cooldownUntil"]
-        for f in allowed_fields:
-            if f in updates:
-                target[f] = updates[f]
-
-        cfg["instabox_vms"] = vms
         cls._save_config(cfg)
         logger.log_info(f"[InstaBox] Virtual Machine '{vm_id}' berhasil diperbarui.")
         return target
 
     @classmethod
     def delete_vm(cls, vm_id):
-        """Menghapus VM dari konfigurasi."""
+        """Menghapus VM dari konfigurasi ('vms' dan 'instabox_vms')."""
         cfg = cls._get_config()
-        vms = cfg.get("instabox_vms", [])
-        initial_len = len(vms)
-        vms = [v for v in vms if v.get("id") != vm_id]
-        if len(vms) < initial_len:
-            cfg["instabox_vms"] = vms
+        removed = False
+        for list_key in ("vms", "instabox_vms"):
+            vm_list = cfg.get(list_key)
+            if not isinstance(vm_list, list):
+                continue
+            filtered = [v for v in vm_list if not (isinstance(v, dict) and v.get("id") == vm_id)]
+            if len(filtered) < len(vm_list):
+                cfg[list_key] = filtered
+                removed = True
+        if removed:
             cls._save_config(cfg)
             logger.log_info(f"[InstaBox] Virtual Machine '{vm_id}' berhasil dihapus.")
             return True
@@ -195,11 +253,15 @@ class InstaBoxManager:
             except Exception:
                 err_json = {"raw": err_body}
             logger.log_error(f"[InstaBox API] HTTP {he.code}: {err_json}")
+            raw_retry = err_json.get("retryAfterSeconds") if isinstance(err_json, dict) else None
+            if raw_retry in (None, "") and getattr(he, "headers", None):
+                raw_retry = he.headers.get("Retry-After")
+            retry_after_sec = _parse_retry_after_seconds(raw_retry, default=None)
             return {
-                "error": err_json.get("message") or f"HTTP {he.code} {he.reason}",
+                "error": (err_json.get("message") if isinstance(err_json, dict) else None) or f"HTTP {he.code} {he.reason}",
                 "code": he.code,
                 "details": err_json,
-                "retryAfterSeconds": err_json.get("retryAfterSeconds") or he.headers.get("Retry-After")
+                "retryAfterSeconds": retry_after_sec,
             }
         except Exception as ex:
             logger.log_error(f"[InstaBox API] Network error: {ex}")
@@ -222,7 +284,7 @@ class InstaBoxManager:
             return {"status": "ok", "vm": vm, "offline": True}
 
         res = cls._api_request(f"machines/{machine_id}", method="GET", api_key=api_key)
-        if "error" in res:
+        if _is_error_response(res):
             return res
 
         # Parsing status runtime (dukung wrapper {"machine": {...}} maupun flat dict + runStartedAt)
@@ -269,7 +331,7 @@ class InstaBoxManager:
         updates = {
             "status": machine_status,
             "runtimeMinutes": runtime_mins,
-            "lastActive": "Just now" if machine_status == "running" else "Recently",
+            "lastActive": "Just now" if machine_status == "running" else "Sleeping",
         }
 
         ip_val = machine_obj.get("ip") or res.get("ip")
@@ -292,14 +354,16 @@ class InstaBoxManager:
         machine_id = vm.get("machineId")
         api_key = vm.get("apiKey")
         if not api_key:
-            return {"status": "error", "message": "API Key InstaBox belum dikonfigurasi.", "code": 401}
+            msg = "API Key InstaBox belum dikonfigurasi."
+            return {"status": "error", "error": msg, "message": msg, "code": 401}
         if not machine_id:
-            return {"status": "error", "message": "Machine ID InstaBox belum ditentukan.", "code": 400}
+            msg = "Machine ID InstaBox belum ditentukan."
+            return {"status": "error", "error": msg, "message": msg, "code": 400}
 
         res = cls._api_request(f"machines/{machine_id}/resume", method="POST", body={}, api_key=api_key)
-        if "error" in res:
+        if _is_error_response(res):
             if res.get("code") == 409:
-                retry_after = res.get("retryAfterSeconds", 300)
+                retry_after = _parse_retry_after_seconds(res.get("retryAfterSeconds"), default=300)
                 cooldown_until = time.time() + retry_after
                 cls.update_vm(vm_id, {"status": "cooldown", "cooldownUntil": cooldown_until})
                 return {
@@ -325,15 +389,17 @@ class InstaBoxManager:
         machine_id = vm.get("machineId")
         api_key = vm.get("apiKey")
         if not api_key:
-            return {"status": "error", "message": "API Key InstaBox belum dikonfigurasi.", "code": 401}
+            msg = "API Key InstaBox belum dikonfigurasi."
+            return {"status": "error", "error": msg, "message": msg, "code": 401}
         if not machine_id:
-            return {"status": "error", "message": "Machine ID InstaBox belum ditentukan.", "code": 400}
+            msg = "Machine ID InstaBox belum ditentukan."
+            return {"status": "error", "error": msg, "message": msg, "code": 400}
 
         res = cls._api_request(f"machines/{machine_id}/suspend", method="POST", body={}, api_key=api_key)
-        if "error" in res:
+        if _is_error_response(res):
             return res
 
-        cls.update_vm(vm_id, {"status": "sleeping", "lastActive": "Just now"})
+        cls.update_vm(vm_id, {"status": "sleeping", "lastActive": "Sleeping"})
         return {"status": "ok", "message": "VM berhasil di-pause (tidur)."}
 
     @classmethod
@@ -355,7 +421,7 @@ class InstaBoxManager:
         # 1. Jika VM sedang tidur, bangunkan otomatis
         if current_status != "running":
             resume_res = cls.resume_vm(vm_id)
-            if "error" in resume_res:
+            if _is_error_response(resume_res):
                 return resume_res
 
         # 2. Susun URL target akses Antigravity Remote
@@ -385,13 +451,13 @@ class InstaBoxManager:
             return {"error": f"VM ID '{vm_id}' tidak ditemukan.", "code": 404}
 
         pause_res = cls.pause_vm(vm_id)
-        if "error" in pause_res:
+        if _is_error_response(pause_res):
             return pause_res
 
         time.sleep(2)
 
         resume_res = cls.resume_vm(vm_id)
-        if "error" in resume_res:
+        if _is_error_response(resume_res):
             return resume_res
 
         cls.update_vm(vm_id, {"runtimeMinutes": 0, "status": "running"})

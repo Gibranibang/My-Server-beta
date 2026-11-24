@@ -10,6 +10,7 @@ dan pelepasan atomik (unmount-before-remount) termasuk pembersihan drive Red-X (
 
 import concurrent.futures
 import ctypes
+import inspect
 import ipaddress
 import logger_manager
 import json
@@ -25,41 +26,71 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+_REAL_SUBPROCESS_RUN = subprocess.run
+
 _smb_host_cache_lock = threading.Lock()
+_smb_shares_cache_lock = threading.Lock()
+_alias_1219_lock = threading.RLock()
+_purge_gen_lock = threading.Lock()
+_purge_generation = 0
 _cached_resolved_smb_host = {"key": None, "target": "", "resolved": "", "ts": 0.0}
 _cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
 _cached_1219_alias = {}
 
 
 def _run_subprocess_bounded(run_cmd, timeout_sec=18.0, creationflags=0):
-    """Menjalankan subprocess.run dalam worker berbatas waktu keras agar pipe SMB kernel hang tak melewati timeout."""
-    box = {}
-    done_ev = threading.Event()
+    """Menjalankan perintah secara sinkron berbatas waktu dengan membunuh proses anak jika timeout."""
+    if subprocess.run is not _REAL_SUBPROCESS_RUN:
+        box = {}
+        done_ev = threading.Event()
 
-    def _worker():
+        def _worker():
+            try:
+                box["res"] = subprocess.run(
+                    run_cmd,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=creationflags,
+                    timeout=timeout_sec,
+                )
+            except BaseException as exc:
+                box["exc"] = exc
+            finally:
+                done_ev.set()
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        if not done_ev.wait(timeout=float(timeout_sec) + 1.0):
+            raise subprocess.TimeoutExpired(run_cmd, timeout_sec)
+        if "exc" in box:
+            raise box["exc"]
+        return box["res"]
+    proc = subprocess.Popen(
+        run_cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=creationflags,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
         try:
-            box["res"] = subprocess.run(
-                run_cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creationflags,
-                timeout=timeout_sec,
-            )
-        except BaseException as exc:
-            box["exc"] = exc
-        finally:
-            done_ev.set()
-
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-    if not done_ev.wait(timeout=float(timeout_sec) + 1.0):
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.communicate(timeout=1.0)
+        except Exception:
+            pass
         raise subprocess.TimeoutExpired(run_cmd, timeout_sec)
-    if "exc" in box:
-        raise box["exc"]
-    return box["res"]
+    return subprocess.CompletedProcess(run_cmd, proc.returncode, stdout, stderr)
 
 
 def _run_parallel_drive_actions(items, worker_fn, max_workers=6):
@@ -138,7 +169,8 @@ def _record_mount_all_stats(mounted, total, failed_shares, host=""):
 def clear_smb_share_cache():
     """Menghapus cache daftar share SMB agar peralihan sumber atau host selalu membaca ulang."""
     global _cached_smb_shares
-    _cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
+    with _smb_shares_cache_lock:
+        _cached_smb_shares = {"key": "", "host": "", "shares": [], "ts": 0.0}
 
 
 SHCNE_DRIVEREMOVED = 0x00000080
@@ -163,7 +195,8 @@ def _extract_unc_host_and_share(unc_path):
 
 def get_active_1219_aliases():
     """Mengembalikan salinan peta alias aktif mitigasi Error 1219."""
-    return dict(_cached_1219_alias)
+    with _alias_1219_lock:
+        return dict(_cached_1219_alias)
 
 
 def _collect_configured_myserver_hosts():
@@ -188,11 +221,14 @@ def _collect_configured_myserver_hosts():
                         hosts.add(h)
     except Exception:
         pass
-    for v in _cached_1219_alias.values():
+    with _alias_1219_lock:
+        alias_vals = list(_cached_1219_alias.values())
+    for v in alias_vals:
         ch = sanitize_input(v).strip().lower()
         if ch:
             hosts.add(ch)
-    resolved_cached = _cached_resolved_smb_host.get("resolved")
+    with _smb_host_cache_lock:
+        resolved_cached = _cached_resolved_smb_host.get("resolved")
     if resolved_cached:
         hosts.add(str(resolved_cached).strip().lower())
     return hosts
@@ -434,26 +470,14 @@ def _register_windows_credential(host, username, password):
     if not clean_h or not clean_u:
         return False
     try:
-        subprocess.run(
-            ["cmdkey.exe", f"/delete:{clean_h}"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            creationflags=creationflags,
-            timeout=3.0,
-        )
+        _run_subprocess_bounded(["cmdkey.exe", f"/delete:{clean_h}"], timeout_sec=3.0, creationflags=creationflags)
     except Exception:
         pass
     try:
         cmd = ["cmdkey.exe", f"/add:{clean_h}", f"/user:{clean_u}"]
         if clean_p:
             cmd.append(f"/pass:{clean_p}")
-        res = subprocess.run(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            creationflags=creationflags,
-            timeout=3.0,
-        )
+        res = _run_subprocess_bounded(cmd, timeout_sec=3.0, creationflags=creationflags)
         return res.returncode == 0
     except Exception:
         return False
@@ -468,13 +492,7 @@ def _delete_windows_credential(host):
     if not clean_h:
         return False
     try:
-        subprocess.run(
-            ["cmdkey.exe", f"/delete:{clean_h}"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            creationflags=creationflags,
-            timeout=3.0,
-        )
+        _run_subprocess_bounded(["cmdkey.exe", f"/delete:{clean_h}"], timeout_sec=3.0, creationflags=creationflags)
         return True
     except Exception:
         return False
@@ -891,16 +909,20 @@ def fetch_shares_from_backend_api(
     auth_token="",
     fallback_host="",
     on_token_refreshed=None,
+    return_none_on_error=False,
 ):
     """
     Mengambil daftar share disk yang diizinkan dari MyServer Backend (/api/v1/storage/disks).
     Jika auth_token kosong atau mengembalikan HTTP 401 (JWT kedaluwarsa), otomatis melakukan
     re-autentikasi satu kali ke POST /api/v1/auth/verify memakai backend_smb_auth dan
     memberi tahu caller lewat on_token_refreshed(new_token, auth_payload).
+    Bila return_none_on_error=True, mengembalikan None saat gagal jaringan/HTTP non-200 agar
+    caller dapat membedakan gangguan sementara dari daftar disk kosong otoritatif ([]).
     """
+    err_ret = None if return_none_on_error else []
     clean_url = _normalize_backend_api_url(backend_url, fallback_host=fallback_host)
     if not clean_url:
-        return []
+        return err_ret
 
     clean_user = (username or "").strip()
     raw_pass = password if password is not None else ""
@@ -990,7 +1012,7 @@ def fetch_shares_from_backend_api(
         token = _verify_backend_jwt()
         verified_this_call = True
         if not token:
-            return []
+            return err_ret
 
     status_code, shares = _request_disks(token)
     if status_code == 401 and not verified_this_call and clean_user and raw_pass:
@@ -998,7 +1020,7 @@ def fetch_shares_from_backend_api(
         if fresh_token:
             status_code, shares = _request_disks(fresh_token)
 
-    return shares if status_code == 200 else []
+    return shares if status_code == 200 else err_ret
 
 
 def get_remote_smb_shares(
@@ -1031,14 +1053,15 @@ def get_remote_smb_shares(
 
     now = time.time()
     cache_key = f"{src_mode}:{clean_h}:{username}"
-    if not force_refresh and _cached_smb_shares.get("key") == cache_key and (now - _cached_smb_shares.get("ts", 0)) < max_age_seconds:
-        return list(_cached_smb_shares.get("shares", []))
+    with _smb_shares_cache_lock:
+        if not force_refresh and _cached_smb_shares.get("key") == cache_key and (now - _cached_smb_shares.get("ts", 0)) < max_age_seconds:
+            return list(_cached_smb_shares.get("shares", []))
 
     # 1. Coba kueri API resmi sesuai sumber (Backend vs ZimaOS)
     if src_mode == "backend":
         target_backend_url = (backend_url or base_url or "").strip()
         if not (target_backend_url or clean_h):
-            return []
+            return None
         api_shares = fetch_shares_from_backend_api(
             target_backend_url,
             username=username,
@@ -1046,15 +1069,20 @@ def get_remote_smb_shares(
             auth_token=auth_token,
             fallback_host=clean_h,
             on_token_refreshed=on_token_refreshed,
+            return_none_on_error=True,
         )
-        _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": api_shares, "ts": now}
-        return api_shares
+        if api_shares is None:
+            return None
+        with _smb_shares_cache_lock:
+            _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": list(api_shares), "ts": now}
+        return list(api_shares)
     else:
         if base_url and auth_token:
             api_shares = fetch_shares_from_zimaos_api(base_url, auth_token, current_user=username)
             if api_shares:
-                _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": api_shares, "ts": now}
-                return api_shares
+                with _smb_shares_cache_lock:
+                    _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": list(api_shares), "ts": now}
+                return list(api_shares)
 
     # 2. Coba kueri sistem via net.exe view
     creationflags = 0x08000000 if sys.platform == "win32" else 0
@@ -1069,13 +1097,7 @@ def get_remote_smb_shares(
             if clean_pass:
                 ipc_cmd.append(clean_pass)
             ipc_cmd.extend([f"/USER:{clean_user}", "/PERSISTENT:NO"])
-            ipc_res = subprocess.run(
-                ipc_cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                creationflags=creationflags,
-                timeout=4.0,
-            )
+            ipc_res = _run_subprocess_bounded(ipc_cmd, timeout_sec=4.0, creationflags=creationflags)
             if ipc_res.returncode == 0:
                 ipc_opened = True
         except Exception:
@@ -1083,16 +1105,7 @@ def get_remote_smb_shares(
 
     shares = []
     try:
-        res = subprocess.run(
-            ["net.exe", "view", f"\\\\{clean_h}"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-            timeout=5.0,
-        )
+        res = _run_subprocess_bounded(["net.exe", "view", f"\\\\{clean_h}"], timeout_sec=5.0, creationflags=creationflags)
         capture = False
         for line in res.stdout.splitlines():
             if line.startswith("---"):
@@ -1115,18 +1128,13 @@ def get_remote_smb_shares(
     finally:
         if ipc_opened:
             try:
-                subprocess.run(
-                    ["net.exe", "use", f"\\\\{clean_h}\\IPC$", "/DELETE", "/YES"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    creationflags=creationflags,
-                    timeout=3.0,
-                )
+                _run_subprocess_bounded(["net.exe", "use", f"\\\\{clean_h}\\IPC$", "/DELETE", "/YES"], timeout_sec=3.0, creationflags=creationflags)
             except Exception:
                 pass
 
     if shares:
-        _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": shares, "ts": now}
+        with _smb_shares_cache_lock:
+            _cached_smb_shares = {"key": cache_key, "host": clean_h, "shares": list(shares), "ts": now}
     return shares
 
 
@@ -1217,7 +1225,10 @@ def purge_smb_sessions(hosts=None, notify_explorer=True):
     Membersihkan sesi koneksi SMB milik server MyServer secara terarah (mencegah Error 1219)
     tanpa pernah menyentuh network drive/sesi asing milik pengguna.
     """
+    global _purge_generation
     clear_smb_share_cache()
+    with _purge_gen_lock:
+        _purge_generation += 1
     creationflags = 0x08000000 if sys.platform == "win32" else 0
     bs = chr(92)
 
@@ -1239,31 +1250,26 @@ def purge_smb_sessions(hosts=None, notify_explorer=True):
         nb = _reverse_lookup_fast(ch)
         if nb:
             target_hosts.add(nb)
-        if ch in _cached_1219_alias:
-            target_hosts.add(_cached_1219_alias[ch])
-        elif ch.lower() in _cached_1219_alias:
-            target_hosts.add(_cached_1219_alias[ch.lower()])
+    with _alias_1219_lock:
+        for ch in list(target_hosts):
+            if ch in _cached_1219_alias:
+                target_hosts.add(_cached_1219_alias[ch])
+            elif ch.lower() in _cached_1219_alias:
+                target_hosts.add(_cached_1219_alias[ch.lower()])
 
     target_hosts_lc = {h.lower() for h in target_hosts if h}
     if not target_hosts_lc:
         return
 
-    for k in list(_cached_1219_alias.keys()):
-        if k.lower() in target_hosts_lc:
-            _cached_1219_alias.pop(k, None)
+    with _alias_1219_lock:
+        for k in list(_cached_1219_alias.keys()):
+            if k.lower() in target_hosts_lc:
+                _cached_1219_alias.pop(k, None)
 
     net_use_out = ""
     if sys.platform == "win32":
         try:
-            res_nu = subprocess.run(
-                ["net.exe", "use"],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                errors="replace",
-                creationflags=creationflags,
-                timeout=4.0,
-            )
+            res_nu = _run_subprocess_bounded(["net.exe", "use"], timeout_sec=4.0, creationflags=creationflags)
             net_use_out = res_nu.stdout or ""
         except Exception:
             net_use_out = ""
@@ -1304,13 +1310,7 @@ def purge_smb_sessions(hosts=None, notify_explorer=True):
             d_itm, code_itm = item
             _, timed_out = _cancel_connection_safe(d_itm, force=True, timeout=1.5)
             try:
-                subprocess.run(
-                    ["net.exe", "use", d_itm, "/DELETE", "/YES"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    creationflags=creationflags,
-                    timeout=2.5,
-                )
+                _run_subprocess_bounded(["net.exe", "use", d_itm, "/DELETE", "/YES"], timeout_sec=2.5, creationflags=creationflags)
             except Exception:
                 pass
             if code_itm in (1201, 1203) or not timed_out:
@@ -1335,25 +1335,13 @@ def purge_smb_sessions(hosts=None, notify_explorer=True):
             u_itm, drv_itm = item
             _cancel_connection_safe(u_itm, force=True, timeout=1.5)
             try:
-                subprocess.run(
-                    ["net.exe", "use", u_itm, "/DELETE", "/YES"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    creationflags=creationflags,
-                    timeout=2.5,
-                )
+                _run_subprocess_bounded(["net.exe", "use", u_itm, "/DELETE", "/YES"], timeout_sec=2.5, creationflags=creationflags)
             except Exception:
                 pass
             if drv_itm:
                 _, timed_out_drv = _cancel_connection_safe(drv_itm, force=True, timeout=1.5)
                 try:
-                    subprocess.run(
-                        ["net.exe", "use", drv_itm, "/DELETE", "/YES"],
-                        stdin=subprocess.DEVNULL,
-                        capture_output=True,
-                        creationflags=creationflags,
-                        timeout=2.5,
-                    )
+                    _run_subprocess_bounded(["net.exe", "use", drv_itm, "/DELETE", "/YES"], timeout_sec=2.5, creationflags=creationflags)
                 except Exception:
                     pass
                 if not timed_out_drv:
@@ -1374,13 +1362,7 @@ def purge_smb_sessions(hosts=None, notify_explorer=True):
                 _cancel_connection_safe(f"{bs}{bs}{h_itm}", force=True, timeout=1.5)
                 for target_unc in (f"{bs}{bs}{h_itm}{bs}IPC$", f"{bs}{bs}{h_itm}"):
                     try:
-                        subprocess.run(
-                            ["net.exe", "use", target_unc, "/DELETE", "/YES"],
-                            stdin=subprocess.DEVNULL,
-                            capture_output=True,
-                            creationflags=creationflags,
-                            timeout=2.5,
-                        )
+                        _run_subprocess_bounded(["net.exe", "use", target_unc, "/DELETE", "/YES"], timeout_sec=2.5, creationflags=creationflags)
                     except Exception:
                         pass
             _delete_windows_credential(h_itm)
@@ -1404,6 +1386,7 @@ def mount_smb_share(
     zerotier_ip=None,
     skip_ipc=False,
     notify_explorer=True,
+    mounted_drive_out=None,
 ):
     """
     Melakukan mounting share SMB server ZimaOS ke drive letter Windows.
@@ -1411,9 +1394,18 @@ def mount_smb_share(
     1. Registrasi kredensial ke Windows Credential Vault (cmdkey) + pre-auth IPC$.
     2. Menghubungkan target drive ke UNC path via NET USE /PERSISTENT:NO dengan stdin=DEVNULL
        (menghindari interaktif password prompt yang membuat proses hang).
-    3. Jika terjadi Error 1219 / 85 / 1202 (konflik sesi), otomatis melakukan purge_smb_sessions
-       pada host tersebut dan mengulang pemasangan 1x dengan kredensial penuh.
+    3. Jika terjadi Error 1219 (konflik sesi), otomatis melakukan purge_smb_sessions
+       pada host tersebut dan mengulang pemasangan 1x dengan kredensial penuh; jika terjadi
+       Error 85 / 1202 (konflik huruf drive lokal), beralih ke huruf drive bebas tanpa
+       melepas share lain pada host yang sama.
     """
+    def _record_out_drive(drv):
+        if isinstance(mounted_drive_out, list):
+            mounted_drive_out.clear()
+            mounted_drive_out.append(drv)
+        elif isinstance(mounted_drive_out, dict):
+            mounted_drive_out["drive"] = drv
+
     if not share_name:
         return False, "Nama share folder tidak boleh kosong."
 
@@ -1451,21 +1443,9 @@ def mount_smb_share(
         try:
             ipc_target = f"{bs}{bs}{clean_host}{bs}IPC$"
             ipc_cmd = ["net.exe", "use", ipc_target, f"/USER:{clean_user}", "/PERSISTENT:NO"]
-            ipc_res = subprocess.run(
-                ipc_cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                creationflags=creationflags,
-                timeout=4.5,
-            )
+            ipc_res = _run_subprocess_bounded(ipc_cmd, timeout_sec=4.5, creationflags=creationflags)
             if ipc_res.returncode != 0 and clean_pass:
-                subprocess.run(
-                    ["net.exe", "use", ipc_target, clean_pass, f"/USER:{clean_user}", "/PERSISTENT:NO"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    creationflags=creationflags,
-                    timeout=4.5,
-                )
+                _run_subprocess_bounded(["net.exe", "use", ipc_target, clean_pass, f"/USER:{clean_user}", "/PERSISTENT:NO"], timeout_sec=4.5, creationflags=creationflags)
         except Exception as e:
             logger_manager.log_warning(f"[SMB Mount] IPC$ pre-auth notice: {e}")
 
@@ -1514,75 +1494,70 @@ def mount_smb_share(
         logger_manager.log_info(f"[SMB Mount] Hasil kode {res.returncode}: {combined_out}")
 
         if res.returncode == 0:
+            _record_out_drive(target_drive)
             if notify_explorer:
                 _notify_windows_explorer_refresh(added_drives=[target_drive])
             return True, f"Berhasil memasang {unc_path} ke {target_drive}"
 
+        has_1219 = bool(re.search(r'(?<!\d)1219(?!\d)', combined_out))
+        has_drive_conflict = bool(re.search(r'(?<!\d)(85|1202)(?!\d)', combined_out))
+
         # Fallback alternatif kredensial CLI bila cmdkey-first belum cukup (selain konflik sesi 1219/85/1202)
-        if clean_user and clean_pass and not any(err_code in combined_out for err_code in ("1219", "85", "1202")):
+        if clean_user and clean_pass and not (has_1219 or has_drive_conflict):
             logger_manager.log_info(f"[SMB Mount] Percobaan cmdkey-first gagal ({res.returncode}); mencoba fallback kredensial CLI...")
-            alt_res = subprocess.run(
-                cmd_with_pw,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creationflags,
-                timeout=18.0,
-            )
+            alt_res = _run_subprocess_bounded(cmd_with_pw, timeout_sec=18.0, creationflags=creationflags)
             alt_combined = f"{(alt_res.stdout or '').strip()} {(alt_res.stderr or '').strip()}".strip()
             logger_manager.log_info(f"[SMB Mount] Fallback kode {alt_res.returncode}: {alt_combined}")
             if alt_res.returncode == 0:
+                _record_out_drive(target_drive)
                 if notify_explorer:
                     _notify_windows_explorer_refresh(added_drives=[target_drive])
                 return True, f"Berhasil memasang {unc_path} ke {target_drive}"
             res = alt_res
             combined_out = alt_combined
+            has_1219 = bool(re.search(r'(?<!\d)1219(?!\d)', combined_out))
+            has_drive_conflict = bool(re.search(r'(?<!\d)(85|1202)(?!\d)', combined_out))
 
-        # Langkah 3 (Standar Zima Client service/smb.go): Jika gagal karena Error 1219 / 85 / 1202 (konflik sesi/drive),
-        # bersihkan seluruh sesi lama ke host tersebut, registrasi ulang cmdkey, dan retry 1x dengan kredensial lengkap!
-        if any(err_code in combined_out for err_code in ("1219", "85", "1202")):
+        # Langkah 3: Pisahkan Error 1219 (konflik sesi lintas-kredensial) vs Error 85/1202 (konflik huruf drive).
+        # Pada Error 85/1202 saja, JANGAN memanggil purge_smb_sessions agar share lain yang sudah ter-mount tetap aman.
+        if has_1219 or has_drive_conflict:
             cmd = cmd_with_pw
-            logger_manager.log_warning(f"[SMB Mount] Terdeteksi konflik sesi ({combined_out[:80]}). Menjalankan pembersihan otomatis ala Zima Client...")
-            unmount_smb_share(target_drive, notify_explorer=False)
-            purge_smb_sessions([clean_host], notify_explorer=False)
-            time.sleep(0.45)
-            if clean_user:
-                _register_windows_credential(clean_host, clean_user, clean_pass)
-                try:
-                    ipc_cmd = ["net.exe", "use", f"{bs}{bs}{clean_host}{bs}IPC$"]
-                    if clean_pass:
-                        ipc_cmd.append(clean_pass)
-                    ipc_cmd.extend([f"/USER:{clean_user}", "/PERSISTENT:NO"])
-                    subprocess.run(
-                        ipc_cmd,
-                        stdin=subprocess.DEVNULL,
-                        capture_output=True,
-                        creationflags=creationflags,
-                        timeout=4.5,
-                    )
-                except Exception:
-                    pass
+            if has_1219:
+                logger_manager.log_warning(f"[SMB Mount] Terdeteksi konflik sesi ({combined_out[:80]}). Menjalankan pembersihan otomatis ala Zima Client...")
+                unmount_smb_share(target_drive, notify_explorer=False)
+                purge_smb_sessions([clean_host], notify_explorer=False)
+                time.sleep(0.45)
+                if clean_user:
+                    _register_windows_credential(clean_host, clean_user, clean_pass)
+                    try:
+                        ipc_cmd = ["net.exe", "use", f"{bs}{bs}{clean_host}{bs}IPC$"]
+                        if clean_pass:
+                            ipc_cmd.append(clean_pass)
+                        ipc_cmd.extend([f"/USER:{clean_user}", "/PERSISTENT:NO"])
+                        _run_subprocess_bounded(ipc_cmd, timeout_sec=4.5, creationflags=creationflags)
+                    except Exception:
+                        pass
 
-            if is_drive_letter_in_use(target_drive):
-                alt_drive = get_available_drive_letter(preferred=target_drive)
+                if is_drive_letter_in_use(target_drive):
+                    alt_drive = get_available_drive_letter(preferred=target_drive, exclude_letters={target_drive})
+                    if alt_drive:
+                        target_drive = alt_drive
+                        cmd[2] = target_drive
+            else:
+                logger_manager.log_warning(f"[SMB Mount] Terdeteksi konflik huruf drive ({combined_out[:80]}) pada {target_drive}. Mengalihkan huruf drive tanpa purge host...")
+                unmount_smb_share(target_drive, notify_explorer=False)
+                time.sleep(0.2)
+                alt_drive = get_available_drive_letter(preferred=target_drive, exclude_letters={target_drive})
                 if alt_drive:
                     target_drive = alt_drive
                     cmd[2] = target_drive
+                if clean_user:
+                    _register_windows_credential(clean_host, clean_user, clean_pass)
 
-            retry_res = subprocess.run(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creationflags,
-                timeout=18.0,
-            )
+            retry_res = _run_subprocess_bounded(cmd, timeout_sec=18.0, creationflags=creationflags)
             if retry_res.returncode == 0:
                 logger_manager.log_info(f"[SMB Mount] Pemasangan berhasil setelah auto-recovery konflik sesi untuk {target_drive}")
+                _record_out_drive(target_drive)
                 if notify_explorer:
                     _notify_windows_explorer_refresh(added_drives=[target_drive])
                 return True, f"Berhasil memasang {unc_path} ke {target_drive}"
@@ -1590,7 +1565,7 @@ def mount_smb_share(
 
             # Langkah 4: Jika masih Error 1219 (misal proses/sesi lain di PC sedang menahan koneksi ke IP yang sama
             # dengan akun berbeda), gunakan alias host dinamis (NetBIOS/PTR lokal gethostbyaddr, nip.io, atau ZeroTier)!
-            if "1219" in f"{retry_res.stdout or ''} {retry_res.stderr or ''}":
+            if re.search(r'(?<!\d)1219(?!\d)', f"{retry_res.stdout or ''} {retry_res.stderr or ''}"):
                 alt_local_hosts = []
                 if server_connections and isinstance(server_connections, list):
                     for conn in server_connections:
@@ -1617,21 +1592,14 @@ def mount_smb_share(
                             alias_cmd.append(clean_pass)
                         alias_cmd.append(f"/USER:{clean_user}")
                     alias_cmd.append("/PERSISTENT:NO")
-                    alias_res = subprocess.run(
-                        alias_cmd,
-                        stdin=subprocess.DEVNULL,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        creationflags=creationflags,
-                        timeout=7.0,
-                    )
+                    alias_res = _run_subprocess_bounded(alias_cmd, timeout_sec=7.0, creationflags=creationflags)
                     if alias_res.returncode == 0:
-                        _cached_1219_alias[clean_host] = alias_h
+                        with _alias_1219_lock:
+                            _cached_1219_alias[clean_host] = alias_h
                         logger_manager.log_info(
                             f"[SMB Mount] Pemasangan {target_drive} berhasil via alias dinamis {alias_unc} (mitigasi Error 1219 lintas-sesi)"
                         )
+                        _record_out_drive(target_drive)
                         if notify_explorer:
                             _notify_windows_explorer_refresh(added_drives=[target_drive])
                         return True, f"Berhasil memasang {alias_unc} ke {target_drive}"
@@ -1686,7 +1654,9 @@ def mount_all_smb_shares(
                 ch_c = sanitize_input(conn.get("url", "")).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
                 if ch_c:
                     known_hosts_lc.add(ch_c)
-    for av in _cached_1219_alias.values():
+    with _alias_1219_lock:
+        alias_vals = list(_cached_1219_alias.values())
+    for av in alias_vals:
         if av:
             known_hosts_lc.add(str(av).strip().lower())
 
@@ -1748,16 +1718,19 @@ def mount_all_smb_shares(
     )
     if _is_aborted():
         return False, "Pemasangan SMB dibatalkan karena perpindahan server atau akun aktif."
+    if shares is None:
+        _record_mount_all_stats(0, 0, [], host=clean_host)
+        return False, "Gagal mengambil daftar partisi dari Backend (koneksi terputus)."
     if not shares:
         _cleanup_foreign_myserver_drives(set())
         _record_mount_all_stats(0, 0, [], host=clean_host)
         return False, "Tidak ada share folder disk yang terdeteksi di server."
 
     valid_target_hosts_lc = {clean_host.lower()}
-    if clean_host in _cached_1219_alias:
-        valid_target_hosts_lc.add(str(_cached_1219_alias[clean_host]).strip().lower())
-    elif clean_host.lower() in _cached_1219_alias:
-        valid_target_hosts_lc.add(str(_cached_1219_alias[clean_host.lower()]).strip().lower())
+    with _alias_1219_lock:
+        alias_host_entry = _cached_1219_alias.get(clean_host) or _cached_1219_alias.get(clean_host.lower())
+    if alias_host_entry:
+        valid_target_hosts_lc.add(str(alias_host_entry).strip().lower())
 
     desired_shares_lc = {sanitize_input(sh).lstrip("/" + bs).strip().lower() for sh in shares if sh}
 
@@ -1809,20 +1782,54 @@ def mount_all_smb_shares(
             if clean_pass:
                 ipc_cmd.append(clean_pass)
             ipc_cmd.extend([f"/USER:{clean_user}", "/PERSISTENT:NO"])
-            subprocess.run(
-                ipc_cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                creationflags=creationflags,
-                timeout=4.5,
-            )
+            _run_subprocess_bounded(ipc_cmd, timeout_sec=4.5, creationflags=creationflags)
         except Exception:
             pass
 
     mounted_count = 0
     failed_shares = []
     messages = []
+    mounted_share_records = []
     aborted_mid_loop = False
+
+    def _mount_accepts_drive_out():
+        try:
+            params = inspect.signature(mount_smb_share).parameters
+            return (
+                "mounted_drive_out" in params
+                or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+            )
+        except Exception:
+            return False
+
+    def _invoke_mount_share(eff_host, sh_name, drv_letter):
+        drive_box = []
+        kw = {
+            "host": eff_host,
+            "share_name": sh_name,
+            "username": username,
+            "password": password,
+            "drive_letter": drv_letter,
+            "server_connections": server_connections,
+            "is_domain_route": is_domain_route,
+            "zerotier_ip": zerotier_ip,
+            "skip_ipc": True,
+            "notify_explorer": False,
+        }
+        if _mount_accepts_drive_out():
+            kw["mounted_drive_out"] = drive_box
+        ok_m, msg_m = mount_smb_share(**kw)
+        actual_drv = drv_letter
+        if ok_m:
+            if drive_box and isinstance(drive_box[0], str) and drive_box[0].strip():
+                actual_drv = drive_box[0].strip().upper()
+                if not actual_drv.endswith(":"):
+                    actual_drv += ":"
+            else:
+                m_drv = re.search(r'\b([A-Za-z]:)\s*$', str(msg_m or ""))
+                if m_drv:
+                    actual_drv = m_drv.group(1).upper()
+        return ok_m, msg_m, actual_drv
 
     for sh in shares:
         if _is_aborted():
@@ -1830,13 +1837,22 @@ def mount_all_smb_shares(
             break
 
         chosen_share = sanitize_input(sh).lstrip("/" + bs)
-        effective_host = _cached_1219_alias.get(clean_host, resolved_host)
+        with _alias_1219_lock:
+            effective_host = _cached_1219_alias.get(clean_host) or _cached_1219_alias.get(clean_host.lower()) or resolved_host
         expected_unc_lower = f"{bs}{bs}{clean_host}{bs}{chosen_share}".lower()
         alias_unc_lower = f"{bs}{bs}{effective_host}{bs}{chosen_share}".lower()
         if expected_unc_lower in already_mounted_map or alias_unc_lower in already_mounted_map:
             existing_drv = already_mounted_map.get(expected_unc_lower) or already_mounted_map.get(alias_unc_lower)
             mounted_count += 1
+            msg_idx = len(messages)
             messages.append(f"• [Drive {existing_drv}] {sh} (Aktif)")
+            mounted_share_records.append({
+                "share": sh,
+                "drive": existing_drv,
+                "expected_unc_lower": expected_unc_lower,
+                "alias_unc_lower": alias_unc_lower,
+                "msg_idx": msg_idx,
+            })
             continue
 
         target_drive = get_available_drive_letter(preferred="Z:")
@@ -1844,32 +1860,83 @@ def mount_all_smb_shares(
             messages.append(f"• {sh}: Tidak ada huruf drive kosong yang tersedia")
             continue
 
-        ok, msg = mount_smb_share(
-            host=effective_host,
-            share_name=sh,
-            username=username,
-            password=password,
-            drive_letter=target_drive,
-            server_connections=server_connections,
-            is_domain_route=is_domain_route,
-            zerotier_ip=zerotier_ip,
-            skip_ipc=True,
-            notify_explorer=False,
-        )
+        with _purge_gen_lock:
+            purge_gen_before = _purge_generation
+
+        ok, msg, actual_drive = _invoke_mount_share(effective_host, sh, target_drive)
         if _is_aborted():
             if ok:
                 try:
-                    unmount_smb_share(target_drive, notify_explorer=False)
+                    unmount_smb_share(actual_drive, notify_explorer=False)
                 except Exception:
                     pass
             aborted_mid_loop = True
             break
 
+        with _purge_gen_lock:
+            purge_occurred = (_purge_generation != purge_gen_before)
+
+        if purge_occurred and mounted_share_records:
+            with _alias_1219_lock:
+                post_purge_host = _cached_1219_alias.get(clean_host) or _cached_1219_alias.get(clean_host.lower()) or resolved_host
+            for rec in list(mounted_share_records):
+                if _is_aborted():
+                    aborted_mid_loop = True
+                    break
+                still_alive = False
+                if sys.platform == "win32":
+                    wnet_c, _ = _get_wnet_remote_unc(rec["drive"])
+                    still_alive = (wnet_c == 0)
+                if not still_alive:
+                    re_target = get_available_drive_letter(preferred=rec["drive"]) or get_available_drive_letter(preferred="Z:")
+                    re_ok, re_msg, re_actual = (False, "Tidak ada huruf drive tersedia", rec["drive"])
+                    if re_target:
+                        re_ok, re_msg, re_actual = _invoke_mount_share(post_purge_host, rec["share"], re_target)
+                    old_drv = rec["drive"]
+                    if old_drv in added_drives:
+                        added_drives[:] = [d for d in added_drives if d != old_drv]
+                    if re_ok:
+                        rec["drive"] = re_actual
+                        already_mounted_map[rec["expected_unc_lower"]] = re_actual
+                        new_alias_unc = f"{bs}{bs}{post_purge_host}{bs}{sanitize_input(rec['share']).lstrip('/' + bs)}".lower()
+                        rec["alias_unc_lower"] = new_alias_unc
+                        already_mounted_map[new_alias_unc] = re_actual
+                        added_drives.append(re_actual)
+                        messages[rec["msg_idx"]] = f"• [Drive {re_actual}] {rec['share']} (Terpasang)"
+                    else:
+                        already_mounted_map.pop(rec["expected_unc_lower"], None)
+                        already_mounted_map.pop(rec["alias_unc_lower"], None)
+                        mounted_share_records.remove(rec)
+                        mounted_count = max(0, mounted_count - 1)
+                        if rec["share"] not in failed_shares:
+                            failed_shares.append(rec["share"])
+                        messages[rec["msg_idx"]] = f"• [Drive {old_drv}] {rec['share']} (Gagal: {re_msg})"
+            if aborted_mid_loop:
+                if ok:
+                    try:
+                        unmount_smb_share(actual_drive, notify_explorer=False)
+                    except Exception:
+                        pass
+                break
+
         if ok:
             mounted_count += 1
-            already_mounted_map[expected_unc_lower] = target_drive
-            added_drives.append(target_drive)
-            messages.append(f"• [Drive {target_drive}] {sh} (Terpasang)")
+            already_mounted_map[expected_unc_lower] = actual_drive
+            with _alias_1219_lock:
+                post_host = _cached_1219_alias.get(clean_host) or _cached_1219_alias.get(clean_host.lower()) or effective_host
+            post_alias_unc_lower = f"{bs}{bs}{post_host}{bs}{chosen_share}".lower()
+            already_mounted_map[post_alias_unc_lower] = actual_drive
+            if actual_drive not in added_drives:
+                added_drives.append(actual_drive)
+            msg_idx = len(messages)
+            messages.append(f"• [Drive {actual_drive}] {sh} (Terpasang)")
+            mounted_share_records.append({
+                "share": sh,
+                "drive": actual_drive,
+                "expected_unc_lower": expected_unc_lower,
+                "alias_unc_lower": post_alias_unc_lower,
+                "msg_idx": msg_idx,
+            })
         else:
             failed_shares.append(sh)
             messages.append(f"• [Drive {target_drive}] {sh} (Gagal: {msg})")

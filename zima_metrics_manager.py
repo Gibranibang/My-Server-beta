@@ -91,6 +91,15 @@ def _is_fuse_or_cloud_fstype(fs_type, source="", mount_point=""):
     return False
 
 
+def _paths_share_boundary(path_a, path_b):
+    """Memeriksa kecocokan path atau sub-path dengan batas segmen '/' yang ketat."""
+    a = str(path_a or "").replace("\\", "/").rstrip("/").lower()
+    b = str(path_b or "").replace("\\", "/").rstrip("/").lower()
+    if not a or not b:
+        return False
+    return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
 def _log_metrics_warning(msg):
     """Mencatat peringatan telemetri secara aman tanpa mengganggu thread metrik."""
     try:
@@ -228,6 +237,7 @@ class ZimaMetricsClient:
             "partitions": [],
         }
         self.detailed_partitions_map = {}
+        self._partitions_map_lock = threading.RLock()
         self._storage_bg_thread = None
         self._storage_bg_running = False
         self._last_bg_storage_fetch = 0
@@ -814,7 +824,8 @@ class ZimaMetricsClient:
             pass
 
         if new_map:
-            self.detailed_partitions_map.update(new_map)
+            with self._partitions_map_lock:
+                self.detailed_partitions_map.update(new_map)
 
     def _start_bg_storage_fetch(self):
         """Menjalankan pembacaan storage ZimaOS di latar belakang jika diperlukan."""
@@ -1148,8 +1159,28 @@ class ZimaMetricsClient:
                         if unc_host:
                             if unc_host in known_hosts or unc_host in known_ips:
                                 is_zimaos = True
-                            elif any(h in unc_host or unc_host in h for h in known_hosts if len(h) >= 3):
-                                is_zimaos = True
+                            else:
+                                unc_is_ip = False
+                                try:
+                                    ipaddress.ip_address(unc_host)
+                                    unc_is_ip = True
+                                except ValueError:
+                                    unc_is_ip = False
+                                if not unc_is_ip:
+                                    unc_short = unc_host.split(".")[0]
+                                    if len(unc_short) >= 3:
+                                        for h in known_hosts:
+                                            if not h or h in ("localhost", "127.0.0.1"):
+                                                continue
+                                            try:
+                                                ipaddress.ip_address(h)
+                                                continue
+                                            except ValueError:
+                                                pass
+                                            h_short = h.split(".")[0]
+                                            if len(h_short) >= 3 and unc_short == h_short:
+                                                is_zimaos = True
+                                                break
 
                         # Tolak jika drive ini milik aplikasi, PC, atau NAS lain
                         if not is_zimaos:
@@ -1178,25 +1209,33 @@ class ZimaMetricsClient:
                         try:
                             # Prioritaskan data kapasitas dari REST API ZimaOS (/v2/local_storage/mount)
                             # agar tidak membanjiri SMB/Windows Explorer dengan GetDiskFreeSpaceExW setiap 2 detik!
-                            existing_m = (
-                                (self.detailed_partitions_map.get(c_key) if c_key else None)
-                                or self.detailed_partitions_map.get(share_name)
-                                or self.detailed_partitions_map.get(share_name.lower())
-                                or self.detailed_partitions_map.get(f"/media/{share_name}")
-                                or self.detailed_partitions_map.get(f"/media/{share_name.lower()}")
-                            )
-                            if not (
-                                existing_m
-                                and isinstance(existing_m, dict)
-                                and existing_m.get("total_bytes", 0) > 0
-                                and not existing_m.get("is_network_drive")
-                            ):
-                                continue
+                            with self._partitions_map_lock:
+                                existing_m = (
+                                    (self.detailed_partitions_map.get(c_key) if c_key else None)
+                                    or self.detailed_partitions_map.get(share_name)
+                                    or self.detailed_partitions_map.get(share_name.lower())
+                                    or self.detailed_partitions_map.get(f"/media/{share_name}")
+                                    or self.detailed_partitions_map.get(f"/media/{share_name.lower()}")
+                                )
+                                if not (
+                                    existing_m
+                                    and isinstance(existing_m, dict)
+                                    and existing_m.get("total_bytes", 0) > 0
+                                    and not existing_m.get("is_network_drive")
+                                ):
+                                    continue
 
-                            u_tot = int(existing_m.get("total_bytes", 0))
-                            u_used = int(existing_m.get("used_bytes", 0))
-                            u_avail = int(existing_m.get("avail_bytes", max(u_tot - u_used, 0)))
-                            existing_fs = existing_m.get("fs_type", "")
+                                u_tot = int(existing_m.get("total_bytes", 0))
+                                u_used = int(existing_m.get("used_bytes", 0))
+                                u_avail = int(existing_m.get("avail_bytes", max(u_tot - u_used, 0)))
+                                existing_fs = existing_m.get("fs_type", "")
+                                existing_mp = existing_m.get("mount_point") or f"/media/{share_name}"
+                                existing_is_remote = bool(
+                                    existing_m.get("is_remote")
+                                    or _is_fuse_or_cloud_fstype(existing_fs, "", existing_mp)
+                                )
+                                # Annotate drive letter in-place on REST record without overwriting it
+                                existing_m["drive_letter"] = f"{letter}:"
 
                             u_pct = round((u_used / u_tot * 100.0), 1) if u_tot > 0 else 0.0
                             fmt_str = f"{format_dynamic_bytes(u_used)} / {format_dynamic_bytes(u_tot)} ({u_pct:.1f}%)"
@@ -1204,9 +1243,10 @@ class ZimaMetricsClient:
                             drive_data = {
                                 "name": f"{share_name} ({letter}:)",
                                 "raw_name": share_name,
-                                "mount_point": f"/media/{share_name}",
+                                "mount_point": existing_mp,
                                 "drive_letter": f"{letter}:",
                                 "fs_type": existing_fs,
+                                "is_remote": existing_is_remote,
                                 "remote_unc": remote_unc,
                                 "used_bytes": u_used,
                                 "total_bytes": u_tot,
@@ -1217,9 +1257,6 @@ class ZimaMetricsClient:
                             }
                             seen_net_shares.add(dedup_key)
                             discovered.append(drive_data)
-
-                            # Annotate drive letter in-place on REST record without overwriting it
-                            existing_m["drive_letter"] = f"{letter}:"
                         except Exception:
                             pass
         except Exception:
@@ -1449,12 +1486,13 @@ class ZimaMetricsClient:
                             "formatted_str": f"{format_dynamic_bytes(m_used)} / {format_dynamic_bytes(m_size)} ({m_pct:.1f}%)",
                         }
                         c_k = self._canonical_vol_key(p_name)
-                        if c_k:
-                            self.detailed_partitions_map[c_k] = m_data
-                        self.detailed_partitions_map[p_name] = m_data
-                        self.detailed_partitions_map[p_name.lower()] = m_data
-                        self.detailed_partitions_map[mp] = m_data
-                        self.detailed_partitions_map[mp.lower()] = m_data
+                        with self._partitions_map_lock:
+                            if c_k:
+                                self.detailed_partitions_map[c_k] = m_data
+                            self.detailed_partitions_map[p_name] = m_data
+                            self.detailed_partitions_map[p_name.lower()] = m_data
+                            self.detailed_partitions_map[mp] = m_data
+                            self.detailed_partitions_map[mp.lower()] = m_data
         elif not mount_res:
             now_warn = time.time()
             if now_warn - getattr(self, "_last_storage_warn_ts", 0.0) >= 30.0:
@@ -1471,9 +1509,10 @@ class ZimaMetricsClient:
         if is_backend_smb:
             # Option A (DSK-01): DISK murni dari telemetri REST ZimaOS, abaikan drive SMB Backend.
             network_drives = []
-            if self.detailed_partitions_map:
-                for _k in [k for k, v in self.detailed_partitions_map.items() if isinstance(v, dict) and v.get("is_network_drive")]:
-                    self.detailed_partitions_map.pop(_k, None)
+            with self._partitions_map_lock:
+                if self.detailed_partitions_map:
+                    for _k in [k for k, v in list(self.detailed_partitions_map.items()) if isinstance(v, dict) and v.get("is_network_drive")]:
+                        self.detailed_partitions_map.pop(_k, None)
         else:
             network_drives = self._scan_windows_network_drives(
                 server_connections=self.server_connections,
@@ -1595,17 +1634,24 @@ class ZimaMetricsClient:
                 # B. Jika terhubung sebagai Network Drive: gunakan data Network Drive dinamis secara instan!
                 if nd_match and nd_match.get("total_bytes", 0) > 0:
                     d_let = nd_match.get("drive_letter", "")
+                    eff_fs = fs or nd_match.get("fs_type", "")
+                    is_remote_mount = bool(
+                        _is_fuse_or_cloud_fstype(eff_fs, src, mp)
+                        or nd_match.get("is_remote")
+                    )
                     tag_parts = []
                     if d_let:
                         tag_parts.append(d_let)
-                    if fs:
-                        tag_parts.append(fs)
+                    if eff_fs:
+                        tag_parts.append(eff_fs)
                     tag = f" ({' '.join(tag_parts)})" if tag_parts else ""
                     partitions.append({
                         "name": f"{p_name}{tag}",
                         "raw_name": p_name,
                         "mount_point": mp,
                         "drive_letter": d_let,
+                        "fs_type": eff_fs,
+                        "is_remote": is_remote_mount,
                         "used_bytes": nd_match["used_bytes"],
                         "total_bytes": nd_match["total_bytes"],
                         "pct": nd_match["pct"],
@@ -1615,15 +1661,16 @@ class ZimaMetricsClient:
                     continue
 
                 # C. Cari info detail dari detailed_partitions_map (USB/SATA stats, disks, dev_base)
-                p_info = (
-                    self.detailed_partitions_map.get(c_key)
-                    or self.detailed_partitions_map.get(mp)
-                    or self.detailed_partitions_map.get(p_name)
-                    or self.detailed_partitions_map.get(p_name.lower())
-                    or (self.detailed_partitions_map.get(dev_raw) if dev_raw else None)
-                    or (self.detailed_partitions_map.get(dev_base) if dev_base else None)
-                    or (self.detailed_partitions_map.get(src) if src else None)
-                )
+                with self._partitions_map_lock:
+                    p_info = (
+                        self.detailed_partitions_map.get(c_key)
+                        or self.detailed_partitions_map.get(mp)
+                        or self.detailed_partitions_map.get(p_name)
+                        or self.detailed_partitions_map.get(p_name.lower())
+                        or (self.detailed_partitions_map.get(dev_raw) if dev_raw else None)
+                        or (self.detailed_partitions_map.get(dev_base) if dev_base else None)
+                        or (self.detailed_partitions_map.get(src) if src else None)
+                    )
 
                 m_size = int(m.get("size", 0) or m.get("total", 0) or 0)
                 m_used = int(m.get("used", 0) or 0)
@@ -1639,12 +1686,13 @@ class ZimaMetricsClient:
                             if d_info and isinstance(d_info, dict):
                                 d_data = d_info.get("data", d_info)
                                 if isinstance(d_data, dict):
-                                    self._extract_disk_item(d_data, self.detailed_partitions_map)
-                                    p_info = (
-                                        self.detailed_partitions_map.get(c_key)
-                                        or self.detailed_partitions_map.get(dev_base)
-                                        or self.detailed_partitions_map.get(dev_raw)
-                                    )
+                                    with self._partitions_map_lock:
+                                        self._extract_disk_item(d_data, self.detailed_partitions_map)
+                                        p_info = (
+                                            self.detailed_partitions_map.get(c_key)
+                                            or self.detailed_partitions_map.get(dev_base)
+                                            or self.detailed_partitions_map.get(dev_raw)
+                                        )
                             else:
                                 self._failed_dev_paths.add(dev_base)
                         except Exception:
@@ -1711,23 +1759,24 @@ class ZimaMetricsClient:
 
             # 5. Tambahkan partisi/pool dari detailed_partitions_map yang belum terdaftar:
             # PERHATIAN: Blokir semua nama device block Linux mentah (sdc, sdd, sde, nvme, dll.) dan umbrella /DATA
-            if self.detailed_partitions_map:
-                for key, p_data in self.detailed_partitions_map.items():
-                    if not isinstance(p_data, dict):
-                        continue
-                    r_name = str(p_data.get("raw_name") or p_data.get("name") or "").strip()
-                    # Jangan pernah menampilkan nama device kernel mentah sebagai partisi terpisah
-                    if RAW_DEV_REGEX.match(r_name) or RAW_DEV_REGEX.match(str(key)):
-                        continue
-                    c_key = self._canonical_vol_key(r_name or p_data.get("mount_point"))
-                    if not c_key or c_key in seen_vol_keys or RAW_DEV_REGEX.match(c_key):
-                        continue
-                    if c_key == "data" or p_data.get("mount_point") == "/DATA":
-                        continue
-                    if p_data.get("total_bytes", 0) <= 0:
-                        continue
-                    seen_vol_keys.add(c_key)
-                    partitions.append(p_data)
+            with self._partitions_map_lock:
+                map_items = list(self.detailed_partitions_map.items()) if self.detailed_partitions_map else []
+            for key, p_data in map_items:
+                if not isinstance(p_data, dict):
+                    continue
+                r_name = str(p_data.get("raw_name") or p_data.get("name") or "").strip()
+                # Jangan pernah menampilkan nama device kernel mentah sebagai partisi terpisah
+                if RAW_DEV_REGEX.match(r_name) or RAW_DEV_REGEX.match(str(key)):
+                    continue
+                c_key = self._canonical_vol_key(r_name or p_data.get("mount_point"))
+                if not c_key or c_key in seen_vol_keys or RAW_DEV_REGEX.match(c_key):
+                    continue
+                if c_key == "data" or p_data.get("mount_point") == "/DATA":
+                    continue
+                if p_data.get("total_bytes", 0) <= 0:
+                    continue
+                seen_vol_keys.add(c_key)
+                partitions.append(dict(p_data))
 
             # 6. Tambahkan network drives Windows yang belum terdaftar:
             for nd in network_drives:
@@ -1735,17 +1784,25 @@ class ZimaMetricsClient:
                 if not c_key or c_key in seen_vol_keys or c_key == "data":
                     continue
                 seen_vol_keys.add(c_key)
-                partitions.append(nd)
+                nd_entry = dict(nd)
+                if "is_remote" not in nd_entry:
+                    nd_entry["is_remote"] = bool(
+                        _is_fuse_or_cloud_fstype(
+                            nd_entry.get("fs_type", ""),
+                            nd_entry.get("remote_unc", ""),
+                            nd_entry.get("mount_point", ""),
+                        )
+                    )
+                partitions.append(nd_entry)
 
             # 6b. Evaluasi cerdas apakah /DATA merupakan umbrella pool agregat dari disk-disk fisik lokal:
-            # Hanya hitung disk lokal fisik (kecualikan FUSE/cloud/rclone & network drive) dan beri batas atas wajar
+            # Hanya hitung disk lokal fisik (kecualikan FUSE/cloud/rclone) dan beri batas atas wajar
             # agar mount cloud raksasa (misal Google Drive 100 TB) tidak salah membuang /DATA atau mengencerkan DISK %.
             user_disks = [
                 p for p in partitions
                 if p.get("mount_point") != "/DATA"
                 and p.get("total_bytes", 0) > 0
                 and not p.get("is_remote")
-                and not p.get("is_network_drive")
                 and not _is_fuse_or_cloud_fstype(p.get("fs_type", ""), "", p.get("mount_point", ""))
             ]
             user_disks_size = sum(p.get("total_bytes", 0) for p in user_disks)
@@ -1781,7 +1838,6 @@ class ZimaMetricsClient:
                     all_p_used += p_us
                 p_remote = bool(
                     p.get("is_remote")
-                    or p.get("is_network_drive")
                     or _is_fuse_or_cloud_fstype(p.get("fs_type", ""), "", p.get("mount_point", ""))
                 )
                 if not p_remote and c_key not in counted_volumes:
@@ -1880,20 +1936,24 @@ class ZimaMetricsClient:
                         c_key = self._canonical_vol_key(share_name)
 
                         # Cek apakah ada data granular disk dari detailed_partitions_map (network drive live / mount API)
-                        p_info = (
-                            self.detailed_partitions_map.get(c_key)
-                            or self.detailed_partitions_map.get(share_name)
-                            or self.detailed_partitions_map.get(share_name.lower())
-                            or self.detailed_partitions_map.get(clean_name)
-                            or self.detailed_partitions_map.get(clean_name.lower())
-                            or self.detailed_partitions_map.get(p_path)
-                            or self.detailed_partitions_map.get(p_path.lower())
-                        )
-                        if not p_info:
-                            for mp, info in self.detailed_partitions_map.items():
-                                if p_path.startswith(mp) or str(mp).startswith(p_path):
-                                    p_info = info
-                                    break
+                        with self._partitions_map_lock:
+                            p_info = (
+                                self.detailed_partitions_map.get(c_key)
+                                or self.detailed_partitions_map.get(share_name)
+                                or self.detailed_partitions_map.get(share_name.lower())
+                                or self.detailed_partitions_map.get(clean_name)
+                                or self.detailed_partitions_map.get(clean_name.lower())
+                                or self.detailed_partitions_map.get(p_path)
+                                or self.detailed_partitions_map.get(p_path.lower())
+                            )
+                            if not p_info:
+                                for mp, info in list(self.detailed_partitions_map.items()):
+                                    mp_s = str(mp or "").strip()
+                                    if not mp_s or mp_s == "/" or not mp_s.startswith("/"):
+                                        continue
+                                    if _paths_share_boundary(p_path, mp_s):
+                                        p_info = info
+                                        break
 
                         if p_info and p_info.get("total_bytes", 0) > 0:
                             p_used = p_info["used_bytes"]
@@ -2025,7 +2085,7 @@ class ZimaMetricsClient:
                         if not isinstance(p, dict):
                             continue
                         p_p = str(p.get("path", "")).replace("\\", "/").rstrip("/").lower()
-                        if p_p and (norm_path == p_p or norm_path.startswith(p_p) or p_p.startswith(norm_path)):
+                        if p_p and _paths_share_boundary(norm_path, p_p):
                             return u_name
         except Exception:
             pass

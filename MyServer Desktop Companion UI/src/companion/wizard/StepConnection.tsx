@@ -156,8 +156,12 @@ export function StepConnection({
         : Boolean(startRes?.status?.running ?? startRes?.success)
 
       if (running) {
-        onPatchDraft({ remoteId: cleanId, connectionVerified: true })
-        const serverIp = et?.server_peer_ip || null
+        const serverIp = et?.server_peer_ip || ""
+        onPatchDraft({
+          remoteId: cleanId,
+          connectionVerified: true,
+          easytierVirtualIp: serverIp,
+        })
         const okMsg = serverIp ? `${t("wiz_conn_ok")} (${serverIp})` : t("wiz_conn_ok")
         setProbeOkMsg(okMsg)
         onNotify?.(okMsg, "success")

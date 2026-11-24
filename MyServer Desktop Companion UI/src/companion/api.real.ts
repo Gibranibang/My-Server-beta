@@ -46,6 +46,20 @@ function normalizeExplorerOpenResult(res: any): ExplorerOpenResult {
 
 const round1 = (v: number) => Math.round(v * 10) / 10
 
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (typeof err === "string" && err.trim()) return err.trim()
+  if (err instanceof Error && err.message && err.message.trim()) return err.message.trim()
+  if (err && typeof err === "object") {
+    if ("message" in err && typeof (err as any).message === "string" && (err as any).message.trim()) {
+      return (err as any).message.trim()
+    }
+    if ("error" in err && typeof (err as any).error === "string" && (err as any).error.trim()) {
+      return (err as any).error.trim()
+    }
+  }
+  return fallback
+}
+
 type TauriInvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<any>
 
 function getTauriInvoke(): TauriInvokeFn | null {
@@ -251,6 +265,7 @@ export function createRealApi(): CompanionApi {
   let isPollingRunning = false
   let pollTimeoutId: number | undefined
   let isPollInProgress = false
+  let pendingImmediatePoll = false
   let hasEmittedInitialOnlineRefresh = false
 
   const parseStateToMetrics = (state: any): Metrics => {
@@ -351,10 +366,18 @@ export function createRealApi(): CompanionApi {
       console.warn("[RealApi] Metrics poll error:", err)
     } finally {
       isPollInProgress = false
-      if (isPollingRunning) {
-        // Akselerasi interval saat waking/rebooting/offline (1000ms) agar respons online & metrik instan
-        const interval = (power === "waking" || power === "rebooting" || power === "offline") ? 1000 : 2000
-        pollTimeoutId = window.setTimeout(pollCycle, interval)
+      if (pendingImmediatePoll && metricsListeners.size > 0) {
+        pendingImmediatePoll = false
+        void pollCycle()
+      } else {
+        pendingImmediatePoll = false
+        if (isPollingRunning && metricsListeners.size > 0) {
+          // Akselerasi interval saat waking/rebooting/offline (1000ms) agar respons online & metrik instan
+          const interval = (power === "waking" || power === "rebooting" || power === "offline") ? 1000 : 2000
+          pollTimeoutId = window.setTimeout(pollCycle, interval)
+        } else if (metricsListeners.size === 0) {
+          isPollingRunning = false
+        }
       }
     }
   }
@@ -370,6 +393,10 @@ export function createRealApi(): CompanionApi {
     if (pollTimeoutId !== undefined) {
       window.clearTimeout(pollTimeoutId)
       pollTimeoutId = undefined
+    }
+    if (isPollInProgress) {
+      pendingImmediatePoll = true
+      return
     }
     void pollCycle()
   }
@@ -395,6 +422,14 @@ export function createRealApi(): CompanionApi {
         window.removeEventListener("online", triggerPollNow)
         document.removeEventListener("visibilitychange", onVisChange)
         window.removeEventListener("myserver:refresh", triggerPollNow)
+        if (metricsListeners.size === 0) {
+          if (pollTimeoutId !== undefined) {
+            window.clearTimeout(pollTimeoutId)
+            pollTimeoutId = undefined
+          }
+          isPollingRunning = false
+          pendingImmediatePoll = false
+        }
       }
     },
 
@@ -455,11 +490,8 @@ export function createRealApi(): CompanionApi {
         }
 
       } catch (err) {
-
         console.error("[RealApi] Reboot error:", err)
-
-        throw new Error(err instanceof Error ? err.message : "Gagal memulai ulang server.")
-
+        throw new Error(extractErrorMessage(err, "Gagal memulai ulang server."))
       }
 
     },
@@ -481,11 +513,8 @@ export function createRealApi(): CompanionApi {
         setPower("offline")
 
       } catch (err) {
-
         console.error("[RealApi] Shutdown error:", err)
-
-        throw new Error(err instanceof Error ? err.message : "Gagal mematikan server.")
-
+        throw new Error(extractErrorMessage(err, "Gagal mematikan server."))
       }
 
     },
@@ -509,11 +538,8 @@ export function createRealApi(): CompanionApi {
         }
 
       } catch (err) {
-
         console.error("[RealApi] Wake-on-LAN error:", err)
-
-        throw new Error(err instanceof Error ? err.message : "Gagal mengirim paket Wake-on-LAN.")
-
+        throw new Error(extractErrorMessage(err, "Gagal mengirim paket Wake-on-LAN."))
       }
 
     },
@@ -605,11 +631,8 @@ export function createRealApi(): CompanionApi {
         }
 
       } catch (err) {
-
         console.error("[RealApi] Set all mounted error:", err)
-
-        throw new Error(err instanceof Error ? err.message : "Gagal mengubah status partisi SMB.")
-
+        throw new Error(extractErrorMessage(err, "Gagal mengubah status partisi SMB."))
       }
 
       currentDrives = currentDrives.map((d) => ({ ...d, mounted }))
@@ -621,36 +644,26 @@ export function createRealApi(): CompanionApi {
 
 
     async loadSettings() {
-
-      try {
-
-        const api = await getPyApi()
-
-        if (api && api.load_settings) {
-
-          const s = await api.load_settings()
-
-          if (s) {
+      const maxAttempts = 6
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const s = await callCoreApi("load_settings", {})
+          if (s && typeof s === "object" && s.status !== "error" && s.success !== false) {
             const cachedTheme = typeof window !== "undefined" ? localStorage.getItem("myserver_theme") : null
             const resolvedTheme = (s.theme === "light" || s.theme === "dark")
               ? s.theme
               : (cachedTheme === "light" || cachedTheme === "dark" ? cachedTheme : DEFAULT_SETTINGS.theme)
             currentSettings = { ...DEFAULT_SETTINGS, ...s, theme: resolvedTheme }
-
             return currentSettings
-
           }
-
+        } catch (err) {
+          console.warn(`[RealApi] Load settings error (attempt ${attempt}/${maxAttempts}):`, err)
         }
-
-      } catch (err) {
-
-        console.warn("[RealApi] Load settings error:", err)
-
+        if (attempt < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 300))
+        }
       }
-
       return currentSettings
-
     },
 
 
@@ -673,7 +686,7 @@ export function createRealApi(): CompanionApi {
 
         console.error("[RealApi] Save settings error:", err)
 
-        throw new Error(err instanceof Error ? err.message : "Gagal menyimpan pengaturan.")
+        throw new Error(extractErrorMessage(err, "Gagal menyimpan pengaturan."))
 
       }
 
@@ -699,7 +712,7 @@ export function createRealApi(): CompanionApi {
 
         console.error("[RealApi] Create backup error:", err)
 
-        throw new Error(err instanceof Error ? err.message : "Gagal membuat cadangan data.")
+        throw new Error(extractErrorMessage(err, "Gagal membuat cadangan data."))
 
       }
 
@@ -727,7 +740,7 @@ export function createRealApi(): CompanionApi {
 
         console.error("[RealApi] Restore backup error:", err)
 
-        throw new Error(err instanceof Error ? err.message : "Gagal memulihkan cadangan data.")
+        throw new Error(extractErrorMessage(err, "Gagal memulihkan cadangan data."))
 
       }
 
@@ -755,7 +768,7 @@ export function createRealApi(): CompanionApi {
 
         console.error("[RealApi] Clear cache error:", err)
 
-        throw new Error(err instanceof Error ? err.message : "Gagal membersihkan cache browser.")
+        throw new Error(extractErrorMessage(err, "Gagal membersihkan cache browser."))
 
       }
 
@@ -837,7 +850,7 @@ export function createRealApi(): CompanionApi {
 
         console.error("[RealApi] Accept sync request error:", err)
 
-        throw new Error(err instanceof Error ? err.message : "Gagal menerima permintaan sinkronisasi.")
+        throw new Error(extractErrorMessage(err, "Gagal menerima permintaan sinkronisasi."))
 
       }
 
@@ -989,29 +1002,24 @@ export function createRealApi(): CompanionApi {
         console.warn('[RealApi] Probe check warning:', err)
       }
 
-      let launched = false
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+      const invoke = getTauriInvoke()
+      if (invoke) {
         try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          await invoke('open_app_window', { url, title: title || '' })
-          launched = true
+          await invoke("open_app_window", { url, title: title || "" })
           return
         } catch (err) {
-          console.warn('[RealApi] Tauri open_app_window error, mencoba fallback core API:', err)
+          console.warn("[RealApi] Tauri open_app_window error:", extractErrorMessage(err, "Gagal membuka jendela aplikasi"))
+          await this.openExternalBrowser(url)
+          return
         }
       }
 
+      let launched = false
       try {
-        const api = await getPyApi()
-        if (api && api.open_app_window) {
-          await api.open_app_window({ url, title: title || '' })
-          launched = true
-        } else if (api && api.open_url) {
-          await api.open_url({ url, title: title || '' })
-          launched = true
-        }
+        await callCoreApi("open_url", { url, title: title || "" })
+        launched = true
       } catch (err) {
-        console.warn('[RealApi] Python API open_app_window error:', err)
+        console.warn("[RealApi] Core API open_url error:", extractErrorMessage(err, "Gagal membuka URL"))
       }
 
       if (!launched) {
@@ -1023,208 +1031,119 @@ export function createRealApi(): CompanionApi {
       }
     },
 
-
-
     async openExternalBrowser(url: string) {
-
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-
+      const invoke = getTauriInvoke()
+      if (invoke) {
         try {
-
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-
-          await invoke('open_in_browser', { url })
-
+          await invoke("open_in_browser", { url })
           return
-
         } catch (err) {
-
-          console.warn('[RealApi] Tauri open_in_browser error:', err)
-
+          console.warn("[RealApi] Tauri open_in_browser error:", extractErrorMessage(err, "Gagal membuka browser"))
+          return
         }
-
       }
 
       try {
-
-        const api = await getPyApi()
-
-        if (api && api.open_external_browser) {
-
-          await api.open_external_browser({ url })
-
-        }
-
+        await callCoreApi("open_external_browser", { url })
       } catch (err) {
-
-        console.warn('[RealApi] openExternalBrowser error:', err)
-
+        console.warn("[RealApi] openExternalBrowser error:", extractErrorMessage(err, "Gagal membuka browser"))
       }
-
     },
 
-
-
     async syncInstaBoxVm(params: { apiKey: string; machineId?: string; vmName?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'instabox/sync', payload: params })
-        } catch (err) {
-          console.warn('[RealApi] syncInstaBoxVm invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['instabox/sync']) {
-          return await api['instabox/sync'](params)
-        }
+        const res = await callCoreApi("instabox/sync", params)
+        if (res && typeof res === "object") return res
       } catch (err) {
-        console.warn('[RealApi] syncInstaBoxVm error:', err)
+        console.warn("[RealApi] syncInstaBoxVm error:", err)
+        return { success: false, error: extractErrorMessage(err, "Core service unreachable") }
       }
-      return { success: false, error: 'Core service unreachable' }
+      return { success: false, error: "Core service unreachable" }
     },
 
     async smartResetInstaBox(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'instabox/smart_reset', payload: params })
-        } catch (err) {
-          console.warn('[RealApi] smartResetInstaBox invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['instabox/smart_reset']) {
-          return await api['instabox/smart_reset'](params)
-        }
+        const res = await callCoreApi("instabox/smart_reset", params)
+        if (res && typeof res === "object") return res
       } catch (err) {
-        console.warn('[RealApi] smartResetInstaBox error:', err)
+        console.warn("[RealApi] smartResetInstaBox error:", err)
+        return { success: false, error: extractErrorMessage(err, "Core service unreachable") }
       }
-      return { success: false, error: 'Core service unreachable' }
+      return { success: false, error: "Core service unreachable" }
     },
 
     async wakeInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'instabox/wake', payload: params })
-        } catch (err) {
-          console.warn('[RealApi] wakeInstaBoxVm invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['instabox/wake']) {
-          return await api['instabox/wake'](params)
-        }
+        const res = await callCoreApi("instabox/wake", params)
+        if (res && typeof res === "object") return res
       } catch (err) {
-        console.warn('[RealApi] wakeInstaBoxVm error:', err)
+        console.warn("[RealApi] wakeInstaBoxVm error:", err)
+        return { success: false, error: extractErrorMessage(err, "Core service unreachable") }
       }
-      return { success: false, error: 'Core service unreachable' }
+      return { success: false, error: "Core service unreachable" }
     },
 
     async pauseInstaBoxVm(params: { apiKey?: string; machineId?: string; vmId?: string; scope?: "server" | "local"; serverId?: string }) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'instabox/pause', payload: params })
-        } catch (err) {
-          console.warn('[RealApi] pauseInstaBoxVm invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['instabox/pause']) {
-          return await api['instabox/pause'](params)
-        }
+        const res = await callCoreApi("instabox/pause", params)
+        if (res && typeof res === "object") return res
       } catch (err) {
-        console.warn('[RealApi] pauseInstaBoxVm error:', err)
+        console.warn("[RealApi] pauseInstaBoxVm error:", err)
+        return { success: false, error: extractErrorMessage(err, "Core service unreachable") }
       }
-      return { success: false, error: 'Core service unreachable' }
+      return { success: false, error: "Core service unreachable" }
     },
 
     async loadVms() {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          const res = await invoke('call_core_api', { endpoint: 'vms/load', payload: {} })
-          if (res && Array.isArray(res.vms)) return res.vms
-        } catch (err) {
-          console.warn('[RealApi] loadVms invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['vms/load']) {
-          const res = await api['vms/load']({})
-          if (res && Array.isArray(res.vms)) return res.vms
+        const res = await callCoreApi("vms/load", {})
+        if (res?.status === "error" || res?.success === false || !Array.isArray(res?.vms)) {
+          throw new Error(extractErrorMessage(res?.message || res?.error || res, "Gagal memuat daftar VM"))
         }
+        return res.vms
       } catch (err) {
-        console.warn('[RealApi] loadVms error:', err)
+        console.warn("[RealApi] loadVms error:", err)
+        throw new Error(extractErrorMessage(err, "Gagal memuat daftar VM"))
       }
-      return []
     },
 
     async saveVms(vms: any[]) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'vms/save', payload: { vms } })
-        } catch (err) {
-          console.warn('[RealApi] saveVms invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['vms/save']) {
-          return await api['vms/save']({ vms })
+        const res = await callCoreApi("vms/save", { vms })
+        if (!res || res?.status === "error" || res?.success === false) {
+          throw new Error(extractErrorMessage(res?.message || res?.error || res, "Gagal menyimpan daftar VM"))
         }
+        return res
       } catch (err) {
-        console.warn('[RealApi] saveVms error:', err)
+        console.warn("[RealApi] saveVms error:", err)
+        throw new Error(extractErrorMessage(err, "Gagal menyimpan daftar VM"))
       }
-      return { status: 'error' }
     },
 
     async updateVm(vmId: string, updates: any, serverId?: string) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'vms/update', payload: { vmId, vm: updates, serverId } })
-        } catch (err) {
-          console.warn('[RealApi] updateVm invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['vms/update']) {
-          return await api['vms/update']({ vmId, vm: updates, serverId })
+        const res = await callCoreApi("vms/update", { vmId, vm: updates, serverId })
+        if (!res || res?.status === "error" || res?.success === false) {
+          throw new Error(extractErrorMessage(res?.message || res?.error || res, "Gagal memperbarui VM"))
         }
+        return res
       } catch (err) {
-        console.warn('[RealApi] updateVm error:', err)
+        console.warn("[RealApi] updateVm error:", err)
+        throw new Error(extractErrorMessage(err, "Gagal memperbarui VM"))
       }
-      return { status: 'error' }
     },
 
     async deleteVm(vmId: string, scope?: string, serverId?: string) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'vms/delete', payload: { vmId, scope, serverId } })
-        } catch (err) {
-          console.warn('[RealApi] deleteVm invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['vms/delete']) {
-          return await api['vms/delete']({ vmId, scope, serverId })
+        const res = await callCoreApi("vms/delete", { vmId, scope, serverId })
+        if (!res || res?.status === "error" || res?.success === false) {
+          throw new Error(extractErrorMessage(res?.message || res?.error || res, "Gagal menghapus VM"))
         }
+        return res
       } catch (err) {
-        console.warn('[RealApi] deleteVm error:', err)
+        console.warn("[RealApi] deleteVm error:", err)
+        throw new Error(extractErrorMessage(err, "Gagal menghapus VM"))
       }
-      return { status: 'error' }
     },
 
     async migrateVm(vmId: string, targetScope: "server" | "local", vm?: Partial<VirtualMachine>) {
@@ -1233,32 +1152,24 @@ export function createRealApi(): CompanionApi {
         return await callCoreApi("vms/migrate", payload)
       } catch (err: any) {
         console.warn("[RealApi] migrateVm error:", err)
+        const msg = extractErrorMessage(err, "")
         return {
           status: "error",
           success: false,
-          ...(err?.message ? { message: String(err.message) } : {}),
+          ...(msg ? { message: msg } : {}),
         }
       }
     },
 
     async openSshTerminal(params?: { host?: string; user?: string; port?: number; serverId?: string; saveSshUser?: boolean }) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          return await invoke('call_core_api', { endpoint: 'server/ssh_terminal', payload: params || {} })
-        } catch (err) {
-          console.warn('[RealApi] openSshTerminal invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['server/ssh_terminal']) {
-          return await api['server/ssh_terminal'](params || {})
-        }
+        const res = await callCoreApi("server/ssh_terminal", params || {})
+        if (res && typeof res === "object") return res
       } catch (err) {
-        console.warn('[RealApi] openSshTerminal error:', err)
+        console.warn("[RealApi] openSshTerminal error:", err)
+        return { status: "error", success: false, message: extractErrorMessage(err, "Gagal membuka terminal SSH") }
       }
-      return { status: 'error' }
+      return { status: "error", success: false, message: "Gagal membuka terminal SSH" }
     },
 
     async triggerBackendAction(
@@ -1272,13 +1183,6 @@ export function createRealApi(): CompanionApi {
         sshPassword?: string
       },
     ) {
-      const toErrMsg = (err: unknown) => {
-        if (typeof err === "string") return err
-        if (err && typeof err === "object" && "message" in err && (err as any).message) {
-          return String((err as any).message)
-        }
-        return "Gagal memproses aksi backend"
-      }
       const payload: Record<string, unknown> = { action, serverId }
       if (options?.source) payload.source = options.source
       if (options?.sshHost) payload.sshHost = options.sshHost
@@ -1294,8 +1198,9 @@ export function createRealApi(): CompanionApi {
           return res
         }
       } catch (err) {
-        console.warn("[RealApi] triggerBackendAction error:", toErrMsg(err))
-        return { success: false, status: "error", message: toErrMsg(err) }
+        const msg = extractErrorMessage(err, "Gagal memproses aksi backend")
+        console.warn("[RealApi] triggerBackendAction error:", msg)
+        return { success: false, status: "error", message: msg }
       }
       return { success: false, status: "error", message: "API tidak tersedia" }
     },
@@ -1307,29 +1212,17 @@ export function createRealApi(): CompanionApi {
           return res
         }
       } catch (err) {
-        console.warn("[RealApi] getBackendStatus error:", err instanceof Error ? err.message : String(err))
+        console.warn("[RealApi] getBackendStatus error:", extractErrorMessage(err, "Gagal memeriksa status backend"))
       }
       return { online: false, version: "", latestVersion: "" }
     },
 
     async openVmWindow(vmId: string, title: string, url: string) {
-      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        try {
-          const invoke = (window as any).__TAURI_INTERNALS__?.invoke || (window as any).__TAURI__?.core?.invoke
-          await invoke('call_core_api', { endpoint: 'vm/open_window', payload: { vmId, title, url } })
-          return
-        } catch (err) {
-          console.warn('[RealApi] openVmWindow invoke error:', err)
-        }
-      }
       try {
-        const api = await getPyApi()
-        if (api && api['vm/open_window']) {
-          await api['vm/open_window']({ vmId, title, url })
-          return
-        }
+        await callCoreApi("vm/open_window", { vmId, title, url })
+        return
       } catch (err) {
-        console.warn('[RealApi] openVmWindow error:', err)
+        console.warn("[RealApi] openVmWindow error:", err)
       }
       await this.openUrl(url, title)
     },
@@ -1343,7 +1236,7 @@ export function createRealApi(): CompanionApi {
         }
         return { success: false, error: "Core API unavailable" }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
+        const errMsg = extractErrorMessage(err, "Operasi gagal")
         console.error("[RealApi] Open File Explorer error:", err)
         return { success: false, error: errMsg }
       }
@@ -1378,7 +1271,7 @@ export function createRealApi(): CompanionApi {
         }
         return { success: false, error: "Respons Core API tidak valid." }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
+        const errMsg = extractErrorMessage(err, "Operasi gagal")
         console.error("[RealApi] Open Backend File Manager error:", errMsg)
         return { success: false, error: errMsg }
       }
@@ -1407,7 +1300,7 @@ export function createRealApi(): CompanionApi {
         return {
           success: false,
           source: payload.source || "zimaos",
-          error: err instanceof Error ? err.message : String(err),
+          error: extractErrorMessage(err, "Gagal mengonfigurasi sumber file"),
         }
       }
       return {
@@ -1426,7 +1319,7 @@ export function createRealApi(): CompanionApi {
         }
         return { success: false, error: "Core API unavailable" }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
+        const errMsg = extractErrorMessage(err, "Operasi gagal")
         console.error("[RealApi] Open File Manager error:", err)
         return { success: false, error: errMsg }
       }
@@ -1463,7 +1356,7 @@ export function createRealApi(): CompanionApi {
         }
         return { success: false, error: "Core API unavailable" }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
+        const errMsg = extractErrorMessage(err, "Operasi gagal")
         console.error("[RealApi] Open UNC error:", err)
         return { success: false, error: errMsg }
       }
@@ -1478,7 +1371,7 @@ export function createRealApi(): CompanionApi {
         }
         return { success: false, error: "Core API unavailable" }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
+        const errMsg = extractErrorMessage(err, "Operasi gagal")
         console.error("[RealApi] Open drive error:", err)
         return { success: false, error: errMsg }
       }
@@ -1611,7 +1504,7 @@ export function createRealApi(): CompanionApi {
           if (details) {
             return {
               ...details,
-              isAdmin: Boolean(details.isAdmin || currentMetrics.isAdmin),
+              isAdmin: details.isAdmin !== undefined ? Boolean(details.isAdmin) : Boolean(currentMetrics.isAdmin),
               appVersion: details.appVersion || APP_VERSION,
               appChannel: details.appChannel || APP_CHANNEL,
             }
@@ -1656,34 +1549,48 @@ export function createRealApi(): CompanionApi {
         speedUpBps: 0,
         speedDownStr: "0 B/s",
         speedUpStr: "0 B/s",
+        isAdmin: false,
+        storagePartitions: undefined,
       }
       notifyMetrics(currentMetrics)
       try {
         const api = await getPyApi()
         if (api && api.switch_route) {
           const res = await api.switch_route(routeId)
+          if (res?.status === "error" || res?.success === false) {
+            throw new Error(extractErrorMessage(res?.message || res?.error || res, "Gagal mengalihkan rute koneksi."))
+          }
           triggerPollNow()
           if (res) return res
         }
       } catch (err) {
         console.error("[RealApi] Switch route error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal mengalihkan rute koneksi.")
+        throw new Error(extractErrorMessage(err, "Gagal mengalihkan rute koneksi."))
       }
       triggerPollNow()
       return this.getServerDetails()
     },
 
     async switchProfile(profileName: string) {
+      currentMetrics = {
+        ...currentMetrics,
+        isAdmin: false,
+        storagePartitions: undefined,
+      }
+      notifyMetrics(currentMetrics)
       try {
         const api = await getPyApi()
         if (api && api.switch_profile) {
           const res = await api.switch_profile(profileName)
+          if (res?.status === "error" || res?.success === false) {
+            throw new Error(extractErrorMessage(res?.message || res?.error || res, "Gagal mengganti profil akun."))
+          }
           triggerPollNow()
           if (res) return res
         }
       } catch (err) {
         console.error("[RealApi] Switch profile error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal mengganti profil akun.")
+        throw new Error(extractErrorMessage(err, "Gagal mengganti profil akun."))
       }
       triggerPollNow()
       return this.getServerDetails()
@@ -1735,7 +1642,7 @@ export function createRealApi(): CompanionApi {
 
         console.error("[RealApi] Add web app error:", err)
 
-        throw new Error(err instanceof Error ? err.message : "Gagal menambahkan Web App.")
+        throw new Error(extractErrorMessage(err, "Gagal menambahkan Web App."))
 
       }
 
@@ -1763,7 +1670,7 @@ export function createRealApi(): CompanionApi {
 
         console.error("[RealApi] Delete web app error:", err)
 
-        throw new Error(err instanceof Error ? err.message : "Gagal menghapus Web App.")
+        throw new Error(extractErrorMessage(err, "Gagal menghapus Web App."))
 
       }
 
@@ -1774,15 +1681,29 @@ export function createRealApi(): CompanionApi {
 
 
     async switchServer(serverId: string): Promise<ServerDetails> {
+      currentMetrics = {
+        ...currentMetrics,
+        speedDownBps: 0,
+        speedUpBps: 0,
+        speedDownStr: "0 B/s",
+        speedUpStr: "0 B/s",
+        isAdmin: false,
+        storagePartitions: undefined,
+      }
+      notifyMetrics(currentMetrics)
       try {
         const api = await getPyApi()
         if (api && api.switch_server) {
           const res = await api.switch_server(serverId)
+          if (res?.status === "error" || res?.success === false) {
+            throw new Error(extractErrorMessage(res?.message || res?.error || res, "Gagal mengganti server."))
+          }
           triggerPollNow()
           if (res) return res
         }
       } catch (err) {
         console.error("[RealApi] Switch server error:", err)
+        throw new Error(extractErrorMessage(err, "Gagal mengganti server."))
       }
       triggerPollNow()
       return this.getServerDetails()
@@ -1796,7 +1717,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.save_route) return await api.save_route(data)
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -1806,7 +1727,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.remove_route) return await api.remove_route(data)
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -1816,7 +1737,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.save_profile) return await api.save_profile(data)
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -1826,7 +1747,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.remove_profile) return await api.remove_profile(data)
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -1836,7 +1757,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.save_server) return await api.save_server(data)
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -1846,7 +1767,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.remove_server) return await api.remove_server(data)
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -1856,7 +1777,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.join_zerotier_network) return await api.join_zerotier_network({ networkId })
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -1866,7 +1787,7 @@ export function createRealApi(): CompanionApi {
         if (api && api.leave_zerotier_network) return await api.leave_zerotier_network({ networkId })
         return { success: false, message: "API tidak tersedia" }
       } catch (err: any) {
-        return { success: false, message: err?.message || String(err) }
+        return { success: false, message: extractErrorMessage(err, "Operasi gagal") }
       }
     },
 
@@ -2093,9 +2014,9 @@ export function createRealApi(): CompanionApi {
       } catch (err) {
         console.error(
           "[RealApi] saveSyncthingServerRoute error:",
-          err instanceof Error ? err.message : "Failed to save route",
+          extractErrorMessage(err, "Failed to save route"),
         )
-        throw new Error(err instanceof Error ? err.message : "Gagal menyimpan rute server.")
+        throw new Error(extractErrorMessage(err, "Gagal menyimpan rute server."))
       }
     },
 
@@ -2108,7 +2029,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] saveSyncthingLocalConfig error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal menyimpan konfigurasi lokal.")
+        throw new Error(extractErrorMessage(err, "Gagal menyimpan konfigurasi lokal."))
       }
       return { success: true }
     },
@@ -2157,7 +2078,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] saveSyncthingApiKeys error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal menyimpan konfigurasi API Key.")
+        throw new Error(extractErrorMessage(err, "Gagal menyimpan konfigurasi API Key."))
       }
       return { success: true }
     },
@@ -2171,7 +2092,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] dialogConfigureLocalSyncthing error:", err)
-        return { success: false, error: err instanceof Error ? err.message : String(err) }
+        return { success: false, error: extractErrorMessage(err, "Gagal membuka dialog konfigurasi Syncthing.") }
       }
       return { success: false, error: "Core service API tidak tersedia." }
     },
@@ -2185,7 +2106,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] dialogConfigureServerSyncthing error:", err)
-        return { success: false, error: err instanceof Error ? err.message : String(err) }
+        return { success: false, error: extractErrorMessage(err, "Gagal membuka dialog konfigurasi Syncthing.") }
       }
       return { success: false, error: "Core service API tidak tersedia." }
     },
@@ -2232,7 +2153,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] pairLaptopAndServer error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal menghubungkan laptop dan server.")
+        throw new Error(extractErrorMessage(err, "Gagal menghubungkan laptop dan server."))
       }
       return { success: false, error: "Backend API tidak tersedia" }
     },
@@ -2272,7 +2193,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err: any) {
         console.error("[RealApi] createSyncTask error:", err)
-        const msg = typeof err === "string" ? err : (err?.message || "Gagal membuat jalur backup.")
+        const msg = extractErrorMessage(err, "Gagal membuat jalur backup.")
         return { success: false, error: msg }
       }
       return { success: false, error: "Backend API tidak tersedia" }
@@ -2287,7 +2208,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] deleteSyncTask error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal menghapus jalur backup.")
+        throw new Error(extractErrorMessage(err, "Gagal menghapus jalur backup."))
       }
       return { success: true }
     },
@@ -2301,7 +2222,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] setTaskPaused error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal mengubah status pause.")
+        throw new Error(extractErrorMessage(err, "Gagal mengubah status pause."))
       }
       return { success: true }
     },
@@ -2315,7 +2236,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] rescanTask error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal memindai folder.")
+        throw new Error(extractErrorMessage(err, "Gagal memindai folder."))
       }
       return { success: true }
     },
@@ -2329,7 +2250,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] openTaskFolder error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal membuka folder di File Explorer.")
+        throw new Error(extractErrorMessage(err, "Gagal membuka folder di File Explorer."))
       }
       return { success: true }
     },
@@ -2356,7 +2277,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] addSyncthingDevice error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal menambahkan perangkat.")
+        throw new Error(extractErrorMessage(err, "Gagal menambahkan perangkat."))
       }
       return { success: true }
     },
@@ -2370,7 +2291,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] removeSyncthingDevice error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal menghapus perangkat.")
+        throw new Error(extractErrorMessage(err, "Gagal menghapus perangkat."))
       }
       return { success: true }
     },
@@ -2384,7 +2305,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] setDevicePaused error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal mengubah status jeda perangkat.")
+        throw new Error(extractErrorMessage(err, "Gagal mengubah status jeda perangkat."))
       }
       return { success: true }
     },
@@ -2398,7 +2319,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] resolvePendingDevice error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal memproses permintaan koneksi.")
+        throw new Error(extractErrorMessage(err, "Gagal memproses permintaan koneksi."))
       }
       return { success: true }
     },
@@ -2412,7 +2333,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] toggleLocalSyncthingDaemon error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal mengontrol daemon Syncthing.")
+        throw new Error(extractErrorMessage(err, "Gagal mengontrol daemon Syncthing."))
       }
       return { success: true, running: true }
     },
@@ -2426,7 +2347,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] openSyncthingWebGui error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal membuka Web GUI Syncthing.")
+        throw new Error(extractErrorMessage(err, "Gagal membuka Web GUI Syncthing."))
       }
       return { success: true, url: "" }
     },
@@ -2440,7 +2361,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] executeBackupDialog error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal menjalankan backup data.")
+        throw new Error(extractErrorMessage(err, "Gagal menjalankan backup data."))
       }
       return { success: true }
     },
@@ -2454,7 +2375,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] executeRestoreDialog error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal memulihkan cadangan data.")
+        throw new Error(extractErrorMessage(err, "Gagal memulihkan cadangan data."))
       }
       return { success: true }
     },
@@ -2468,7 +2389,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] installUpdateFromZip error:", err)
-        throw new Error(err instanceof Error ? err.message : "Gagal memasang pembaruan dari ZIP.")
+        throw new Error(extractErrorMessage(err, "Gagal memasang pembaruan dari ZIP."))
       }
       return { success: false, error: "Layanan Core Service tidak merespons." }
     },
@@ -2482,7 +2403,7 @@ export function createRealApi(): CompanionApi {
         }
       } catch (err) {
         console.error("[RealApi] downloadAndInstallUpdate error:", err)
-        const errMsg = typeof err === "string" ? err : err instanceof Error ? err.message : "Gagal mengunduh dan memasang pembaruan."
+        const errMsg = extractErrorMessage(err, "Gagal mengunduh dan memasang pembaruan.")
         throw new Error(errMsg)
       }
       return { success: false, error: "Metode pembaruan otomatis tidak tersedia." }
@@ -2627,7 +2548,7 @@ export function createRealApi(): CompanionApi {
       } catch (err) {
         return {
           success: false,
-          message: err instanceof Error ? err.message : "Gagal memverifikasi akun ZimaOS",
+          message: extractErrorMessage(err, "Gagal memverifikasi akun ZimaOS"),
         }
       }
       return { success: false, message: "Core API unavailable" }
@@ -2642,7 +2563,7 @@ export function createRealApi(): CompanionApi {
       } catch (err) {
         return {
           success: false,
-          message: err instanceof Error ? err.message : "Gagal menyimpan konfigurasi server",
+          message: extractErrorMessage(err, "Gagal menyimpan konfigurasi server"),
         }
       }
       return { success: false, message: "Core API unavailable" }
@@ -2660,7 +2581,7 @@ export function createRealApi(): CompanionApi {
       } catch (err) {
         return {
           success: false,
-          message: err instanceof Error ? err.message : "Gagal menyelesaikan setup wizard",
+          message: extractErrorMessage(err, "Gagal menyelesaikan setup wizard"),
         }
       }
       return { success: false, message: "Core API unavailable" }

@@ -8,9 +8,9 @@ export interface ViewProps {
 }
 
 /** Scrollable content region between the flyout header and the pinned footer status card. */
-export function ViewBody({ children }: { children: ReactNode }) {
+export function ViewBody({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto scroll-fade scrollbar-slim px-4 pt-1.5 pb-6">
+    <div className={cx("min-h-0 flex-1 overflow-y-auto scroll-fade scrollbar-slim px-4 pt-1.5 pb-6", className)}>
       <div className="flex flex-col gap-2.5">{children}</div>
     </div>
   )

@@ -67,6 +67,8 @@ export function StepZimaLogin({
 
       const resolvedName = draft.serverName.trim() || t("wiz_server_name_default")
       const resolvedLocalUrl = verifyRes.resolvedUrl || lanUrl || effectiveUrl
+      const discoveredZtNet = verifyRes.zerotierNetworkId || draft.zerotierNetworkId || ""
+      const discoveredZtIp = verifyRes.zerotierIp || draft.zerotierIp || ""
 
       const commitRes = await api.commitWizardServer({
         serverId: draft.serverId || undefined,
@@ -78,6 +80,9 @@ export function StepZimaLogin({
         username: trimmedUser,
         password,
         sshUser: trimmedUser,
+        zerotierNetworkId: discoveredZtNet || undefined,
+        zerotierVirtualIp: discoveredZtIp || undefined,
+        easytierVirtualIp: draft.easytierVirtualIp || undefined,
         setActive: true,
       })
 
@@ -86,16 +91,8 @@ export function StepZimaLogin({
         return
       }
 
-      const ztNet =
-        verifyRes.zerotierNetworkId ||
-        commitRes.zerotierNetworkId ||
-        draft.zerotierNetworkId ||
-        ""
-      const ztIp =
-        verifyRes.zerotierIp ||
-        commitRes.zerotierVirtualIp ||
-        draft.zerotierIp ||
-        ""
+      const ztNet = discoveredZtNet || commitRes.zerotierNetworkId || ""
+      const ztIp = discoveredZtIp || commitRes.zerotierVirtualIp || ""
 
       setPassword("")
       onPatchDraft({

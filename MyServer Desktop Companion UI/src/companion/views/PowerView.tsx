@@ -23,6 +23,46 @@ const formatMac = (raw: string) =>
     .slice(0, 12)
     .replace(/(.{2})(?=.)/g, "$1:")
 
+export function isLanRouteUrl(activeUrl: string, routeType?: string): boolean {
+  const normalizedType = String(routeType || "").trim().toLowerCase()
+  if (
+    normalizedType &&
+    ["easytier", "zerotier", "vpn", "remote"].includes(normalizedType)
+  ) {
+    return false
+  }
+  const raw = String(activeUrl || "").trim()
+  if (!raw) return false
+  let hostname = ""
+  try {
+    const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) ? raw : `http://${raw}`
+    hostname = new URL(candidate).hostname.toLowerCase()
+  } catch {
+    hostname = raw.toLowerCase().split("/")[0].replace(/:\d+$/, "")
+  }
+  if (!hostname) return false
+
+  // Exclude EasyTier (10.126.126.*, 10.144.*), ZeroTier (172.24.*, 172.25.*), and CGNAT (100.64.0.0/10)
+  if (
+    hostname.startsWith("10.126.126.") ||
+    hostname.startsWith("10.144.") ||
+    hostname.startsWith("172.24.") ||
+    hostname.startsWith("172.25.") ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(hostname)
+  ) {
+    return false
+  }
+
+  return (
+    /^192\.168\./.test(hostname) ||
+    /^10\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+    hostname.endsWith(".local") ||
+    hostname === "127.0.0.1" ||
+    hostname === "localhost"
+  )
+}
+
 export default function PowerView() {
   const api = getCompanionApi()
   const {
@@ -60,20 +100,11 @@ export default function PowerView() {
 
   // 1. Dinamis: Deteksi apakah rute aktif saat ini adalah jaringan fisik LAN lokal
   const activeRouteObj = serverDetails?.routes?.find((r) => r.active)
-  const activeUrl = (activeRouteObj?.url || serverDetails?.activeHost || "").toLowerCase()
-  const isLanRoute = Boolean(
-    activeUrl &&
-    (
-      activeUrl.includes("192.168.") ||
-      activeUrl.includes("10.") ||
-      activeUrl.includes(".local") ||
-      activeUrl.includes("127.0.0.1") ||
-      activeUrl.includes("localhost") ||
-      /172\.(1[6-9]|2[0-9]|3[0-1])\./.test(activeUrl)
-    ) &&
-    !activeUrl.includes("172.24.") &&
-    !activeUrl.includes("172.25.")
-  )
+  const activeUrl = activeRouteObj?.url || serverDetails?.activeHost || ""
+  const activeRouteType =
+    (activeRouteObj as { type?: string } | undefined)?.type ||
+    (activeRouteObj?.isZeroTier ? "zerotier" : undefined)
+  const isLanRoute = isLanRouteUrl(activeUrl, activeRouteType)
 
   // 2. Persistensi konfirmasi hardware BIOS & Standby per server di localStorage
   const serverId = serverDetails?.serverId || "default"

@@ -129,6 +129,10 @@ import os
 
 import shutil
 
+import socket
+
+import tempfile
+
 
 
 
@@ -200,7 +204,10 @@ import webbrowser
 
 
 
-import winreg
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 
 
@@ -393,7 +400,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.6.12"
+APP_VERSION_NUMBER = "4.6.13"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -3948,17 +3955,53 @@ def _handle_wizard_commit_server(body):
             }
 
         existing_conns = target.get("connections") if isinstance(target.get("connections"), list) else []
+        is_reentry = bool(existing_conns) and not config_manager.is_placeholder_default_server(target)
+
+        existing_lan = next(
+            (
+                c for c in existing_conns
+                if isinstance(c, dict) and (
+                    str(c.get("type") or "").lower() == "lan"
+                    or c.get("id") in ("conn_lan", "conn_default")
+                )
+            ),
+            None,
+        )
+        existing_wan = next(
+            (
+                c for c in existing_conns
+                if isinstance(c, dict) and (
+                    str(c.get("type") or "").lower() in ("domain", "wan")
+                    or c.get("id") == "conn_wan"
+                )
+            ),
+            None,
+        )
+
+        lan_id = (existing_lan.get("id") if existing_lan and existing_lan.get("id") else None) or "conn_lan"
+        lan_name = (
+            str(existing_lan.get("name") or "").strip()
+            if (is_reentry and existing_lan and str(existing_lan.get("name") or "").strip())
+            else "LAN"
+        )
+        wan_id = (existing_wan.get("id") if existing_wan and existing_wan.get("id") else None) or "conn_wan"
+        wan_name = (
+            str(existing_wan.get("name") or "").strip()
+            if (is_reentry and existing_wan and str(existing_wan.get("name") or "").strip())
+            else "Domain / WAN"
+        )
+        wan_type = (
+            str(existing_wan.get("type") or "").lower()
+            if existing_wan and str(existing_wan.get("type") or "").lower() in ("domain", "wan")
+            else "domain"
+        )
+
         conns = []
         if has_local:
-            lan_id = (
-                existing_conns[0].get("id")
-                if existing_conns and isinstance(existing_conns[0], dict) and existing_conns[0].get("id")
-                else "conn_lan"
-            )
             conns.append(
                 {
                     "id": lan_id,
-                    "name": "LAN",
+                    "name": lan_name,
                     "type": "lan",
                     "url": config_manager.format_server_url(local_url_raw),
                 }
@@ -3966,17 +4009,37 @@ def _handle_wizard_commit_server(body):
         if has_wan:
             conns.append(
                 {
-                    "id": "conn_wan",
-                    "name": "Domain / WAN",
-                    "type": "domain",
+                    "id": wan_id,
+                    "name": wan_name,
+                    "type": wan_type,
                     "url": config_manager.format_server_url(wan_url_raw),
                 }
             )
 
+        matched_ids = {lan_id, wan_id}
+        for c in existing_conns:
+            if not isinstance(c, dict):
+                continue
+            cid = c.get("id")
+            ctype = str(c.get("type") or "").lower()
+            if cid in matched_ids or ctype in ("lan", "domain", "wan"):
+                continue
+            if c is existing_lan or c is existing_wan:
+                continue
+            conns.append(dict(c))
+
         target["name"] = name
         target["connections"] = conns
+        target.pop("active_connection_id", None)
         if conns:
-            target["active_connection_id"] = conns[0]["id"]
+            conn_ids = {c.get("id") for c in conns if isinstance(c, dict) and c.get("id")}
+            existing_active = str(target.get("active_connection") or "").strip()
+            if is_reentry and existing_active and (existing_active == "auto" or existing_active in conn_ids):
+                target["active_connection"] = existing_active
+            elif len(conns) == 1:
+                target["active_connection"] = conns[0]["id"]
+            else:
+                target["active_connection"] = "auto"
         if zt_nwid:
             target["zerotier_network_id"] = zt_nwid
             target["remote_id"] = zt_nwid
@@ -4001,6 +4064,9 @@ def _handle_wizard_commit_server(body):
             existing_creds["Admin"] = {**existing_admin, "username": username}
             target["credentials"] = existing_creds
             config_manager.save_config(cfg)
+
+        invalidate_active_route_cache()
+        _clear_backend_http_pool()
 
         logger_manager.log_info(f"[WizardCommit] Server '{name}' (id={target['id']}) tersimpan")
         return 200, {
@@ -4589,7 +4655,7 @@ def _select_target_server(cfg, target_server_id=None):
     return servers[0] if servers else None
 
 
-def _get_backend_url_candidates(cfg, target_server_id=None, srv=None):
+def _get_backend_url_candidates(cfg, target_server_id=None, srv=None, primary_url="", rem_info=None):
     """Membangun daftar URL kandidat API backend ZimaOS (port 8080) terurut prioritas failover."""
     try:
         if srv is None:
@@ -4598,22 +4664,24 @@ def _get_backend_url_candidates(cfg, target_server_id=None, srv=None):
             return []
 
         primary_host = ""
-        if config_manager and hasattr(config_manager, "resolve_target_connection"):
+        if primary_url:
+            primary_host = _extract_host_from_url(primary_url)
+        elif config_manager and hasattr(config_manager, "resolve_target_connection"):
             try:
-                primary_url, _ = config_manager.resolve_target_connection(cfg, target_server=srv)
-                primary_host = _extract_host_from_url(primary_url)
+                resolved_primary_url, _ = config_manager.resolve_target_connection(cfg, target_server=srv)
+                primary_host = _extract_host_from_url(resolved_primary_url)
             except Exception as e:
                 logger_manager.log_debug(f"[_get_backend_url_candidates] resolve_target_connection error: {e}")
 
         remote_hosts = []
-        if config_manager and hasattr(config_manager, "get_dynamic_remote_info"):
+        if rem_info is None and config_manager and hasattr(config_manager, "get_dynamic_remote_info"):
             try:
                 rem_info = config_manager.get_dynamic_remote_info(srv, cfg)
-                rem_ip = (rem_info.get("ip") or "").strip() if isinstance(rem_info, dict) else ""
-                if rem_ip:
-                    remote_hosts.append(rem_ip)
             except Exception:
-                pass
+                rem_info = None
+        rem_ip = (rem_info.get("ip") or "").strip() if isinstance(rem_info, dict) else ""
+        if rem_ip:
+            remote_hosts.append(rem_ip)
         for key in ("easytier_virtual_ip", "zerotier_virtual_ip", "remote_ip"):
             val = (srv.get(key) or "").strip()
             if val and val not in remote_hosts:
@@ -4689,7 +4757,7 @@ _BACKEND_HTTP_POOL = {}  # key: (scheme, netloc) -> {"conn": HTTPConnection, "ts
 _BACKEND_HTTP_POOL_IDLE_SEC = 55.0
 _BACKEND_JWT_CACHE_LOCK = threading.Lock()
 _BACKEND_JWT_CACHE = {}  # key: (server_id, base_url) -> {"token": str, "fail_until": float}
-_PROTECTED_CONTROL_PREFIXES = ("/api/v1/vms", "/api/v1/devices", "/api/v1/tasks", "/api/v1/system/")
+_PROTECTED_CONTROL_PREFIXES = ("/api/v1/vms", "/api/v1/devices", "/api/v1/tasks", "/api/v1/system/", "/api/v1/events/")
 
 
 def _clear_backend_http_pool():
@@ -5206,6 +5274,40 @@ def _get_local_bundled_backend_version():
     return ""
 
 
+_remote_manifest_bg_lock = threading.Lock()
+_remote_manifest_bg_running = False
+
+
+def _trigger_async_remote_manifest_refresh(cfg=None):
+    """Menyegarkan manifest versi backend GitHub di latar belakang tanpa memblokir request UI."""
+    global _remote_manifest_bg_running
+    if getattr(urllib.request.urlopen, "__module__", "urllib.request") != "urllib.request":
+        return
+    now = time.time()
+    last_attempt = float(_remote_backend_manifest_cache.get("last_attempt") or 0.0)
+    cached_ts = float(_remote_backend_manifest_cache.get("timestamp") or 0.0)
+    if cached_ts > 0 and (now - cached_ts) < 300.0:
+        return
+    if last_attempt > 0 and (now - last_attempt) < 60.0:
+        return
+    with _remote_manifest_bg_lock:
+        if _remote_manifest_bg_running:
+            return
+        _remote_manifest_bg_running = True
+
+    def _bg():
+        global _remote_manifest_bg_running
+        try:
+            _get_bundled_backend_version(cfg=cfg, allow_remote=True, force_remote=False)
+        except Exception:
+            pass
+        finally:
+            with _remote_manifest_bg_lock:
+                _remote_manifest_bg_running = False
+
+    threading.Thread(target=_bg, daemon=True, name="backend-manifest-refresh").start()
+
+
 def _get_bundled_backend_version(cfg=None, allow_remote=True, force_remote=False):
     """
     Menemukan versi target backend ZimaOS dengan menggabungkan bundel lokal
@@ -5223,9 +5325,11 @@ def _get_bundled_backend_version(cfg=None, allow_remote=True, force_remote=False
         and (now - _cached_bundled_backend_version["timestamp"] < cache_ttl)
     ):
         if not allow_remote:
-            if cached_src == "local":
-                return cached_ver
-        elif cached_src == "remote" or (_fetch_remote_backend_manifest_version(cfg=cfg) == "" and cached_src == "local"):
+            return cached_ver
+        last_att = float(_remote_backend_manifest_cache.get("last_attempt") or 0.0)
+        if cached_src == "remote" or (last_att > 0 and (now - last_att < 60.0)) or (
+            _fetch_remote_backend_manifest_version(cfg=cfg) == "" and cached_src == "local"
+        ):
             return cached_ver
 
     local_ver = _get_local_bundled_backend_version()
@@ -5235,6 +5339,9 @@ def _get_bundled_backend_version(cfg=None, allow_remote=True, force_remote=False
         if remote_ver and (not local_ver or _compare_backend_versions(remote_ver, local_ver) > 0):
             _cached_bundled_backend_version = {"timestamp": now, "version": remote_ver, "source": "remote"}
             return remote_ver
+    elif cached_src == "remote" and cached_ver:
+        if not local_ver or _compare_backend_versions(cached_ver, local_ver) >= 0:
+            return cached_ver
 
     if local_ver:
         _cached_bundled_backend_version = {"timestamp": now, "version": local_ver, "source": "local"}
@@ -5413,7 +5520,7 @@ _cached_backend_info = {
 }
 
 
-def _get_backend_health_info(cfg=None, force=False, target_server_id=None):
+def _get_backend_health_info(cfg=None, force=False, target_server_id=None, allow_remote=True, active_url="", rem_info=None):
     """Mengecek status kesehatan dan versi backend ZimaOS (port 8080) dengan multi-candidate failover."""
     now = time.time()
     if cfg is None:
@@ -5430,8 +5537,16 @@ def _get_backend_health_info(cfg=None, force=False, target_server_id=None):
     ):
         return dict(_cached_backend_info["data"])
 
-    target_ver = _get_bundled_backend_version(cfg=cfg, force_remote=force)
-    candidates = _get_backend_url_candidates(cfg, target_server_id=target_server_id, srv=srv)
+    target_ver = _get_bundled_backend_version(cfg=cfg, allow_remote=allow_remote, force_remote=False)
+    if not allow_remote:
+        _trigger_async_remote_manifest_refresh(cfg)
+    candidates = _get_backend_url_candidates(
+        cfg,
+        target_server_id=target_server_id,
+        srv=srv,
+        primary_url=active_url,
+        rem_info=rem_info,
+    )
     probe_list = []
     cached_entry = _backend_url_cache.get(srv_id) if srv_id else None
     if cached_entry and now < cached_entry[1] and cached_entry[0]:
@@ -5448,7 +5563,7 @@ def _get_backend_health_info(cfg=None, force=False, target_server_id=None):
     }
 
     for idx, cand_url in enumerate(probe_list):
-        req_timeout = 2.0 if idx == 0 else 1.2
+        req_timeout = (1.5 if force else 1.1) if idx == 0 else 0.9
         req_retries = 1 if idx == 0 else 0
         ok, data, _ = _backend_http_request(
             f"{cand_url}/health",
@@ -6870,6 +6985,15 @@ _cached_active_route = {
 
 
 
+_server_details_lock = threading.Lock()
+_server_details_cache = {"ts": 0.0, "key": None, "data": None}
+_server_details_inflight = None
+_route_ping_cache_lock = threading.Lock()
+_route_ping_cache = {}
+_zt_details_cache_lock = threading.Lock()
+_zt_details_cache = {"ts": 0.0, "key": None, "data": None}
+
+
 def invalidate_active_route_cache():
 
 
@@ -6944,6 +7068,16 @@ def invalidate_active_route_cache():
     _cached_backend_info["timestamp"] = 0
     _cached_backend_info["server_id"] = ""
     _cached_backend_info["data"] = {"online": False, "version": "", "latestVersion": "", "url": ""}
+    with _server_details_lock:
+        _server_details_cache["ts"] = 0.0
+        _server_details_cache["key"] = None
+        _server_details_cache["data"] = None
+    with _route_ping_cache_lock:
+        _route_ping_cache.clear()
+    with _zt_details_cache_lock:
+        _zt_details_cache["ts"] = 0.0
+        _zt_details_cache["key"] = None
+        _zt_details_cache["data"] = None
 
 
 
@@ -11757,6 +11891,14 @@ def prompt_local_syncthing_setup(cfg=None):
 
 
 
+    global _active_local_st_client, _active_local_st_key
+
+
+
+
+
+
+
     if cfg is None:
 
 
@@ -11978,6 +12120,14 @@ def prompt_backup_app_setup(srv_target=None):
 
 
     """Membuka dialog konfigurasi rute ganda dan API Key Syncthing Server."""
+
+
+
+
+
+
+
+    global _active_srv_st_client, _active_srv_st_key
 
 
 
@@ -14496,6 +14646,10 @@ def _scan_live_drives_now():
 
 
 
+        srv = None
+
+
+
         try:
 
 
@@ -14592,6 +14746,29 @@ def _scan_live_drives_now():
 
 
 
+                    pass
+
+                try:
+                    rem_ip = get_active_remote_ip(srv, cfg)
+                    if rem_ip:
+                        h_rem = str(rem_ip).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+                        if h_rem:
+                            active_server_identities.add(h_rem)
+                except Exception:
+                    pass
+
+                try:
+                    host_lock = getattr(smb_mount_manager, "_smb_host_cache_lock", None)
+                    if host_lock is not None:
+                        with host_lock:
+                            resolved_smb_h = (getattr(smb_mount_manager, "_cached_resolved_smb_host", {}) or {}).get("resolved")
+                    else:
+                        resolved_smb_h = (getattr(smb_mount_manager, "_cached_resolved_smb_host", {}) or {}).get("resolved")
+                    if resolved_smb_h:
+                        h_res = str(resolved_smb_h).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip().lower()
+                        if h_res:
+                            active_server_identities.add(h_res)
+                except Exception:
                     pass
 
 
@@ -14761,9 +14938,19 @@ def _scan_live_drives_now():
 
                                 is_zt = zerotier_manager.is_zerotier_ip(unc_host) if hasattr(zerotier_manager, "is_zerotier_ip") else False
 
+                                is_et_active = False
+                                if unc_host.startswith("10.126.126.") and easytier_manager:
+                                    try:
+                                        et_mgr = easytier_manager.get_easytier_manager()
+                                        if et_mgr and et_mgr.is_running():
+                                            mgr_rid = str(et_mgr.get_remote_id() or "").strip().lower()
+                                            srv_rid = str(srv.get("remote_id") or "").strip().lower() if isinstance(srv, dict) else ""
+                                            if not srv_rid or not mgr_rid or srv_rid == mgr_rid:
+                                                is_et_active = True
+                                    except Exception:
+                                        pass
 
-
-                                if not is_zt:
+                                if not is_zt and not is_et_active:
 
 
 
@@ -15123,6 +15310,9 @@ def _scan_live_drives_now():
 
 
 
+_drives_cache_initialized = False
+
+
 def update_drives_cache_loop():
 
 
@@ -15139,7 +15329,7 @@ def update_drives_cache_loop():
 
 
 
-    global _cached_live_drives
+    global _cached_live_drives, _drives_cache_initialized
 
 
 
@@ -15180,6 +15370,7 @@ def update_drives_cache_loop():
 
 
             _cached_live_drives = init_drives
+            _drives_cache_initialized = True
 
 
 
@@ -15247,7 +15438,7 @@ def update_drives_cache_loop():
 
             now_m = time.monotonic()
             with _drives_cache_lock:
-                cache_empty = not bool(_cached_live_drives)
+                cache_empty = not _drives_cache_initialized
             should_rescan = (
                 cache_empty
                 or cur_bitmask is None
@@ -15268,6 +15459,7 @@ def update_drives_cache_loop():
             with _drives_cache_lock:
 
                 _cached_live_drives = new_drives
+                _drives_cache_initialized = True
 
 
 
@@ -16227,7 +16419,7 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
 
 
     global _pending_rebind_reason, _pending_rebind_pre_unmounted, _pending_rebind_gen
-    global _last_mounted_server_id, _partial_retry_timer, _smb_active_abort_event
+    global _last_mounted_server_id, _partial_retry_timer, _smb_active_abort_event, _cached_live_drives
 
     with _smb_pipeline_gen_lock:
         if expected_gen is not None and int(expected_gen) != int(_smb_pipeline_gen):
@@ -18787,19 +18979,18 @@ def get_server_details_data(cfg=None):
 
     active_host = parsed_u.hostname or ""
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    if easytier_manager:
+        _et_mgr_det = easytier_manager.get_easytier_manager()
+        et_overview = dict((_et_mgr_det.get_status_overview() if _et_mgr_det else None) or {})
+        _et_mgr_rid = (_et_mgr_det.get_remote_id() if _et_mgr_det else "") or ""
+        _srv_rid = srv.get("remote_id") or ""
+        et_overview.update({
+            "remote_id": et_overview.get("remote_id") or _srv_rid or srv.get("zerotier_network_id") or cfg.get("easytier", {}).get("remote_id"),
+            "server_peer_ip": (rem_info.get("ip") if rem_info and rem_info.get("engine") == "easytier" else None) or srv.get("easytier_virtual_ip") or (et_overview.get("server_peer_ip") if (not _srv_rid or _srv_rid == _et_mgr_rid) else "") or "",
+            "running": bool(et_overview.get("running") and (not _srv_rid or not _et_mgr_rid or _srv_rid.strip().lower() == _et_mgr_rid.strip().lower())),
+        })
+    else:
+        et_overview = {"running": False}
 
     return {
 
@@ -18850,11 +19041,7 @@ def get_server_details_data(cfg=None):
 
 
         "zeroTier": zt_info,
-        "easyTier": (lambda s: (s.update({
-            "remote_id": s.get("remote_id") or srv.get("remote_id") or srv.get("zerotier_network_id") or cfg.get("easytier", {}).get("remote_id"),
-            "server_peer_ip": (rem_info.get("ip") if rem_info and rem_info.get("engine") == "easytier" else None) or srv.get("easytier_virtual_ip") or (s.get("server_peer_ip") if (not srv.get("remote_id") or srv.get("remote_id") == (easytier_manager.get_easytier_manager().get_remote_id() or "")) else "") or "",
-            "running": bool(s.get("running") and (not srv.get("remote_id") or not easytier_manager.get_easytier_manager().get_remote_id() or srv.get("remote_id").strip().lower() == (easytier_manager.get_easytier_manager().get_remote_id() or "").strip().lower())),
-        }), s)[1])(easytier_manager.get_easytier_manager().get_status_overview()) if easytier_manager else {"running": False},
+        "easyTier": et_overview,
         "remoteMode": srv.get("remote_mode") or cfg.get("remote_mode", "auto"),
         "activeRemoteEngine": rem_info.get("engine", "none") if rem_info else "none",
         "activeRemoteIp": rem_info.get("ip", "") if rem_info else "",
@@ -19789,6 +19976,7 @@ def update_metrics_loop():
 
     offline_streak = 0
     smb_offline_unmounted = False
+    smb_offline_unmount_inflight = False
     last_srv_id = None
     last_conn_id = None
     last_resolved_url = None
@@ -19870,6 +20058,7 @@ def update_metrics_loop():
             if cur_srv_id != last_srv_id or cur_conn_id != last_conn_id or resolved_url_changed:
                 offline_streak = 0
                 smb_offline_unmounted = False
+                smb_offline_unmount_inflight = False
                 srv_changed = (cur_srv_id != last_srv_id)
                 route_changed = (cur_conn_id != last_conn_id or resolved_url_changed)
                 last_srv_id = cur_srv_id
@@ -20051,6 +20240,7 @@ def update_metrics_loop():
             if raw_on:
                 offline_streak = 0
                 smb_offline_unmounted = False
+                smb_offline_unmount_inflight = False
                 is_on = True
                 try:
                     if easytier_manager and hasattr(easytier_manager, "easytier_instance"):
@@ -20086,28 +20276,38 @@ def update_metrics_loop():
                             easytier_manager.easytier_instance.record_p2p_probe_result(False)
                     except Exception:
                         pass
-                if _should_unmount_on_offline_streak(
-                    raw_on,
-                    offline_streak,
-                    smb_offline_unmounted,
-                    tunnel_traffic_active=tunnel_traffic_active,
+                if (
+                    not smb_offline_unmount_inflight
+                    and _should_unmount_on_offline_streak(
+                        raw_on,
+                        offline_streak,
+                        smb_offline_unmounted,
+                        tunnel_traffic_active=tunnel_traffic_active,
+                    )
                 ):
-                    smb_offline_unmounted = True
+                    smb_offline_unmount_inflight = True
                     _offline_cfg = cfg
                     _offline_srv = s
-                    def _do_offline_unmount(c_arg=_offline_cfg, s_arg=_offline_srv):
-                        if _is_server_smb_port_alive(cfg=c_arg, server=s_arg):
-                            logger_manager.log_info(
-                                "[SMB Lifecycle] Metrik HTTP offline >=5 tick, namun SMB port 445 masih sehat; unmount dilewati agar Explorer tidak freeze."
+                    def _do_offline_unmount(c_arg=_offline_cfg, s_arg=_offline_srv, ep_arg=loop_epoch):
+                        nonlocal smb_offline_unmounted, smb_offline_unmount_inflight
+                        try:
+                            if _is_server_smb_port_alive(cfg=c_arg, server=s_arg):
+                                logger_manager.log_info(
+                                    "[SMB Lifecycle] Metrik HTTP offline >=5 tick, namun SMB port 445 masih sehat; unmount dilewati agar Explorer tidak freeze."
+                                )
+                                return
+                            _unmount_myserver_smb_drives(
+                                reason="server_offline_streak",
+                                cfg=c_arg,
+                                server=s_arg,
+                                include_easytier_subnet=True,
                             )
-                            return
-                        _unmount_myserver_smb_drives(
-                            reason="server_offline_streak",
-                            cfg=c_arg,
-                            server=s_arg,
-                            include_easytier_subnet=True,
-                        )
-                        smb_mount_manager.invalidate_smb_host_cache()
+                            smb_mount_manager.invalidate_smb_host_cache()
+                            with _state_lock:
+                                if _metrics_switch_epoch == ep_arg and offline_streak >= OFFLINE_FAIL_THRESHOLD:
+                                    smb_offline_unmounted = True
+                        finally:
+                            smb_offline_unmount_inflight = False
                     threading.Thread(target=_do_offline_unmount, daemon=True).start()
 
             if is_on and s and bool(cfg.get("auto_mount_smb", True)) and not srv_changed and not _is_smb_auto_suppressed():
@@ -23848,7 +24048,7 @@ def apply_zip_update(zip_file_path=None):
 
 
 
-        f'reg add "HKCU\\{REG_KEY}" /v "{APP_NAME}" /t REG_SZ /d "\"%APP_DIR%\\{new_exe_name}\" --tray" /f >nul 2>&1'
+        f'reg add "HKCU\\{REG_RUN_KEY}" /v "{AUTORUN_KEY_NAME}" /t REG_SZ /d "\"%APP_DIR%\\{new_exe_name}\" --tray" /f >nul 2>&1'
 
 
 
@@ -24482,7 +24682,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
         elif path in ("/api/server/backend_status", "/api/server_backend_status"):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             req_srv_id = (query.get("serverId", [""])[0] or query.get("server_id", [""])[0]).strip() or None
-            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id))
+            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id, allow_remote=False))
 
         elif path in ("/api/smb/source", "/api/smb_source"):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -24597,7 +24797,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-        global _active_local_st_client, _active_local_st_key, _active_srv_st_client, _active_srv_st_key
+        global _active_local_st_client, _active_local_st_key, _active_srv_st_client, _active_srv_st_key, _cached_live_drives
 
 
 
@@ -30874,7 +31074,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
 
-        if path == "/api/load_settings":
+        if path in ("/api/load_settings", "/api/get_settings"):
 
 
 
@@ -30931,6 +31131,14 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 "autoCleanOnExit": bool(cfg.get("auto_clean_cache", True)),
+
+
+
+
+
+
+
+                "autoCheckUpdate": bool(cfg.get("auto_check_update", True)),
 
 
 
@@ -31115,6 +31323,15 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                     cfg["auto_clean_cache"] = bool(settings["autoCleanOnExit"])
+
+
+
+
+
+
+
+                if "autoCheckUpdate" in settings:
+                    cfg["auto_check_update"] = bool(settings["autoCheckUpdate"])
 
 
 
@@ -31546,36 +31763,35 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                         v["telemetry"] = old_v.get("telemetry")
                     _apply_recent_vm_mutation(v)
 
-                prev_server_ids = {
-                    v.get("id") for v in (cfg.get("vms", []) or [])
-                    if isinstance(v, dict) and v.get("scope") == "server" and v.get("id")
-                }
-                new_server_ids = {
-                    v.get("id") for v in vms_list
-                    if isinstance(v, dict) and v.get("scope") == "server" and v.get("id")
-                }
-                cfg["vms"] = vms_list
+                # Gabungkan / upsert payload masuk ke atas VM non-tombstone yang sudah ada agar payload parsial
+                # tidak pernah menghapus VM lokal maupun server secara diam-diam (penghapusan hanya lewat /api/vms/delete).
+                incoming_by_id = {v.get("id"): v for v in vms_list if v.get("id")}
+                merged_vms = []
+                seen_ids = set()
+                for old_v in (cfg.get("vms", []) or []):
+                    if not isinstance(old_v, dict):
+                        continue
+                    ovid = old_v.get("id")
+                    if ovid and _deleted_vms_tombstone.get(ovid, 0) > now_ts:
+                        continue
+                    if ovid and ovid in incoming_by_id:
+                        merged_vms.append(incoming_by_id[ovid])
+                        seen_ids.add(ovid)
+                    elif ovid:
+                        merged_vms.append(old_v)
+                        seen_ids.add(ovid)
+                for v in vms_list:
+                    vid = v.get("id")
+                    if not vid or vid not in seen_ids:
+                        merged_vms.append(v)
+                        if vid:
+                            seen_ids.add(vid)
+
+                cfg["vms"] = merged_vms
                 config_manager.save_config(cfg)
 
                 backend_url = _get_active_server_backend_url(cfg)
                 if backend_url:
-                    try:
-                        live_ok, live_data, _ = _backend_http_request(f"{backend_url}/api/v1/vms", method="GET", timeout=2.0)
-                        if live_ok and isinstance(live_data, dict):
-                            live_vms = live_data.get("vms", [])
-                            for lv in live_vms:
-                                if isinstance(lv, dict) and lv.get("id"):
-                                    prev_server_ids.add(lv.get("id"))
-                    except Exception:
-                        pass
-
-                    # Isolasi: VM yang dulu scope server tapi kini lokal / dihapus harus hilang dari ZimaOS
-                    for gone_id in (prev_server_ids - new_server_ids):
-                        try:
-                            _backend_http_request(f"{backend_url}/api/v1/vms/{gone_id}", method="DELETE", timeout=5.0, retries=1)
-                            logger_manager.log_info(f"[api/vms/save] VM {gone_id} dihapus dari server ZimaOS")
-                        except Exception as de:
-                            logger_manager.log_debug(f"[api/vms/save] Gagal hapus VM {gone_id} di server: {de}")
                     for vm in vms_list:
                         vid = vm.get("id")
                         # Cek ulang tombstone tepat sebelum POST agar delete paralel tidak ter-resurrect!
@@ -31614,7 +31830,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path in ("/api/server/backend_status", "/api/server_backend_status"):
             req_srv_id = (body.get("serverId") or body.get("server_id") or "").strip() or None if isinstance(body, dict) else None
-            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id))
+            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id, allow_remote=False))
             return
 
         if path in ("/api/server/backend_action", "/api/server_backend_action"):
@@ -31752,8 +31968,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             if not user:
                 user = "casaos"
 
-            import re as _re
-            if not _re.match(r"^[A-Za-z0-9._-]+$", user):
+            if not re.match(r"^[A-Za-z0-9._-]+$", user):
                 self._send_json(
                     {
                         "status": "error",
@@ -31764,7 +31979,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            if not host or not _re.match(r"^[A-Za-z0-9._:-]+$", host):
+            if not host or not re.match(r"^[A-Za-z0-9._:-]+$", host):
                 self._send_json(
                     {"status": "error", "success": False, "error": "Host / IP SSH tidak valid."},
                     status=400,
@@ -31913,7 +32128,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             if not machine_id:
                                 machine_id = m_list[0].get("id")
                 except Exception as me:
-                    logger_manager.log_warn(f"[InstaBox {action_type}] Gagal auto-resolve machineId: {me}")
+                    logger_manager.log_warning(f"[InstaBox {action_type}] Gagal auto-resolve machineId: {me}")
 
             if not machine_id:
                 self._send_json({"status": "error", "message": "Machine ID InstaBox tidak ditemukan di akun ini."}, status=400)
@@ -32128,7 +32343,6 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     if not target and vm_name:
                         target = next((m for m in machines if vm_name.strip().lower() in m.get("name", "").strip().lower() or m.get("name", "").strip().lower() in vm_name.strip().lower()), None)
                     if not target and vm_name:
-                        import re
                         s_vm = re.sub(r'[^a-z0-9]', '', vm_name.lower())
                         target = next((m for m in machines if s_vm and (s_vm in re.sub(r'[^a-z0-9]', '', m.get("name", "").lower()) or re.sub(r'[^a-z0-9]', '', m.get("name", "").lower()) in s_vm)), None)
                     if not target:
@@ -32261,7 +32475,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                                     if disk_info.get("totalBytes"):
                                         metrics_res["diskTotalBytes"] = disk_info.get("totalBytes")
                     except Exception as me:
-                        logger_manager.log_warn(f"[InstaBox] Gagal mengambil metrics VM {mid}: {me}")
+                        logger_manager.log_warning(f"[InstaBox] Gagal mengambil metrics VM {mid}: {me}")
 
                     # Jika mesin dalam kondisi tidur/suspended, metrik aktif tidak valid (CPU 0/kosong)
                     if not is_running:
@@ -32456,7 +32670,6 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     tag = rel_data.get("tag_name", "").lstrip("v").strip()
                     
                     def _parse_ver(v_str):
-                        import re
                         parts = re.findall(r"\d+", v_str)
                         return tuple(map(int, parts)) if parts else (0, 0, 0)
                     
@@ -32763,7 +32976,7 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path in ("/api/server/backend_status", "/api/server_backend_status"):
             req_srv_id = (body.get("serverId") or body.get("server_id") or "").strip() or None if isinstance(body, dict) else None
-            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id))
+            self._send_json(_get_backend_health_info(force=True, target_server_id=req_srv_id, allow_remote=False))
             return
 
 
@@ -33026,8 +33239,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                         with _state_lock:
-
-
+                            if _metrics_switch_epoch != switch_epoch:
+                                return
 
                             _cached_state["ip"] = ip_str
 
@@ -33065,10 +33278,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             else:
 
                                 with _state_lock:
-
-                                    _cached_state["is_online"] = False
-
-                                    _cached_state["telemetry_loading"] = False
+                                    if _metrics_switch_epoch == switch_epoch:
+                                        _cached_state["is_online"] = False
+                                        _cached_state["telemetry_loading"] = False
 
 
 
@@ -33085,10 +33297,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                         with _state_lock:
-
-
-
-                            _cached_state["telemetry_loading"] = False
+                            if _metrics_switch_epoch == switch_epoch:
+                                _cached_state["telemetry_loading"] = False
 
 
 
@@ -33464,10 +33674,9 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                             else:
 
                                 with _state_lock:
-
-                                    _cached_state["is_online"] = False
-
-                                    _cached_state["telemetry_loading"] = False
+                                    if _metrics_switch_epoch == route_switch_epoch:
+                                        _cached_state["is_online"] = False
+                                        _cached_state["telemetry_loading"] = False
 
 
 
@@ -33484,10 +33693,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                         with _state_lock:
-
-
-
-                            _cached_state["telemetry_loading"] = False
+                            if _metrics_switch_epoch == route_switch_epoch:
+                                _cached_state["telemetry_loading"] = False
 
 
 
@@ -35735,7 +35942,8 @@ def vm_power_scheduler_loop():
                                             patch["status"] = "running"
                                             patch["sleepingSince"] = None
                                         elif real_status == "running" and mid:
-                                            if max_run_mins > 0 and runtime_mins >= max(30, max_run_mins - 5):
+                                            threshold_min = (max_run_mins - 5) if max_run_mins > 30 else max(1, max_run_mins - max(1, min(5, max_run_mins // 5)))
+                                            if max_run_mins > 0 and runtime_mins >= threshold_min:
                                                 logger_manager.log_info(f"[VMDaemon] Always-On runtime guard ({max_run_mins}m): mereset siklus runtime VM {vm.get('name')} ({mid})")
                                                 _instabox_release_lease(api_key, mid, vm_id)
                                                 _instabox_api_action(api_key, mid, "suspend")
@@ -35787,7 +35995,7 @@ def vm_power_scheduler_loop():
                                     logger_manager.log_info(f"[VMDaemon] Auto-On mengeksekusi nyala otomatis untuk {vm.get('name')} ({mid})")
                                     _instabox_api_action(api_key, mid, "resume")
                                 except Exception as e_on:
-                                    logger_manager.log_warn(f"[VMDaemon] Auto-On gagal membangunkan {vm.get('name')}: {e_on}")
+                                    logger_manager.log_warning(f"[VMDaemon] Auto-On gagal membangunkan {vm.get('name')}: {e_on}")
 
                     # 3. Auto-Restart Scheduler
                     auto_res = vm.get("autoRestart")
@@ -35821,7 +36029,7 @@ def vm_power_scheduler_loop():
                                     patch["runtimeMinutes"] = 0
                                     patch["lastResetAt"] = int(time.time() * 1000)
                                 except Exception as e_res:
-                                    logger_manager.log_warn(f"[VMDaemon] Auto-Restart gagal pada {vm.get('name')}: {e_res}")
+                                    logger_manager.log_warning(f"[VMDaemon] Auto-Restart gagal pada {vm.get('name')}: {e_res}")
 
                     if patch and vm_id not in _deleted_vms_tombstone:
                         daemon_patches[vm_id] = patch
@@ -35873,6 +36081,60 @@ def vm_power_scheduler_loop():
         except Exception as e:
             logger_manager.log_debug(f"[VMDaemon] Loop warning: {e}")
         time.sleep(20.0)
+
+
+def _backend_sse_listener_loop():
+    """Listener SSE opsional /api/v1/events/stream untuk invalidasi instan status SMB tanpa menunggu polling."""
+    force_refresh_next = False
+    was_forced = False
+    while True:
+        try:
+            cfg_s = config_manager.load_or_create_config() if config_manager else {}
+            srv_s = config_manager.get_active_server(cfg_s) if config_manager else None
+            b_url = _get_active_server_backend_url(cfg_s)
+            if not srv_s or not b_url:
+                force_refresh_next = False
+                was_forced = False
+                time.sleep(20.0)
+                continue
+            connected_srv_id = str(srv_s.get("id") or "")
+            connected_url = b_url
+            tok = _resolve_backend_bearer_token_for_url(
+                f"{b_url}/api/v1/events/stream",
+                force_refresh=force_refresh_next,
+            )
+            was_forced = force_refresh_next
+            force_refresh_next = False
+            if not tok:
+                smb_cfg = config_manager.get_server_smb_source_config(srv_s) if hasattr(config_manager, "get_server_smb_source_config") else {}
+                tok = str((smb_cfg or {}).get("access_token") or "").strip()
+            if not tok:
+                time.sleep(30.0)
+                continue
+            sse_req = urllib.request.Request(
+                f"{b_url}/api/v1/events/stream",
+                headers={"Authorization": f"Bearer {tok}", "Accept": "text/event-stream"},
+            )
+            with urllib.request.urlopen(sse_req, timeout=45.0) as resp:
+                for raw_line in resp:
+                    cfg_now = config_manager.load_or_create_config() if config_manager else {}
+                    srv_now = config_manager.get_active_server(cfg_now) if config_manager else None
+                    b_url_now = _get_active_server_backend_url(cfg_now)
+                    if str((srv_now or {}).get("id") or "") != connected_srv_id or b_url_now != connected_url:
+                        break
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if line.startswith("event:"):
+                        ev_name = line[6:].strip()
+                        if ev_name in ("smb_mode_changed", "smb_synced", "storage_changed"):
+                            smb_mount_manager.clear_smb_share_cache()
+        except urllib.error.HTTPError as he:
+            if getattr(he, "code", None) in (401, 403) and not was_forced:
+                force_refresh_next = True
+                time.sleep(1.0)
+                continue
+            time.sleep(30.0)
+        except Exception:
+            time.sleep(30.0)
 
 
 def start_server(port=DEFAULT_PORT, parent_pid=0):
@@ -36291,37 +36553,6 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
     t_easytier = threading.Thread(target=auto_start_easytier_worker, daemon=True)
     t_easytier.start()
-
-    def _backend_sse_listener_loop():
-        """Listener SSE opsional /api/v1/events/stream untuk invalidasi instan status SMB tanpa menunggu polling."""
-        while True:
-            try:
-                cfg_s = config_manager.load_or_create_config() if config_manager else {}
-                srv_s = config_manager.get_active_server(cfg_s) if config_manager else None
-                b_url = _get_active_server_backend_url(cfg_s)
-                if not srv_s or not b_url:
-                    time.sleep(20.0)
-                    continue
-                tok = _resolve_backend_bearer_token_for_url(f"{b_url}/api/v1/events/stream", force_refresh=False)
-                if not tok:
-                    smb_cfg = config_manager.get_server_smb_source_config(srv_s) if hasattr(config_manager, "get_server_smb_source_config") else {}
-                    tok = str((smb_cfg or {}).get("access_token") or "").strip()
-                if not tok:
-                    time.sleep(30.0)
-                    continue
-                sse_req = urllib.request.Request(
-                    f"{b_url}/api/v1/events/stream",
-                    headers={"Authorization": f"Bearer {tok}", "Accept": "text/event-stream"},
-                )
-                with urllib.request.urlopen(sse_req, timeout=45.0) as resp:
-                    for raw_line in resp:
-                        line = raw_line.decode("utf-8", errors="ignore").strip()
-                        if line.startswith("event:"):
-                            ev_name = line[6:].strip()
-                            if ev_name in ("smb_mode_changed", "smb_synced", "storage_changed"):
-                                smb_mount_manager.clear_smb_share_cache()
-            except Exception:
-                time.sleep(30.0)
 
     threading.Thread(target=_backend_sse_listener_loop, daemon=True, name="backend-sse-listener").start()
 

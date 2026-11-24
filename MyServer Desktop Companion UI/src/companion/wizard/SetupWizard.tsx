@@ -33,6 +33,7 @@ export function createInitialDraft(): WizardDraft {
     serverName: "",
     zerotierNetworkId: "",
     zerotierIp: "",
+    easytierVirtualIp: "",
     step1And3Done: false,
     backendSource: "github",
     backendInstalled: false,
@@ -115,9 +116,9 @@ export function SetupWizard({ onCompleted }: { onCompleted?: () => void }) {
     if (openedFromSettings) {
       closingRef.current = true
       try {
+        await api.hideWindow()
         await api.setWizardMode(false)
         closeWizard()
-        await api.hideWindow()
       } finally {
         closingRef.current = false
       }

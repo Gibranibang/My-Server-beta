@@ -12,6 +12,22 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.6.13",
+        "channel": "Beta",
+        "date": "2026-11-24",
+        "title": "Stabilitas Disk/Samba, Keamanan Data VM, GC Backup & Perbaikan Wizard/Tauri (Backend v1.4.13)",
+        "notes": [
+            "Backend v1.4.13 (Samba Engine, VM Smart Reset & Backup GC): Mengarahkan stderr `smbd` ke log berbatas ukuran, mendukung reload `smbd-*.pid`, mengunci watchdog + rollback host `smbd`, menjaga `token_version` JWT pada switch SMB, menegakkan gate `sleep_vm_provider()` di `execute_smart_reset()` + ambang `<30m` + `shlex.quote(password)`, serta menghentikan penghapusan paksa file upload `.part` aktif & memperbaiki retensi `upload_sessions`/`_active_sessions`.",
+            "Desktop v4.6.13 (Telemetri Disk, InstaBox, Auto-Updater, Wizard & UI): Memperbaiki akurasi `DISK %` Admin + locking `detailed_partitions_map` + CIDR adapter virtual `/16` + fallback `--disable-p2p` EasyTier + pembatasan timeout `net.exe`; menghapus diff-delete implisit `/api/vms/save`, crash `do_POST`/`instabox_manager`, bug `APP_VERSION`/`autoCheckUpdate`/`REG_RUN_KEY`/`tempfile`, kebocoran `isAdmin` & double-invocation RPC di UI, urutan `cleanup_stale_webview_locks()` + multi-monitor di Tauri, serta autentikasi/reconnect SSE `/api/v1/events/`."
+        ],
+        "features": [
+            "Non-Destructive VM Save & Verified Smart Reset Gate",
+            "Active Upload .part GC & Session Retention Safety",
+            "Desktop Disk Metrics Isolation, CIDR Routing & Single-Path UI IPC",
+            "Tauri Single-Instance WebView2 Lock Order & Multi-Monitor Flyout"
+        ]
+    },
+    {
         "version": "4.6.12",
         "channel": "Beta",
         "date": "2026-11-22",

@@ -185,14 +185,23 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
         idleTimeoutMinutes: provider === 'instabox' ? 30 : undefined,
       }
 
-      const existing = (await api.loadVms?.()) ?? []
+      const existingRaw = api.loadVms ? await api.loadVms() : []
+      if (!Array.isArray(existingRaw)) {
+        throw new Error(t("wiz_conn_err", "Gagal memuat daftar Virtual Machine"))
+      }
+      const existing = existingRaw
       const existingIdx = existing.findIndex((item) => item.id === vmId)
       const nextList =
         existingIdx >= 0
           ? existing.map((item, idx) => (idx === existingIdx ? { ...item, ...newVm } : item))
           : [...existing, newVm]
 
-      await api.saveVms?.(nextList)
+      const saveRes = await api.saveVms?.(nextList)
+      if (saveRes && (saveRes.status === "error" || saveRes.success === false)) {
+        throw new Error(
+          saveRes.message || saveRes.error || t("wiz_conn_err", "Gagal menyimpan Virtual Machine")
+        )
+      }
 
       if (provider === 'instabox' && cleanApiKey) {
         const syncRes = await api.syncInstaBoxVm({
@@ -245,7 +254,9 @@ export const SubStepVm: React.FC<SubStepVmProps> = ({
             syncPatch.idleTimeoutMinutes = syncRes.idleTimeoutMinutes
           }
           if (hasMetadata) {
-            await api.updateVm(vmId, syncPatch, targetServerId).catch(() => {})
+            await api.updateVm(vmId, syncPatch, targetServerId).catch((err) => {
+              console.warn("[SubStepVm] updateVm metadata sync failed:", err)
+            })
           }
         }
       }

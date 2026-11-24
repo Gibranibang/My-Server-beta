@@ -30,6 +30,34 @@ fn chrono_now() -> String {
     format!("{:?}", std::time::SystemTime::now())
 }
 
+fn cleanup_stale_webview_locks() {
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        let webview_dir = std::path::PathBuf::from(local_appdata)
+            .join("com.algithaproject.myserver.companion.beta")
+            .join("EBWebView");
+        if webview_dir.exists() {
+            let _ = remove_lock_files_recursive(&webview_dir);
+        }
+    }
+}
+
+fn remove_lock_files_recursive(dir: &std::path::Path) -> std::io::Result<()> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = remove_lock_files_recursive(&path);
+            } else if path.file_name().map_or(false, |name| {
+                let s = name.to_string_lossy().to_lowercase();
+                s == "lock" || s == "lockfile" || s.ends_with(".lock")
+            }) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn non_empty_str(val: Option<&serde_json::Value>) -> bool {
     val.and_then(|v| v.as_str())
         .map(|s| !s.trim().is_empty())
@@ -155,7 +183,7 @@ fn show_centered_wizard(window: &WebviewWindow, width: Option<f64>, height: Opti
     let _ = window.set_focus();
 }
 
-fn apply_position_above_taskbar(window: &WebviewWindow) {
+fn apply_position_above_taskbar_internal(window: &WebviewWindow, show_window: bool) {
     trace_log("position_above_taskbar entered");
     let win_w = 370.0;
     let win_h = 412.0;
@@ -171,9 +199,11 @@ fn apply_position_above_taskbar(window: &WebviewWindow) {
     trace_log(&format!("position_above_taskbar monitor: {:?}", monitor.is_some()));
 
     if let Some(mon) = monitor {
-        let screen_size = mon.size().to_logical::<f64>(mon.scale_factor());
-        let target_x = screen_size.width - win_w - margin_x;
-        let target_y = screen_size.height - win_h - margin_y;
+        let scale = mon.scale_factor();
+        let screen_pos = mon.position().to_logical::<f64>(scale);
+        let screen_size = mon.size().to_logical::<f64>(scale);
+        let target_x = screen_pos.x + screen_size.width - win_w - margin_x;
+        let target_y = screen_pos.y + screen_size.height - win_h - margin_y;
 
         trace_log(&format!("set_position ({}, {})", target_x, target_y));
         let _ = window.set_position(tauri::Position::Logical(LogicalPosition::new(target_x, target_y)));
@@ -182,10 +212,16 @@ fn apply_position_above_taskbar(window: &WebviewWindow) {
     let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(win_w, win_h)));
     set_window_taskbar_icon(window);
 
-    trace_log("calling window.show, unminimize, set_focus");
-    let _ = window.show();
-    let _ = window.unminimize();
-    let _ = window.set_focus();
+    if show_window {
+        trace_log("calling window.show, unminimize, set_focus");
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn apply_position_above_taskbar(window: &WebviewWindow) {
+    apply_position_above_taskbar_internal(window, true);
 }
 
 #[tauri::command]
@@ -257,10 +293,11 @@ fn set_wizard_mode(
         state.set_active(true);
         show_centered_wizard(&window, width, height);
     } else {
+        let was_visible = window.is_visible().unwrap_or(false);
         state.set_active(false);
         let _ = window.set_always_on_top(true);
         let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(370.0, 412.0)));
-        apply_position_above_taskbar(&window);
+        apply_position_above_taskbar_internal(&window, was_visible);
     }
     Ok(())
 }
@@ -277,13 +314,25 @@ async fn open_app_window(url: String, title: String) -> Result<(), String> {
         title.trim().to_string()
     };
 
-    let _ = call_core_api(
+    let res = call_core_api(
         "open_app_window".to_string(),
         serde_json::json!({
             "url": clean_url,
             "title": win_title
         }),
-    ).await;
+    )
+    .await?;
+
+    if res.get("success").and_then(|v| v.as_bool()) == Some(false)
+        || res.get("status").and_then(|v| v.as_str()) == Some("error")
+    {
+        return Err(res
+            .get("message")
+            .or_else(|| res.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Gagal membuka jendela aplikasi")
+            .to_string());
+    }
     Ok(())
 }
 
@@ -307,44 +356,103 @@ async fn open_in_browser(url: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn call_core_api(endpoint: String, payload: serde_json::Value) -> Result<serde_json::Value, String> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::time::Duration;
+    tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        use std::time::Duration;
 
-    let mut stream = TcpStream::connect("127.0.0.1:48123")
-        .map_err(|e| format!("Gagal terhubung ke Core Service (127.0.0.1:48123): {}", e))?;
-    let read_timeout_ms = if endpoint.starts_with("server/backend_action") || endpoint.starts_with("server_backend_action") {
-        420000
-    } else if endpoint == "download_and_install_update" || endpoint == "install_update_from_zip" {
-        210000
-    } else {
-        60000
-    };
-    stream.set_read_timeout(Some(Duration::from_millis(read_timeout_ms))).ok();
-    stream.set_write_timeout(Some(Duration::from_millis(15000))).ok();
+        let addr = SocketAddr::from(([127, 0, 0, 1], 48123));
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(2000))
+            .map_err(|e| format!("Gagal terhubung ke Core Service (127.0.0.1:48123): {}", e))?;
+        let ep = endpoint
+            .split('?')
+            .next()
+            .unwrap_or(&endpoint)
+            .trim_start_matches('/');
+        let read_timeout_ms = if ep.starts_with("server/backend_action")
+            || ep.starts_with("server_backend_action")
+        {
+            420000
+        } else if matches!(
+            ep,
+            "choose_log_folder"
+                | "choose_folder"
+                | "save_log_as"
+                | "execute_backup_dialog"
+                | "execute_restore_dialog"
+                | "dialog_configure_local_syncthing"
+                | "dialog_configure_server_syncthing"
+                | "add_server"
+                | "edit_server"
+                | "delete_server"
+                | "add_route"
+                | "edit_route"
+                | "delete_route"
+                | "add_profile"
+                | "edit_profile"
+                | "delete_profile"
+                | "config_credentials"
+        ) {
+            300000
+        } else if ep == "download_and_install_update" || ep == "install_update_from_zip" {
+            210000
+        } else if matches!(
+            ep,
+            "instabox/smart_reset"
+                | "instabox/sync"
+                | "vms/migrate"
+                | "easytier/start"
+                | "wizard/verify_zimaos"
+        ) {
+            180000
+        } else {
+            60000
+        };
+        stream.set_read_timeout(Some(Duration::from_millis(read_timeout_ms))).ok();
+        stream.set_write_timeout(Some(Duration::from_millis(15000))).ok();
 
-    let body = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
-    let req = format!(
-        "POST /api/{} HTTP/1.1\r\nHost: 127.0.0.1:48123\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        endpoint,
-        body.len(),
-        body
-    );
+        let body = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+        let req = format!(
+            "POST /api/{} HTTP/1.1\r\nHost: 127.0.0.1:48123\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            endpoint,
+            body.len(),
+            body
+        );
 
-    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+        stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
 
-    let mut response_bytes = Vec::new();
-    stream.read_to_end(&mut response_bytes).map_err(|e| e.to_string())?;
+        let mut response_bytes = Vec::new();
+        stream.read_to_end(&mut response_bytes).map_err(|e| e.to_string())?;
 
-    let response_str = String::from_utf8_lossy(&response_bytes);
-    if let Some(pos) = response_str.find("\r\n\r\n") {
-        let json_str = &response_str[pos + 4..];
-        let json_val: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("Gagal mem-parsing JSON: {} (Konten: {})", e, json_str))?;
-        Ok(json_val)
-    } else {
-        Err("Format respons HTTP dari Core Service tidak valid".to_string())
-    }
+        let response_str = String::from_utf8_lossy(&response_bytes);
+        if let Some(pos) = response_str.find("\r\n\r\n") {
+            let headers_str = &response_str[..pos];
+            let json_str = &response_str[pos + 4..];
+            let status_code = headers_str
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|c| c.parse::<u16>().ok())
+                .unwrap_or(200);
+
+            if status_code >= 400 {
+                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    if json_val.is_object() {
+                        return Ok(json_val);
+                    }
+                }
+                return Err(format!("HTTP {}: {}", status_code, json_str.trim()));
+            }
+
+            let json_val: serde_json::Value = serde_json::from_str(json_str)
+                .map_err(|e| format!("Gagal mem-parsing JSON: {} (Konten: {})", e, json_str))?;
+            Ok(json_val)
+        } else {
+            Err("Format respons HTTP dari Core Service tidak valid".to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("Core API task gagal dijalankan: {}", e))?
 }
 
 fn restore_or_present_window(app: &AppHandle, win: &WebviewWindow) {
@@ -381,6 +489,7 @@ pub fn run() {
         }))
         .setup(|app| {
             trace_log("setup hook entered");
+            cleanup_stale_webview_locks();
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

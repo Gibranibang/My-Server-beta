@@ -428,7 +428,7 @@ export default function FilesView() {
     }
     return "127.0.0.1"
   }, [serverUrl])
-  const uncHost = `\\${activeHost}`
+  const uncHost = `\\\\${activeHost}`
 
   const mountAll = useCallback(() => setAllMounted(true), [setAllMounted])
   const unmountAll = useCallback(() => setAllMounted(false), [setAllMounted])

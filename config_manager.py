@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import copy
 import time
 import base64
 import re
@@ -228,20 +229,35 @@ TRANSLATIONS = {
 
 
 
+_DPAPI_SUPPORTED_CACHE = None
+
+
 def is_dpapi_supported():
     """
-    Melakukan probe runtime nyata ke Windows CryptProtectData in-memory.
+    Melakukan probe runtime nyata ke Windows CryptProtectData in-memory (dengan cache sesi).
     Mengembalikan True jika DPAPI aktif dan sehat, False jika gagal/non-Windows.
     NOL HARDCODE: 100% murni probe dinamis.
     """
+    global _DPAPI_SUPPORTED_CACHE
     if sys.platform != "win32":
         return False
+    unmocked = (
+        getattr(_dpapi_protect, "__module__", "") == __name__
+        and getattr(_dpapi_unprotect, "__module__", "") == __name__
+    )
+    if unmocked and _DPAPI_SUPPORTED_CACHE is not None:
+        return _DPAPI_SUPPORTED_CACHE
     try:
         test_probe = b"myserver_dpapi_runtime_probe"
         enc = _dpapi_protect(test_probe)
         dec = _dpapi_unprotect(enc)
-        return dec == test_probe
+        res = (dec == test_probe)
+        if unmocked:
+            _DPAPI_SUPPORTED_CACHE = res
+        return res
     except Exception:
+        if unmocked:
+            _DPAPI_SUPPORTED_CACHE = False
         return False
 
 def get_base_dir():
@@ -735,11 +751,36 @@ def migrate_config_schema(cfg):
     return cfg, modified
 
 
+_config_mem_cache = None
+_dynamic_remote_info_lock = threading.Lock()
+_dynamic_remote_info_cache = {}  # cache_key -> (ts_mono, result_dict_or_none)
+
+
+def _is_native_config_io():
+    return (
+        getattr(open, "__module__", "io") in ("io", "_io", "builtins")
+        and getattr(os.path.exists, "__module__", "posixpath") in ("genericpath", "posixpath", "ntpath")
+        and getattr(os.stat, "__module__", "os") in ("posix", "nt", "os")
+        and getattr(json.load, "__module__", "json") == "json"
+    )
+
+
 def load_or_create_config():
+    global _config_mem_cache
     with _config_lock:
         base_dir = get_base_dir()
         config_path = os.path.join(base_dir, "config.json")
         bak_path = os.path.join(base_dir, "config.json.bak")
+        native_io = _is_native_config_io()
+
+        if native_io and _config_mem_cache is not None and _config_mem_cache.get("path") == config_path:
+            try:
+                st = os.stat(config_path)
+                if st.st_size > 0 and st.st_mtime_ns == _config_mem_cache.get("mtime_ns") and st.st_size == _config_mem_cache.get("size"):
+                    return copy.deepcopy(_config_mem_cache["cfg"])
+            except OSError:
+                _config_mem_cache = None
+
         cfg = None
         loaded_from_bak = False
 
@@ -771,11 +812,28 @@ def load_or_create_config():
         if modified or loaded_from_bak:
             save_config(cfg)
 
+        if native_io:
+            try:
+                st = os.stat(config_path)
+                if st.st_size > 0:
+                    _config_mem_cache = {
+                        "path": config_path,
+                        "mtime_ns": st.st_mtime_ns,
+                        "size": st.st_size,
+                        "cfg": copy.deepcopy(cfg),
+                    }
+            except OSError:
+                _config_mem_cache = None
+
         return cfg
 
 
 def save_config(config):
+    global _config_mem_cache
     with _config_lock:
+        _config_mem_cache = None
+        with _dynamic_remote_info_lock:
+            _dynamic_remote_info_cache.clear()
         base_dir = get_base_dir()
         config_path = os.path.join(base_dir, "config.json")
         bak_path = os.path.join(base_dir, "config.json.bak")
@@ -809,6 +867,19 @@ def save_config(config):
                     shutil.copy2(config_path, bak_path)
                 except Exception:
                     pass
+
+            if _is_native_config_io() and isinstance(config, dict):
+                try:
+                    st = os.stat(config_path)
+                    if st.st_size > 0:
+                        _config_mem_cache = {
+                            "path": config_path,
+                            "mtime_ns": st.st_mtime_ns,
+                            "size": st.st_size,
+                            "cfg": copy.deepcopy(config),
+                        }
+                except OSError:
+                    _config_mem_cache = None
         except Exception:
             try:
                 if os.path.exists(tmp_path):
@@ -818,7 +889,11 @@ def save_config(config):
 
 
 def reset_config():
+    global _config_mem_cache
     with _config_lock:
+        _config_mem_cache = None
+        with _dynamic_remote_info_lock:
+            _dynamic_remote_info_cache.clear()
         base_dir = get_base_dir()
         for fname in ("config.json", "config.json.bak", "config.json.tmp"):
             p = os.path.join(base_dir, fname)
@@ -919,12 +994,14 @@ def check_server_ping(url, timeout=1.5):
                 )
                 with urllib.request.urlopen(req, timeout=eff_timeout, context=ctx) as response:
                     lat_ms = max(1, int((time.time() - t_req) * 1000))
+                    if response.status >= 500:
+                        return False, 0
                     if response.status in (200, 204, 301, 302, 307, 308):
                         return True, lat_ms
             except urllib.error.HTTPError as he:
                 lat_ms = max(1, int((time.time() - t_req) * 1000))
-                # Kode 520-530 (Cloudflare Error 1033 / Origin Unreachable) menandakan origin mati!
-                if he.code in (520, 521, 522, 523, 524, 530):
+                # Kode 5xx (termasuk 500/502/503/504 dan Cloudflare 520-530) menandakan origin/gateway gagal!
+                if he.code >= 500:
                     return False, 0
                 # Respon aplikasi nyata dari web server origin:
                 if he.code in (200, 204, 301, 302, 307, 308, 401, 403, 404, 405):
@@ -932,55 +1009,120 @@ def check_server_ping(url, timeout=1.5):
             except Exception:
                 pass
 
-        # Jika TCP Lapis 1 OK, laporkan True dengan latensi socket
+        # Untuk domain publik, jangan pernah fallback True hanya dari TCP socket jika HTTP(S) gagal
+        if is_domain:
+            return False, 0
+
+        # Jika TCP Lapis 1 OK pada rute LAN/lokal, laporkan True dengan latensi socket
         lat_ms = max(1, int((time.time() - t0) * 1000))
         return True, lat_ms
     except Exception:
         return False, 0
 
 
-_VIRTUAL_ADAPTER_PREFIXES = {
+_BASE_VIRTUAL_ADAPTER_PREFIXES = frozenset({
     "172.24.", "172.25.",   # ZeroTier Network subnets (ZeroTier standard presets)
     "172.20.", "172.21.", "172.22.", "172.23.",
     "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.", # ZeroTier standard subnets
     "10.147.", "10.244.",  # ZeroTier Class A pools
     "10.0.5.",   # ZimaOS USB / Direct Cable
     "172.17.", "172.18."   # Docker Bridge
-}
+})
+
+
+def _prefix_to_ipv4_network(pfx):
+    clean = str(pfx or "").strip().rstrip(".")
+    octets = [o for o in clean.split(".") if o]
+    if len(octets) == 2:
+        return ipaddress.IPv4Network(f"{octets[0]}.{octets[1]}.0.0/16", strict=False)
+    if len(octets) == 3:
+        return ipaddress.IPv4Network(f"{octets[0]}.{octets[1]}.{octets[2]}.0/24", strict=False)
+    return None
+
+
+_BASE_VIRTUAL_ADAPTER_NETWORKS = frozenset(
+    ipaddress.collapse_addresses(
+        [n for n in (_prefix_to_ipv4_network(p) for p in _BASE_VIRTUAL_ADAPTER_PREFIXES) if n is not None]
+    )
+)
+_VIRTUAL_ADAPTER_PREFIXES = set(_BASE_VIRTUAL_ADAPTER_PREFIXES)
+_VIRTUAL_ADAPTER_NETWORKS = set(_BASE_VIRTUAL_ADAPTER_NETWORKS)
 _VIRTUAL_ADAPTER_CACHE_TIME = 0
 
 
 def get_virtual_adapter_prefixes():
     """
-    Mengembalikan daftar prefix subnet IP yang terasosiasi dengan adapter virtual/VPN
+    Mengembalikan daftar prefix/CIDR subnet IP yang terasosiasi dengan adapter virtual/VPN
     (seperti ZeroTier One, Tailscale, TAP/TUN, Docker, Hyper-V, dsb).
-    Termasuk preset default ZeroTier (172.25.*) dan Zima Direct (10.0.5.*).
+    Menggunakan CIDR presisi (IPAddress + PrefixLength) agar adapter virtual 192.168.x.y/24
+    tidak salah menandai seluruh subnet 192.168.* sebagai virtual.
     """
-    global _VIRTUAL_ADAPTER_PREFIXES, _VIRTUAL_ADAPTER_CACHE_TIME
+    global _VIRTUAL_ADAPTER_PREFIXES, _VIRTUAL_ADAPTER_NETWORKS, _VIRTUAL_ADAPTER_CACHE_TIME
     now = time.time()
-    if now - _VIRTUAL_ADAPTER_CACHE_TIME < 300 and len(_VIRTUAL_ADAPTER_PREFIXES) > 9:
+    if _VIRTUAL_ADAPTER_CACHE_TIME and (now - _VIRTUAL_ADAPTER_CACHE_TIME) < 300:
         return _VIRTUAL_ADAPTER_PREFIXES
 
-    prefixes = set(_VIRTUAL_ADAPTER_PREFIXES)
+    prefixes = set(_BASE_VIRTUAL_ADAPTER_PREFIXES)
+    networks = set(_BASE_VIRTUAL_ADAPTER_NETWORKS)
     if sys.platform == "win32":
         try:
             import subprocess
-            cmd = "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -match 'ZeroTier|Tailscale|TAP|TUN|VPN|WireGuard|Virtual|Hyper-V|vEthernet' } | Select-Object -ExpandProperty IPAddress"
+            cmd = (
+                "Get-NetIPAddress -AddressFamily IPv4 | "
+                "Where-Object { $_.InterfaceAlias -match 'ZeroTier|Tailscale|TAP|TUN|VPN|WireGuard|Virtual|Hyper-V|vEthernet' } | "
+                "Select-Object IPAddress,PrefixLength | ConvertTo-Json -Compress"
+            )
             out = subprocess.check_output(
                 ["powershell", "-NoProfile", "-Command", cmd],
                 text=True,
                 timeout=1.5,
                 creationflags=0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
             )
-            for line in out.splitlines():
-                ip = line.strip()
-                if ip and not ip.startswith("169.254.") and not ip.startswith("127."):
-                    parts = ip.split(".")
-                    if len(parts) >= 2:
-                        prefixes.add(f"{parts[0]}.{parts[1]}.")
+            items = []
+            raw_out = (out or "").strip()
+            if raw_out and raw_out.lower() != "null":
+                try:
+                    parsed_json = json.loads(raw_out)
+                    if isinstance(parsed_json, dict):
+                        items = [parsed_json]
+                    elif isinstance(parsed_json, list):
+                        items = parsed_json
+                except Exception:
+                    for line in raw_out.splitlines():
+                        tok = line.strip()
+                        if not tok:
+                            continue
+                        if "/" in tok:
+                            ip_part, plen_part = tok.split("/", 1)
+                            items.append({"IPAddress": ip_part.strip(), "PrefixLength": plen_part.strip()})
+                        else:
+                            items.append({"IPAddress": tok, "PrefixLength": 24})
+
+            for entry in items:
+                if not isinstance(entry, dict):
+                    continue
+                ip_str = str(entry.get("IPAddress") or "").strip()
+                plen_raw = entry.get("PrefixLength")
+                if not ip_str:
+                    continue
+                try:
+                    ip_obj = ipaddress.IPv4Address(ip_str)
+                    if ip_obj.is_loopback or ip_obj.is_link_local:
+                        continue
+                    plen_int = int(plen_raw) if plen_raw is not None else 24
+                    if not (1 <= plen_int <= 32):
+                        continue
+                    net = ipaddress.IPv4Network(f"{ip_obj}/{plen_int}", strict=False)
+                    if net.is_loopback or net.is_link_local:
+                        continue
+                    networks.add(net)
+                    prefixes.add(str(net))
+                except Exception:
+                    continue
         except Exception:
             pass
 
+    _VIRTUAL_ADAPTER_NETWORKS = networks
     _VIRTUAL_ADAPTER_PREFIXES = prefixes
     _VIRTUAL_ADAPTER_CACHE_TIME = now
     return _VIRTUAL_ADAPTER_PREFIXES
@@ -1061,8 +1203,23 @@ def classify_connection_priority(conn_or_url):
                 pass
 
             virtual_prefixes = get_virtual_adapter_prefixes()
+            if isinstance(ip_obj, ipaddress.IPv4Address):
+                nets_to_check = (
+                    _VIRTUAL_ADAPTER_NETWORKS
+                    if getattr(get_virtual_adapter_prefixes, "__module__", "") == __name__
+                    else _BASE_VIRTUAL_ADAPTER_NETWORKS
+                )
+                for net in nets_to_check:
+                    if ip_obj in net:
+                        return 3, "Zima"
             for vp in virtual_prefixes:
-                if ip_str.startswith(vp):
+                if "/" in vp and isinstance(ip_obj, ipaddress.IPv4Address):
+                    try:
+                        if ip_obj in ipaddress.ip_network(vp, strict=False):
+                            return 3, "Zima"
+                    except ValueError:
+                        pass
+                elif ip_str.startswith(vp):
                     return 3, "Zima"
 
             # E. Subnet LAN Fisik Standar (192.168.x.x)
@@ -1106,17 +1263,39 @@ def get_dynamic_remote_info(server, config=None):
     srv_et_vip = (server.get("easytier_virtual_ip") or "").strip()
     srv_rid = (server.get("remote_id") or server.get("zerotier_network_id") or "").strip().lower()
     srv_name = (server.get("name") or "").strip()
+    srv_id = (server.get("id") or "").strip()
 
     # Cek EasyTier jika modul tersedia
     et_peer_ip = None
     et_running = False
     daemon_matches_server = False
+    mgr = None
+    running_rid = ""
+    unmocked_et = False
     try:
         import easytier_manager
         mgr = easytier_manager.get_easytier_manager()
+        unmocked_et = (
+            getattr(mgr.is_running, "__module__", "") == "easytier_manager"
+            and getattr(mgr.get_peer_ip, "__module__", "") == "easytier_manager"
+            and getattr(mgr.is_peer_reachable, "__module__", "") == "easytier_manager"
+        )
         et_running = mgr.is_running()
         if et_running:
             running_rid = (mgr.get_remote_id() or "").strip().lower()
+    except Exception:
+        mgr = None
+
+    cache_key = (srv_id, r_mode, srv_rid, srv_et_vip, srv_zt_vip, srv_name, bool(et_running), running_rid)
+    if unmocked_et:
+        now_m = time.monotonic()
+        with _dynamic_remote_info_lock:
+            cached = _dynamic_remote_info_cache.get(cache_key)
+            if cached is not None and (now_m - cached[0]) < 2.0:
+                return dict(cached[1]) if isinstance(cached[1], dict) else None
+
+    if mgr is not None and et_running:
+        try:
             # Daemon hanya cocok jika server tidak menetapkan remote_id atau remote_id-nya sama persis
             daemon_matches_server = bool(not srv_rid or not running_rid or srv_rid == running_rid)
             if daemon_matches_server:
@@ -1124,17 +1303,18 @@ def get_dynamic_remote_info(server, config=None):
                     et_peer_ip = mgr.get_peer_ip(target_ip=srv_et_vip) or srv_et_vip
                 else:
                     et_peer_ip = mgr.get_peer_ip(target_hostname=srv_name)
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     # Prioritaskan IP spesifik server jika sudah didefinisikan, jika tidak gunakan peer terdeteksi
     chosen_et_ip = srv_et_vip or (et_peer_ip if daemon_matches_server else None)
 
+    result = None
     # 1. Jika mode paksa easytier
     if r_mode == "easytier":
         final_ip = chosen_et_ip
         if final_ip:
-            return {
+            result = {
                 "engine": "easytier",
                 "name": "EasyTier Remote (P2P)",
                 "ip": final_ip,
@@ -1142,69 +1322,65 @@ def get_dynamic_remote_info(server, config=None):
                 "badge": "P2P"
             }
         elif et_running:
-            return {
+            result = {
                 "engine": "easytier",
                 "name": "EasyTier Remote (P2P)",
                 "ip": "",
                 "url": "",
                 "badge": "Connecting"
             }
-        return None
-
     # 2. Jika mode paksa zerotier
-    if r_mode == "zerotier":
+    elif r_mode == "zerotier":
         if srv_zt_vip:
-            return {
+            result = {
                 "engine": "zerotier",
                 "name": "ZeroTier Remote (P2P)",
                 "ip": srv_zt_vip,
                 "url": f"http://{srv_zt_vip}",
                 "badge": "P2P"
             }
-        return None
+    else:
+        # 3. Mode AUTO FAILOVER (Default: EasyTier Utama -> ZeroTier Cadangan)
+        # EasyTier hanya dipromosikan jika daemon aktif, cocok dengan jaringan server ini,
+        # DAN server peer terhubung / dapat dijangkau
+        et_healthy = False
+        if mgr is not None and et_running and daemon_matches_server and chosen_et_ip:
+            try:
+                et_healthy = mgr.is_peer_reachable(chosen_et_ip, timeout=0.3)
+            except Exception:
+                et_healthy = False
 
-    # 3. Mode AUTO FAILOVER (Default: EasyTier Utama -> ZeroTier Cadangan)
-    # EasyTier hanya dipromosikan jika daemon aktif, cocok dengan jaringan server ini,
-    # DAN server peer terhubung / dapat dijangkau
-    et_healthy = False
-    if et_running and daemon_matches_server and chosen_et_ip:
-        try:
-            import easytier_manager
-            mgr = easytier_manager.get_easytier_manager()
-            et_healthy = mgr.is_peer_reachable(chosen_et_ip, timeout=0.3)
-        except Exception:
-            et_healthy = False
+        if et_running and et_healthy and chosen_et_ip:
+            result = {
+                "engine": "easytier",
+                "name": "EasyTier Remote (P2P)",
+                "ip": chosen_et_ip,
+                "url": f"http://{chosen_et_ip}",
+                "badge": "P2P"
+            }
+        elif srv_zt_vip:
+            # Fallback OTOMATIS ke ZeroTier jika EasyTier tidak aktif atau server peer EasyTier tidak merespons
+            result = {
+                "engine": "zerotier",
+                "name": "ZeroTier Remote (P2P)",
+                "ip": srv_zt_vip,
+                "url": f"http://{srv_zt_vip}",
+                "badge": "Fallback" if et_running else "P2P"
+            }
+        elif chosen_et_ip:
+            # Jika ZeroTier juga tidak ada, kembalikan EasyTier jika server memiliki virtual IP terkonfigurasi atau peer cocok
+            result = {
+                "engine": "easytier",
+                "name": "EasyTier Remote (P2P)",
+                "ip": chosen_et_ip,
+                "url": f"http://{chosen_et_ip}",
+                "badge": "P2P" if (et_running and daemon_matches_server and et_healthy) else "Offline"
+            }
 
-    if et_running and et_healthy and chosen_et_ip:
-        return {
-            "engine": "easytier",
-            "name": "EasyTier Remote (P2P)",
-            "ip": chosen_et_ip,
-            "url": f"http://{chosen_et_ip}",
-            "badge": "P2P"
-        }
-
-    # Fallback OTOMATIS ke ZeroTier jika EasyTier tidak aktif atau server peer EasyTier tidak merespons
-    if srv_zt_vip:
-        return {
-            "engine": "zerotier",
-            "name": "ZeroTier Remote (P2P)",
-            "ip": srv_zt_vip,
-            "url": f"http://{srv_zt_vip}",
-            "badge": "Fallback" if et_running else "P2P"
-        }
-
-    # Jika ZeroTier juga tidak ada, kembalikan EasyTier jika server memiliki virtual IP terkonfigurasi atau peer cocok
-    if chosen_et_ip:
-        return {
-            "engine": "easytier",
-            "name": "EasyTier Remote (P2P)",
-            "ip": chosen_et_ip,
-            "url": f"http://{chosen_et_ip}",
-            "badge": "P2P" if (et_running and daemon_matches_server and et_healthy) else "Offline"
-        }
-
-    return None
+    if unmocked_et:
+        with _dynamic_remote_info_lock:
+            _dynamic_remote_info_cache[cache_key] = (time.monotonic(), dict(result) if isinstance(result, dict) else None)
+    return result
 
 
 def resolve_target_connection(config, check_network=True, current_loaded_url=None, target_server=None):

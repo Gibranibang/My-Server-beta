@@ -429,6 +429,9 @@ export interface WizardCommitServerPayload {
   password: string
   sshUser?: string
   setActive?: boolean
+  zerotierNetworkId?: string
+  zerotierVirtualIp?: string
+  easytierVirtualIp?: string
 }
 
 export interface WizardCommitServerResult {
@@ -488,6 +491,7 @@ export interface WizardDraft {
   serverName: string
   zerotierNetworkId: string
   zerotierIp: string
+  easytierVirtualIp: string
   step1And3Done: boolean
   backendSource: BackendDeploySource
   backendInstalled: boolean

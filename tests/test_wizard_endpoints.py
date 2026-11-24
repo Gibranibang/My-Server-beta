@@ -573,6 +573,64 @@ class WizardEndpointsTests(unittest.TestCase):
         self.assertEqual(b_app.get("remote_port"), "8443")
         self.assertIs(b_app.get("remote_https"), True)
 
+    def test_wizard_commit_server_sets_active_connection_preserves_custom_routes_and_invalidates_cache(self):
+        cfg = config_manager.get_default_config()
+        cfg["active_server_id"] = "srv_custom"
+        cfg["servers"] = [
+            {
+                "id": "srv_custom",
+                "name": "Existing NAS",
+                "active_connection": "conn_custom_ts",
+                "active_connection_id": "stale_wrong_key",
+                "connections": [
+                    {"id": "conn_lan", "name": "Kantor LAN", "type": "lan", "url": "http://192.168.1.10:80"},
+                    {"id": "conn_wan", "name": "DDNS Utama", "type": "domain", "url": "https://old.nas.example.com"},
+                    {"id": "conn_custom_ts", "name": "Tailscale Mesh", "type": "custom", "url": "http://100.64.0.9:80"},
+                ],
+                "profiles": ["Admin"],
+                "active_profile": "Admin",
+                "credentials": {
+                    "Admin": {
+                        "username": "admin",
+                        "password": config_manager.encrypt_credential("OldPass!123"),
+                    }
+                },
+            }
+        ]
+        self._write_disk_config(cfg)
+
+        payload = {
+            "serverId": "srv_custom",
+            "name": "Existing NAS Updated",
+            "localUrl": "192.168.1.77:80",
+            "wanUrl": "https://new.nas.example.com",
+            "username": "admin",
+        }
+
+        with patch.object(core, "invalidate_active_route_cache", wraps=core.invalidate_active_route_cache) as inv_spy, \
+             patch.object(core, "_clear_backend_http_pool", wraps=core._clear_backend_http_pool) as pool_spy:
+            status, body = self._request_json("POST", "/api/wizard/commit_server", payload)
+
+        self.assertEqual(status, 200)
+        self.assertIs(body.get("success"), True)
+        self.assertGreaterEqual(inv_spy.call_count, 1)
+        self.assertGreaterEqual(pool_spy.call_count, 1)
+
+        disk = self._read_disk_config()
+        srv = disk["servers"][0]
+        self.assertNotIn("active_connection_id", srv)
+        self.assertEqual(srv.get("active_connection"), "conn_custom_ts")
+
+        conns = srv.get("connections", [])
+        self.assertEqual(len(conns), 3)
+        by_id = {c["id"]: c for c in conns}
+        self.assertEqual(by_id["conn_lan"]["name"], "Kantor LAN")
+        self.assertEqual(by_id["conn_lan"]["url"], "http://192.168.1.77:80")
+        self.assertEqual(by_id["conn_wan"]["name"], "DDNS Utama")
+        self.assertEqual(by_id["conn_wan"]["url"], "https://new.nas.example.com")
+        self.assertEqual(by_id["conn_custom_ts"]["url"], "http://100.64.0.9:80")
+        self.assertEqual(by_id["conn_custom_ts"]["type"], "custom")
+
 
 if __name__ == "__main__":
     unittest.main()

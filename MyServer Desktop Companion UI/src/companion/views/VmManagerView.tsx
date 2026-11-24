@@ -26,7 +26,7 @@ import {
   Zap,
 } from "lucide-react"
 import { getTranslation } from "../i18n"
-import { useCompanion, useNotice } from "../store"
+import { errorText, useCompanion, useNotice } from "../store"
 import { getCompanionApi } from "../api"
 import { Button, Card, Chip, IconBadge, Mono, StatusDot, cx } from "../ui"
 import { ViewBody, type ViewProps } from "./shared"
@@ -392,13 +392,26 @@ export default function VmManagerView({ go }: ViewProps) {
       } catch {}
     }
     if (syncRemote && api.saveVms) {
-      return api.saveVms(updatedVms).catch((err) => {
-        console.warn("[VmManagerView] saveVms error:", err)
-        return null
-      })
+      return api.saveVms(updatedVms)
+        .then((res: any) => {
+          if (res && (res.status === "error" || res.success === false)) {
+            const msg =
+              res.message ||
+              res.error ||
+              (language === "id" ? "Gagal menyimpan perubahan VM." : "Failed to save VM changes.")
+            notify(msg, "danger")
+            return { status: "error", success: false, message: msg }
+          }
+          return res
+        })
+        .catch((err) => {
+          console.warn("[VmManagerView] saveVms error:", err)
+          notify(errorText(err, language), "danger")
+          return null
+        })
     }
     return Promise.resolve({ status: "ok", success: true })
-  }, [api])
+  }, [api, language, notify])
 
   // Helper atomik untuk menyimpan perubahan VM tunggal ke Core Service & ZimaOS dengan rollback jika gagal
   const persistSingleVmPatch = useCallback(
@@ -456,7 +469,7 @@ export default function VmManagerView({ go }: ViewProps) {
 
       if (!api.updateVm) {
         const res = await persistVmChanges(updatedList, true)
-        return Boolean(!res || res.status !== "error")
+        return Boolean(res && res.status !== "error" && res.success !== false)
       }
 
       const rollback = (errMsg: string) => {
@@ -975,6 +988,7 @@ export default function VmManagerView({ go }: ViewProps) {
   // Delete execution dengan Immediate Removal & Anti-Zombie 60s Tombstone
   const handleDeleteConfirm = async () => {
     if (!vmToDelete || isDeletingVm) return
+    const deletedVmSnapshot = vmToDelete
     const targetId = vmToDelete.id
     const targetScope = vmToDelete.scope || "server"
     const targetServerId = vmToDelete.serverId
@@ -1002,13 +1016,43 @@ export default function VmManagerView({ go }: ViewProps) {
     // 3. Eksekusi API Delete ke Core Service & server ZimaOS secara asynchronous
     try {
       if (api.deleteVm) {
-        await api.deleteVm(targetId, targetScope, targetServerId)
+        const delRes = await api.deleteVm(targetId, targetScope, targetServerId)
+        if (delRes && (delRes.status === "error" || delRes.success === false)) {
+          throw new Error(
+            delRes.message ||
+              delRes.error ||
+              (language === "id" ? `Gagal menghapus ${targetName} di server.` : `Failed to delete ${targetName} on server.`)
+          )
+        }
       }
       notify(language === "id" ? `${targetName} berhasil dihapus.` : `${targetName} deleted successfully.`, "neutral")
+      // Pertahankan tombstone selama 60 detik (selaras dengan backend) untuk mencegah zombie VM
+      setTimeout(() => {
+        pendingDeleteIdsRef.current.delete(targetId)
+      }, 60000)
     } catch (err) {
       console.warn("[VmManagerView] deleteVm error:", err)
-      notify(language === "id" ? `Gagal menghapus ${targetName} di server.` : `Failed to delete ${targetName} on server.`, "danger")
       pendingDeleteIdsRef.current.delete(targetId)
+      setVms((prev) => {
+        if (prev.some((v) => v.id === targetId)) return prev
+        const restored = [...prev, deletedVmSnapshot]
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("myserver_vms", JSON.stringify(restored))
+          } catch {}
+        }
+        return restored
+      })
+      notify(
+        err instanceof Error && err.message
+          ? err.message
+          : typeof err === "string" && err
+          ? err
+          : language === "id"
+          ? `Gagal menghapus ${targetName} di server.`
+          : `Failed to delete ${targetName} on server.`,
+        "danger"
+      )
       syncVmsFromBackend()
     } finally {
       setIsDeletingVm(false)
@@ -1017,10 +1061,6 @@ export default function VmManagerView({ go }: ViewProps) {
         next.delete(targetId)
         return next
       })
-      // Pertahankan tombstone selama 60 detik (selaras dengan backend) untuk mencegah zombie VM
-      setTimeout(() => {
-        pendingDeleteIdsRef.current.delete(targetId)
-      }, 60000)
     }
   }
 
@@ -1245,10 +1285,18 @@ export default function VmManagerView({ go }: ViewProps) {
           diskTotalBytes: null,
         },
       }
+      const previousVms = vmsRef.current
       pendingCreatedVmsRef.current.set(targetId, { expiresAt: Date.now() + 15000, vm: newVm })
       recordPendingMutation(targetId, newVm, 15000)
-      const nextList = [...vms, newVm]
-      pendingInitialSave = persistVmChanges(nextList, true)
+      const nextList = [...previousVms, newVm]
+      const saveRes = await persistVmChanges(nextList, true)
+      if (!saveRes || saveRes.status === "error" || saveRes.success === false) {
+        pendingCreatedVmsRef.current.delete(targetId)
+        pendingMutationsRef.current.delete(targetId)
+        persistVmChanges(previousVms, false)
+        return
+      }
+      pendingInitialSave = Promise.resolve(saveRes)
       notify(language === "id" ? `${finalName} berhasil ditambahkan!` : `${finalName} added successfully!`, "success")
       setIsAddingVm(false)
     }
@@ -1470,9 +1518,31 @@ export default function VmManagerView({ go }: ViewProps) {
     )
     notify(language === "id" ? `Siklus selesai! Limit 8 jam ${vm.name} berhasil di-reset ke 0.` : `Cycle complete! 8-hour limit for ${vm.name} reset to 0.`, "success")
   }
+  const scheduleHandlersRef = useRef({
+    handleImmediateResetCycle,
+    handleTogglePower,
+    notify,
+    language,
+    api,
+  })
+  scheduleHandlersRef.current = {
+    handleImmediateResetCycle,
+    handleTogglePower,
+    notify,
+    language,
+    api,
+  }
+
   // Active Auto-Restart Scheduler Worker Loop
   useEffect(() => {
     const checkSchedules = () => {
+      const {
+        handleImmediateResetCycle: runReset,
+        handleTogglePower: runToggle,
+        notify: emitNotice,
+        language: activeLang,
+        api: activeApi,
+      } = scheduleHandlersRef.current
       const now = Date.now()
       const nowDate = new Date()
       const currentHours = String(nowDate.getHours()).padStart(2, "0")
@@ -1504,7 +1574,7 @@ export default function VmManagerView({ go }: ViewProps) {
           }
           if (shouldWake) {
             if (vm.provider === "instabox") {
-              api.wakeInstaBoxVm({
+              activeApi.wakeInstaBoxVm({
                 apiKey: vm.apiKey,
                 machineId: vm.machineId || (vm.sshUser?.startsWith("m_") ? vm.sshUser : undefined),
                 vmId: vm.id,
@@ -1517,8 +1587,8 @@ export default function VmManagerView({ go }: ViewProps) {
                       item.id === vm.id ? { ...item, status: "sleeping", sleepingSince: Date.now() } : item
                     )
                   )
-                  notify(
-                    language === "id"
+                  emitNotice(
+                    activeLang === "id"
                       ? `[Auto-On] Gagal membangunkan ${vm.name}: ${res.message || "Error"}`
                       : `[Auto-On] Failed to wake ${vm.name}: ${res.message || "Error"}`,
                     "danger"
@@ -1542,8 +1612,8 @@ export default function VmManagerView({ go }: ViewProps) {
                   : item
               )
             )
-            notify(
-              language === "id"
+            emitNotice(
+              activeLang === "id"
                 ? `[Auto-On] Membangunkan ${vm.name} sesuai jadwal otomatis!`
                 : `[Auto-On] Waking up ${vm.name} per automatic schedule!`,
               "success"
@@ -1609,11 +1679,16 @@ export default function VmManagerView({ go }: ViewProps) {
                 : item
             )
           )
-          notify(language === "id" ? `[Auto-Restart] Menjalankan jadwal otomatis untuk ${vm.name} (${timestampStr})` : `[Auto-Restart] Executing automatic schedule for ${vm.name} (${timestampStr})`, "info")
+          emitNotice(
+            activeLang === "id"
+              ? `[Auto-Restart] Menjalankan jadwal otomatis untuk ${vm.name} (${timestampStr})`
+              : `[Auto-Restart] Executing automatic schedule for ${vm.name} (${timestampStr})`,
+            "info"
+          )
           if (vm.provider === "instabox") {
-            handleImmediateResetCycle(vm)
+            runReset(vm)
           } else {
-            handleTogglePower(vm)
+            runToggle(vm)
           }
         }
       })

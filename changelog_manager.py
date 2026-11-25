@@ -12,6 +12,23 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.9.0",
+        "channel": "Beta",
+        "date": "2026-11-25",
+        "title": "Windows Explorer HTTP Copy-Paste & Floating Transfer Window (Backend v1.6.0)",
+        "notes": [
+            "Windows Explorer HTTP Copy-Paste (`CTRL+ALT+C` / `CTRL+ALT+V` & HKCU Context Menu): Menambahkan hook keyboard `WH_KEYBOARD_LL` terisolasi khusus `CabinetWClass`/`ExploreWClass` (`explorer_hook.rs`), pembacaan tab aktif Windows 11 3-tab via STA COM `IOleWindow::GetWindow()` (`explorer_tab_reader.py`), serta verb klik kanan Explorer `Copy via MyServer (HTTP)` dan `Paste via MyServer (HTTP)` untuk file, folder, maupun background.",
+            "Mesin Transfer HTTP Berbasis Sesi & Anti-Overwrite (`http_transfer_manager.py`, Backend v1.6.0): Mendukung unduh/unggah rekursif paralel (3 worker), resume `.myserver-part.*`, penanganan konflik `Timpa` / `Simpan keduanya` / `Lewati` + `Terapkan ke semua`, header `Content-Disposition` RFC 5987 UTF-8, serta sinkronisasi clipboard lintas sesi via SSE `desktop_clipboard_copy` (`explorer.html` & `FilesView`).",
+            "Floating Transfer Window (`TransferWindow.tsx`, `400x560`): Jendela transfer mengambang non-modal bergaya Setup Wizard dengan 3 mode (*Progress* real-time Pause/Resume/Cancel, *Conflict Prompt*, dan *Quick Picker* saat `Z:\\` offline) serta toggle pengaturan & fallback *Browse HTTP*."
+        ],
+        "features": [
+            "Scoped WH_KEYBOARD_LL Hotkeys (CTRL+ALT+C / CTRL+ALT+V) & Windows 11 Multi-Tab COM Reader",
+            "HKCU Explorer Context Menu Copy/Paste Verbs & Targeted SHChangeNotify Refresh",
+            "Parallel HTTP Transfer Engine with Conflict Resolution & RFC 5987 Unicode Filenames",
+            "Floating Transfer Window (Progress, Conflict Prompt & Offline Quick Picker) + Web/UI Clipboard SSE"
+        ]
+    },
+    {
         "version": "4.8.0",
         "channel": "Beta",
         "date": "2026-11-25",

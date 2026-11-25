@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.9.0 - Beta] - 2026-11-25
+
+- Windows Explorer HTTP Copy-Paste (`CTRL+ALT+C` / `CTRL+ALT+V` & HKCU Context Menu): Menambahkan hook keyboard `WH_KEYBOARD_LL` terisolasi khusus `CabinetWClass`/`ExploreWClass` (`explorer_hook.rs`), pembacaan tab aktif Windows 11 3-tab via STA COM `IOleWindow::GetWindow()` (`explorer_tab_reader.py`), serta verb klik kanan Explorer `Copy via MyServer (HTTP)` dan `Paste via MyServer (HTTP)` untuk file, folder, maupun background.
+- Mesin Transfer HTTP Berbasis Sesi & Anti-Overwrite (`http_transfer_manager.py`, Backend v1.6.0): Mendukung unduh/unggah rekursif paralel (3 worker), resume `.myserver-part.*`, penanganan konflik `Timpa` / `Simpan keduanya` / `Lewati` + `Terapkan ke semua`, header `Content-Disposition` RFC 5987 UTF-8, serta sinkronisasi clipboard lintas sesi via SSE `desktop_clipboard_copy` (`explorer.html` & `FilesView`).
+- Floating Transfer Window (`TransferWindow.tsx`, `400x560`): Jendela transfer mengambang non-modal bergaya Setup Wizard dengan 3 mode (*Progress* real-time Pause/Resume/Cancel, *Conflict Prompt*, dan *Quick Picker* saat `Z:\` offline) serta toggle pengaturan & fallback *Browse HTTP*.
+
 ## [v4.8.0 - Beta] - 2026-11-25
 
 - Public Share Link Roles (`view` & `upload_edit`, Backend v1.5.0): Tautan publik kini mendukung peran terpisah *View Only* vs *Upload & Edit* (unggah file/folder, buat folder, dan hapus item hasil unggahan sendiri via cookie sesi HMAC-SHA256 `myserver_uploader_sid` dengan isolasi *ownership* rekursif, anti-overwrite `_UPLOAD_RENAME_LOCK`, serta penegakan peran pada seluruh endpoint `/api/share/{token}/*`).

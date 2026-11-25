@@ -1,3 +1,4 @@
+mod explorer_hook;
 mod wizard_state;
 
 use tauri::{
@@ -381,6 +382,7 @@ fn show_window(window: WebviewWindow, state: tauri::State<'_, wizard_state::Wiza
 #[tauri::command]
 fn exit_app(app_handle: AppHandle) {
     trace_log("cmd: exit_app");
+    explorer_hook::stop_explorer_hook();
     ALLOW_EXIT.store(true, Ordering::SeqCst);
     app_handle.exit(0);
 }
@@ -912,6 +914,215 @@ fn get_share_window_target(app: AppHandle) -> Option<serde_json::Value> {
     guard.clone()
 }
 
+#[derive(Default)]
+pub struct TransferWindowState(std::sync::Mutex<Option<serde_json::Value>>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExplorerTransferCliAction {
+    Copy(String),
+    Paste(String),
+}
+
+fn parse_explorer_cli_action(args: &[String]) -> Option<ExplorerTransferCliAction> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].trim();
+        if let Some(val) = arg.strip_prefix("--explorer-copy=") {
+            return sanitize_cli_share_path(val).map(ExplorerTransferCliAction::Copy);
+        }
+        if arg == "--explorer-copy" {
+            let next = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+            return sanitize_cli_share_path(next).map(ExplorerTransferCliAction::Copy);
+        }
+        if let Some(val) = arg.strip_prefix("--explorer-paste=") {
+            return sanitize_cli_share_path(val).map(ExplorerTransferCliAction::Paste);
+        }
+        if arg == "--explorer-paste" {
+            let next = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+            return sanitize_cli_share_path(next).map(ExplorerTransferCliAction::Paste);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn open_or_focus_transfer_window(
+    app: &AppHandle,
+    state_json: serde_json::Value,
+) -> Result<(), String> {
+    {
+        let state = app.state::<TransferWindowState>();
+        let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(state_json.clone());
+    }
+
+    if let Some(wv) = app.get_webview_window("transfer-window") {
+        let json_str = serde_json::to_string(&state_json)
+            .map_err(|e| format!("Gagal serialisasi state transfer: {}", e))?;
+        let _ = wv.eval(&format!(
+            "window.dispatchEvent(new CustomEvent('myserver:transfer-event', {{ detail: {} }}));",
+            json_str
+        ));
+        let _ = wv.unminimize();
+        let _ = wv.show();
+        let _ = wv.set_focus();
+        return Ok(());
+    }
+
+    let win = match WebviewWindowBuilder::new(
+        app,
+        "transfer-window",
+        WebviewUrl::App("index.html?window=transfer".into()),
+    )
+    .title("MyServer Transfer")
+    .inner_size(400.0, 560.0)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(false)
+    .center()
+    .build()
+    {
+        Ok(w) => w,
+        Err(e) => {
+            let state = app.state::<TransferWindowState>();
+            let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = None;
+            return Err(format!("Gagal membuka transfer-window: {}", e));
+        }
+    };
+
+    set_window_taskbar_icon(&win);
+    let _ = win.show();
+    let _ = win.set_focus();
+    Ok(())
+}
+
+async fn handle_explorer_transfer_cli_action(
+    app: AppHandle,
+    action: ExplorerTransferCliAction,
+    wait_for_core: bool,
+) {
+    if wait_for_core {
+        let ready = wait_for_core_service_ready(15000).await;
+        if !ready {
+            trace_log("handle_explorer_transfer_cli_action: Core Service not ready within 15000ms");
+            return;
+        }
+    }
+
+    let (endpoint, payload) = match action {
+        ExplorerTransferCliAction::Copy(path) => (
+            "transfer/copy".to_string(),
+            serde_json::json!({ "source": "context_menu", "paths": [path] }),
+        ),
+        ExplorerTransferCliAction::Paste(path) => (
+            "transfer/paste".to_string(),
+            serde_json::json!({ "source": "context_menu", "dest_path": path }),
+        ),
+    };
+
+    match call_core_api(endpoint.clone(), payload).await {
+        Ok(res) => {
+            if res.get("ui_action").and_then(|v| v.as_str()) == Some("open_transfer_window") {
+                if let Err(e) = open_or_focus_transfer_window(&app, res) {
+                    trace_log(&format!("open_or_focus_transfer_window error: {}", e));
+                }
+            }
+        }
+        Err(e) => {
+            trace_log(&format!("{} call_core_api error: {}", endpoint, e));
+        }
+    }
+}
+
+fn start_explorer_hook_worker(app: AppHandle) {
+    let mut last_trigger: Option<(explorer_hook::ExplorerHotkeyAction, isize, std::time::Instant)> =
+        None;
+    explorer_hook::start_explorer_hook(move |ev| {
+        let now = std::time::Instant::now();
+        if let Some((prev_action, prev_hwnd, prev_at)) = last_trigger {
+            if prev_action == ev.action
+                && prev_hwnd == ev.fg_hwnd
+                && now.duration_since(prev_at) < std::time::Duration::from_millis(300)
+            {
+                return;
+            }
+        }
+        last_trigger = Some((ev.action, ev.fg_hwnd, now));
+
+        let app_clone = app.clone();
+        let (endpoint, payload) = match ev.action {
+            explorer_hook::ExplorerHotkeyAction::Copy => (
+                "transfer/copy".to_string(),
+                serde_json::json!({
+                    "source": "hotkey",
+                    "fg_hwnd": ev.fg_hwnd,
+                    "top_tab_hwnd": ev.top_tab_hwnd,
+                }),
+            ),
+            explorer_hook::ExplorerHotkeyAction::Paste => (
+                "transfer/paste".to_string(),
+                serde_json::json!({
+                    "source": "hotkey",
+                    "fg_hwnd": ev.fg_hwnd,
+                    "top_tab_hwnd": ev.top_tab_hwnd,
+                }),
+            ),
+        };
+
+        tauri::async_runtime::spawn(async move {
+            match call_core_api(endpoint.clone(), payload).await {
+                Ok(res) => {
+                    if res.get("ui_action").and_then(|v| v.as_str())
+                        == Some("open_transfer_window")
+                    {
+                        if let Err(e) = open_or_focus_transfer_window(&app_clone, res) {
+                            trace_log(&format!("open_or_focus_transfer_window error: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    trace_log(&format!("hotkey {} call_core_api error: {}", endpoint, e));
+                }
+            }
+        });
+    });
+}
+
+#[tauri::command]
+async fn open_transfer_window(app: AppHandle, state: serde_json::Value) -> Result<(), String> {
+    open_or_focus_transfer_window(&app, state)
+}
+
+#[tauri::command]
+fn close_transfer_window(app: AppHandle) -> Result<(), String> {
+    {
+        let state = app.state::<TransferWindowState>();
+        let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
+    if let Some(wv) = app.get_webview_window("transfer-window") {
+        wv.close()
+            .map_err(|e| format!("Gagal menutup transfer-window: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_transfer_window_state(app: AppHandle) -> Option<serde_json::Value> {
+    let state = app.state::<TransferWindowState>();
+    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    guard.clone()
+}
+
+#[tauri::command]
+fn set_explorer_hotkey_enabled(enabled: bool) -> Result<bool, String> {
+    explorer_hook::set_explorer_hotkey_enabled(enabled);
+    Ok(explorer_hook::is_explorer_hotkey_enabled())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -927,11 +1138,17 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(wizard_state::WizardWindowState::default())
         .manage(ShareWindowState::default())
+        .manage(TransferWindowState::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             trace_log("single_instance callback triggered!");
             if let Some(action) = parse_share_cli_action(&args) {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(handle_share_cli_action(app_handle, action, true));
+                return;
+            }
+            if let Some(action) = parse_explorer_cli_action(&args) {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(handle_explorer_transfer_cli_action(app_handle, action, true));
                 return;
             }
             if let Some(win) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
@@ -1059,15 +1276,24 @@ pub fn run() {
                 .unwrap_or(true);
             trace_log(&format!("setup: should_auto_open: {}", should_auto_open));
 
+            let explorer_hotkey_enabled = cfg_opt
+                .as_ref()
+                .and_then(|val| val.get("explorer_hotkey_enabled"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            explorer_hook::set_explorer_hotkey_enabled(explorer_hotkey_enabled);
+            start_explorer_hook_worker(app.handle().clone());
+
             let raw_cli_args: Vec<String> = std::env::args().collect();
             let cli_share_action = parse_share_cli_action(&raw_cli_args);
+            let cli_explorer_action = parse_explorer_cli_action(&raw_cli_args);
 
             if open_wizard {
                 app.state::<wizard_state::WizardWindowState>().set_active(true);
                 if let Some(win) = main_win.or_else(|| app.webview_windows().into_values().next()) {
                     show_centered_wizard(&win, Some(460.0), Some(560.0));
                 }
-            } else if should_auto_open && cli_share_action.is_none() {
+            } else if should_auto_open && cli_share_action.is_none() && cli_explorer_action.is_none() {
                 if let Some(win) = main_win.or_else(|| app.webview_windows().into_values().next()) {
                     apply_position_above_taskbar(&win);
                     let win_clone = win.clone();
@@ -1088,6 +1314,15 @@ pub fn run() {
                 }
             }
 
+            if let Some(action) = cli_explorer_action {
+                if !open_wizard {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(handle_explorer_transfer_cli_action(
+                        app_handle, action, true,
+                    ));
+                }
+            }
+
             trace_log("setup hook finished successfully");
             Ok(())
         })
@@ -1096,6 +1331,13 @@ pub fn run() {
                 if window.label() == "share-window" {
                     trace_log("share-window CloseRequested -> closing share-window only");
                     let state = window.app_handle().state::<ShareWindowState>();
+                    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+                    *guard = None;
+                    return;
+                }
+                if window.label() == "transfer-window" {
+                    trace_log("transfer-window CloseRequested -> closing transfer-window only");
+                    let state = window.app_handle().state::<TransferWindowState>();
                     let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
                     *guard = None;
                     return;
@@ -1171,7 +1413,11 @@ pub fn run() {
             call_core_api,
             open_share_window,
             close_share_window,
-            get_share_window_target
+            get_share_window_target,
+            open_transfer_window,
+            close_transfer_window,
+            get_transfer_window_state,
+            set_explorer_hotkey_enabled
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

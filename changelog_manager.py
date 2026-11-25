@@ -12,6 +12,23 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.8.0",
+        "channel": "Beta",
+        "date": "2026-11-25",
+        "title": "Public Share Roles, Internal Account Sharing & Mobile-First Backend File Manager (Backend v1.5.0)",
+        "notes": [
+            "Public Share Link Roles (`view` & `upload_edit`, Backend v1.5.0): Tautan publik kini mendukung peran terpisah *View Only* vs *Upload & Edit* (unggah file/folder, buat folder, dan hapus item hasil unggahan sendiri via cookie sesi HMAC-SHA256 `myserver_uploader_sid` dengan isolasi *ownership* rekursif, anti-overwrite `_UPLOAD_RENAME_LOCK`, serta penegakan peran pada seluruh endpoint `/api/share/{token}/*`).",
+            "Internal Account-to-Account Sharing & Dual-Tab Desktop ShareWindow: Pengguna Backend kini dapat membagikan file/folder langsung ke akun internal lain dengan izin `view` atau `edit` (`/api/v1/storage/share-accounts`, `/shared-with-me`, `/account-shares`), lengkap dengan `ShareWindow` dual-tab (*Public Link* & *Backend Accounts*) di Desktop Companion serta tab *Shared with me* & aksi *Rename* di Web File Manager.",
+            "Mobile-First `explorer.html`, `/s/{token}` & Self-Hosted PDF.js: Merombak total antarmuka Web File Manager & halaman share publik dengan token tema `wizard.css` (Dark/Light), dukungan dwibahasa ID/EN, drawer & bottom-sheet mobile responsif, 100dvh Lightbox, penampil PDF mandiri berbasis `app/static/pdfjs/*` (`pdf.min.mjs` + `pdf.worker.min.mjs`) dan QR lokal `app/static/vendor/uqr.mjs` tanpa CDN eksternal, serta isolasi ketat RBAC `SECH-03`."
+        ],
+        "features": [
+            "Public Share Link Roles ('view' & 'upload_edit') with HMAC Session Uploader Ownership",
+            "Internal Account-to-Account Sharing ('view'/'edit') & Dual-Tab Desktop ShareWindow",
+            "Mobile-First explorer.html & /s/{token} UI Overhaul with Dark/Light Theme & ID/EN i18n",
+            "Self-Hosted PDF.js Viewer & Local uqr.mjs QR Generator (Zero External CDN)"
+        ]
+    },
+    {
         "version": "4.7.0",
         "channel": "Beta",
         "date": "2026-11-24",

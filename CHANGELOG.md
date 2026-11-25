@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.8.0 - Beta] - 2026-11-25
+
+- Public Share Link Roles (`view` & `upload_edit`, Backend v1.5.0): Tautan publik kini mendukung peran terpisah *View Only* vs *Upload & Edit* (unggah file/folder, buat folder, dan hapus item hasil unggahan sendiri via cookie sesi HMAC-SHA256 `myserver_uploader_sid` dengan isolasi *ownership* rekursif, anti-overwrite `_UPLOAD_RENAME_LOCK`, serta penegakan peran pada seluruh endpoint `/api/share/{token}/*`).
+- Internal Account-to-Account Sharing & Dual-Tab Desktop ShareWindow: Pengguna Backend kini dapat membagikan file/folder langsung ke akun internal lain dengan izin `view` atau `edit` (`/api/v1/storage/share-accounts`, `/shared-with-me`, `/account-shares`), lengkap dengan `ShareWindow` dual-tab (*Public Link* & *Backend Accounts*) di Desktop Companion serta tab *Shared with me* & aksi *Rename* di Web File Manager.
+- Mobile-First `explorer.html`, `/s/{token}` & Self-Hosted PDF.js: Merombak total antarmuka Web File Manager & halaman share publik dengan token tema `wizard.css` (Dark/Light), dukungan dwibahasa ID/EN, drawer & bottom-sheet mobile responsif, 100dvh Lightbox, penampil PDF mandiri berbasis `app/static/pdfjs/*` (`pdf.min.mjs` + `pdf.worker.min.mjs`) dan QR lokal `app/static/vendor/uqr.mjs` tanpa CDN eksternal, serta isolasi ketat RBAC `SECH-03`.
+
 ## [v4.7.0 - Beta] - 2026-11-24
 
 - Resolver SMB 3-Lapis & Share Proxy Terautentikasi (`smb_mount_manager.py`, `myserver_core_service.py`): Menambahkan resolver non-blocking (< 1 ms) via `WNetGetConnectionW`/`QueryDosDeviceW` dan pencocokan segmen disk Backend (mendukung `smb_source='backend'` dan `smb_source='zimaos'` dengan isolasi kredensial & cache JWT per-profil), serta 6 endpoint `/api/shares/*` yang dilindungi `X-MyServer-Core-Token`.

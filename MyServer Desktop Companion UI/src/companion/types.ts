@@ -196,6 +196,7 @@ export interface Settings {
   autoCheckUpdate?: boolean
   firstRunSetup?: boolean
   explorerContextMenuEnabled?: boolean
+  explorerHotkeyEnabled?: boolean
 }
 
 export type ChecklistKey = "lan" | "bios" | "standby"
@@ -664,3 +665,112 @@ export type MiniTrayDragDropDetail =
   | { type: "enter"; count: number }
   | { type: "drop"; paths: string[] }
   | { type: "leave" }
+
+export interface ExplorerClipboardItem {
+  path?: string
+  relative_path?: string
+  name: string
+  is_dir: boolean
+  size?: number
+}
+
+export interface ExplorerClipboardState {
+  kind: "empty" | "local" | "server"
+  items: ExplorerClipboardItem[]
+  server_id?: string
+  server_name?: string
+  copied_at?: number
+  source_origin?: string
+}
+
+export type TransferWindowMode = "progress" | "quick_picker" | "browse"
+
+export type TransferJobStatus =
+  | "idle"
+  | "scanning"
+  | "awaiting_conflict"
+  | "running"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "error"
+
+export interface TransferQueueItem {
+  id: string
+  name: string
+  relative_path?: string
+  is_dir?: boolean
+  bytes_done: number
+  bytes_total: number
+  status: "pending" | "active" | "done" | "skipped" | "error" | "cancelled"
+  error?: string
+}
+
+export type TransferConflictAction = "overwrite" | "rename" | "skip"
+
+export interface TransferConflictPrompt {
+  job_id: string
+  item_name: string
+  dest_path: string
+  is_dir: boolean
+  remaining_conflicts_hint?: number
+}
+
+export type TransferDirection = "upload" | "download" | "server_copy"
+
+export interface TransferStatusResponse {
+  success: boolean
+  ui_action?: string
+  mode?: TransferWindowMode
+  job_id?: string
+  direction?: TransferDirection
+  status: TransferJobStatus
+  dest_label?: string
+  total_files: number
+  completed_files: number
+  failed_files?: number
+  skipped_files?: number
+  bytes_done: number
+  bytes_total: number
+  speed_bps: number
+  eta_seconds?: number | null
+  active_workers: number
+  max_workers: number
+  current_item_name?: string
+  conflict?: TransferConflictPrompt | null
+  items: TransferQueueItem[]
+  clipboard?: ExplorerClipboardState
+  error?: string
+}
+
+export interface QuickPickerEntry {
+  name: string
+  relative_path: string
+  is_dir: boolean
+  size?: number
+  effective_role?: string
+  writable: boolean
+  owner_username?: string
+  is_remote?: boolean
+}
+
+export interface QuickPickerBrowseResponse {
+  success: boolean
+  server_id?: string
+  server_name?: string
+  current_path: string
+  parent_path: string
+  effective_role: string
+  writable: boolean
+  view_mode?: "disks" | "shared" | "folder"
+  items: QuickPickerEntry[]
+  needsAuth?: boolean
+  error?: string
+}
+
+export interface TransferPastePayload {
+  serverId?: string
+  destRel?: string
+  server_id?: string
+  dest_rel?: string
+}

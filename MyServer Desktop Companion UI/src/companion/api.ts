@@ -35,6 +35,15 @@ import type {
   AccountShareItem,
   AccountShareListResponse,
   AccountShareMutateResult,
+  ExplorerClipboardItem,
+  ExplorerClipboardState,
+  TransferWindowMode,
+  TransferConflictAction,
+  TransferStatusResponse,
+  QuickPickerBrowseResponse,
+  TransferPastePayload,
+  QuickPickerEntry,
+  TransferQueueItem,
 } from "./types"
 
 import { APP_VERSION, APP_CHANNEL } from "./version"
@@ -450,6 +459,49 @@ export interface CompanionApi {
 
   revokeAccountShare(grantId: number, serverId?: string): Promise<AccountShareMutateResult>
 
+  /** Phase 13: Windows Explorer HTTP Copy-Paste & Floating Transfer Window */
+  getExplorerClipboard(): Promise<ExplorerClipboardState>
+
+  copyServerItemsToClipboard(payload: {
+    serverId?: string
+    items: ExplorerClipboardItem[]
+  }): Promise<{ success: boolean; clipboard?: ExplorerClipboardState; error?: string }>
+
+  clearExplorerClipboard(): Promise<{ success: boolean }>
+
+  browseTransferDirectory(opts?: {
+    serverId?: string
+    server_id?: string
+    path?: string
+    source?: "disks" | "shared"
+  }): Promise<QuickPickerBrowseResponse>
+
+  startTransferPaste(payload: TransferPastePayload): Promise<TransferStatusResponse>
+
+  getTransferStatus(): Promise<TransferStatusResponse>
+
+  resolveTransferConflict(payload: {
+    jobId: string
+    action: TransferConflictAction
+    applyToAll?: boolean
+  }): Promise<TransferStatusResponse>
+
+  pauseTransferJob(jobId?: string): Promise<TransferStatusResponse>
+
+  resumeTransferJob(jobId?: string): Promise<TransferStatusResponse>
+
+  cancelTransferJob(jobId?: string): Promise<TransferStatusResponse>
+
+  clearTransferHistory(): Promise<{ success: boolean }>
+
+  setExplorerHotkeyEnabled(enabled: boolean): Promise<{ success: boolean; enabled: boolean; error?: string }>
+
+  openTransferWindow(initialState?: { mode?: TransferWindowMode; [key: string]: unknown }): Promise<void>
+
+  closeTransferWindow(): Promise<void>
+
+  getTransferWindowState(): Promise<Record<string, unknown> | null>
+
 }
 
 
@@ -541,6 +593,8 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCheckUpdate: true,
 
   explorerContextMenuEnabled: false,
+
+  explorerHotkeyEnabled: true,
 
 }
 
@@ -679,6 +733,45 @@ export function createMockApi(): CompanionApi {
   let powerTimer: number | undefined
 
   const powerListeners = new Set<(p: PowerState) => void>()
+
+  let mockClipboard: ExplorerClipboardState = {
+    kind: "empty",
+    items: [],
+  }
+
+  let mockTransferWindowState: Record<string, unknown> | null =
+    typeof window !== "undefined" && window.location.search.includes("window=transfer")
+      ? { mode: "progress" }
+      : null
+
+  let mockTransferSeq = 1
+  let mockTransferStatus: TransferStatusResponse = {
+    success: true,
+    mode: "progress",
+    status: "idle",
+    total_files: 0,
+    completed_files: 0,
+    failed_files: 0,
+    skipped_files: 0,
+    bytes_done: 0,
+    bytes_total: 0,
+    speed_bps: 0,
+    eta_seconds: null,
+    active_workers: 0,
+    max_workers: 3,
+    items: [],
+    clipboard: mockClipboard,
+  }
+
+  const cloneTransferStatus = (): TransferStatusResponse => ({
+    ...mockTransferStatus,
+    items: mockTransferStatus.items.map((item) => ({ ...item })),
+    conflict: mockTransferStatus.conflict ? { ...mockTransferStatus.conflict } : null,
+    clipboard: {
+      ...mockClipboard,
+      items: mockClipboard.items.map((item) => ({ ...item })),
+    },
+  })
 
 
 
@@ -1742,6 +1835,370 @@ export function createMockApi(): CompanionApi {
       }
       mockAccountShares = mockAccountShares.filter((s) => s.id !== grantId)
       return { success: true, grant_id: grantId }
+    },
+
+    async getExplorerClipboard(): Promise<ExplorerClipboardState> {
+      return {
+        ...mockClipboard,
+        items: mockClipboard.items.map((item) => ({ ...item })),
+      }
+    },
+
+    async copyServerItemsToClipboard(payload) {
+      const items = Array.isArray(payload.items)
+        ? payload.items.map((item) => ({
+            path: item.path,
+            relative_path: item.relative_path,
+            name: item.name,
+            is_dir: Boolean(item.is_dir),
+            size: item.size,
+          }))
+        : []
+      mockClipboard = {
+        kind: items.length > 0 ? "server" : "empty",
+        items,
+        server_id: payload.serverId || "srv_mock_1",
+        server_name: "Server Utama",
+        copied_at: Date.now(),
+        source_origin: "companion",
+      }
+      mockTransferStatus = {
+        ...mockTransferStatus,
+        clipboard: mockClipboard,
+      }
+      return {
+        success: true,
+        clipboard: {
+          ...mockClipboard,
+          items: mockClipboard.items.map((item) => ({ ...item })),
+        },
+      }
+    },
+
+    async clearExplorerClipboard() {
+      mockClipboard = { kind: "empty", items: [] }
+      mockTransferStatus = {
+        ...mockTransferStatus,
+        clipboard: mockClipboard,
+      }
+      return { success: true }
+    },
+
+    async browseTransferDirectory(opts) {
+      const serverId = opts?.serverId ?? opts?.server_id ?? "srv_mock_1"
+      const source = opts?.source ?? "disks"
+      const rawPath = (opts?.path ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+
+      if (source === "shared" && !rawPath) {
+        const items: QuickPickerEntry[] = [
+          {
+            name: "SharedDocs",
+            relative_path: "SharedDocs",
+            is_dir: true,
+            effective_role: "viewer",
+            writable: false,
+            owner_username: "budi",
+            is_remote: true,
+          },
+          {
+            name: "TeamProject",
+            relative_path: "TeamProject",
+            is_dir: true,
+            effective_role: "editor",
+            writable: true,
+            owner_username: "andi",
+            is_remote: true,
+          },
+        ]
+        return {
+          success: true,
+          server_id: serverId,
+          server_name: "Server Utama",
+          current_path: "",
+          parent_path: "",
+          effective_role: "viewer",
+          writable: false,
+          view_mode: "shared",
+          items,
+        }
+      }
+
+      if (!rawPath) {
+        const items: QuickPickerEntry[] = [
+          {
+            name: "DATA",
+            relative_path: "DATA",
+            is_dir: true,
+            effective_role: "owner",
+            writable: true,
+          },
+          {
+            name: "Media",
+            relative_path: "Media",
+            is_dir: true,
+            effective_role: "owner",
+            writable: true,
+          },
+        ]
+        return {
+          success: true,
+          server_id: serverId,
+          server_name: "Server Utama",
+          current_path: "",
+          parent_path: "",
+          effective_role: "owner",
+          writable: true,
+          view_mode: "disks",
+          items,
+        }
+      }
+
+      const segs = rawPath.split("/").filter(Boolean)
+      const parentPath = segs.length > 1 ? segs.slice(0, -1).join("/") : ""
+
+      if (rawPath === "SharedDocs" || rawPath.startsWith("SharedDocs/") || rawPath === "DATA/ReadOnlyViewer" || rawPath.startsWith("DATA/ReadOnlyViewer/")) {
+        return {
+          success: true,
+          server_id: serverId,
+          server_name: "Server Utama",
+          current_path: rawPath,
+          parent_path: parentPath,
+          effective_role: "viewer",
+          writable: false,
+          view_mode: "folder",
+          items: [
+            {
+              name: "Handbook.pdf",
+              relative_path: `${rawPath}/Handbook.pdf`,
+              is_dir: false,
+              size: 1024 * 512,
+              effective_role: "viewer",
+              writable: false,
+            },
+          ],
+        }
+      }
+
+      if (rawPath === "DATA") {
+        return {
+          success: true,
+          server_id: serverId,
+          server_name: "Server Utama",
+          current_path: "DATA",
+          parent_path: "",
+          effective_role: "owner",
+          writable: true,
+          view_mode: "folder",
+          items: [
+            {
+              name: "Documents",
+              relative_path: "DATA/Documents",
+              is_dir: true,
+              effective_role: "owner",
+              writable: true,
+            },
+            {
+              name: "ReadOnlyViewer",
+              relative_path: "DATA/ReadOnlyViewer",
+              is_dir: true,
+              effective_role: "viewer",
+              writable: false,
+            },
+            {
+              name: "ConflictFolder",
+              relative_path: "DATA/ConflictFolder",
+              is_dir: true,
+              effective_role: "editor",
+              writable: true,
+            },
+            {
+              name: "Report.pdf",
+              relative_path: "DATA/Report.pdf",
+              is_dir: false,
+              size: 245760,
+              effective_role: "owner",
+              writable: true,
+            },
+          ],
+        }
+      }
+
+      return {
+        success: true,
+        server_id: serverId,
+        server_name: "Server Utama",
+        current_path: rawPath,
+        parent_path: parentPath,
+        effective_role: "editor",
+        writable: true,
+        view_mode: "folder",
+        items: [
+          {
+            name: "Notes.txt",
+            relative_path: `${rawPath}/Notes.txt`,
+            is_dir: false,
+            size: 4096,
+            effective_role: "editor",
+            writable: true,
+          },
+        ],
+      }
+    },
+
+    async startTransferPaste(payload: TransferPastePayload): Promise<TransferStatusResponse> {
+      const destRel = (payload.destRel ?? payload.dest_rel ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+      const sourceItems =
+        mockClipboard.items.length > 0
+          ? mockClipboard.items
+          : [{ name: "Archive.zip", is_dir: false, size: 1024 * 1024 * 12 }]
+      const jobId = `job_mock_${mockTransferSeq++}`
+      const isConflict = destRel.toLowerCase().includes("conflict")
+      const totalBytes = sourceItems.reduce((acc, item) => acc + (item.size ?? 1024 * 512), 0)
+      const queueItems: TransferQueueItem[] = sourceItems.map((item, idx) => ({
+        id: `${jobId}_item_${idx}`,
+        name: item.name,
+        relative_path: destRel ? `${destRel}/${item.name}` : item.name,
+        is_dir: item.is_dir,
+        bytes_done: isConflict ? 0 : item.size ?? 1024 * 512,
+        bytes_total: item.size ?? 1024 * 512,
+        status: isConflict ? (idx === 0 ? "active" : "pending") : "done",
+      }))
+
+      mockTransferStatus = {
+        success: true,
+        mode: "progress",
+        job_id: jobId,
+        direction: mockClipboard.kind === "server" ? "server_copy" : "upload",
+        status: isConflict ? "awaiting_conflict" : "completed",
+        dest_label: destRel || "DATA",
+        total_files: queueItems.length,
+        completed_files: isConflict ? 0 : queueItems.length,
+        failed_files: 0,
+        skipped_files: 0,
+        bytes_done: isConflict ? 0 : totalBytes,
+        bytes_total: totalBytes,
+        speed_bps: isConflict ? 0 : 42 * 1024 * 1024,
+        eta_seconds: isConflict ? null : 0,
+        active_workers: isConflict ? 1 : 0,
+        max_workers: 3,
+        current_item_name: queueItems[0]?.name,
+        conflict: isConflict
+          ? {
+              job_id: jobId,
+              item_name: queueItems[0]?.name || "Archive.zip",
+              dest_path: destRel ? `${destRel}/${queueItems[0]?.name || "Archive.zip"}` : "Archive.zip",
+              is_dir: Boolean(queueItems[0]?.is_dir),
+              remaining_conflicts_hint: Math.max(0, queueItems.length - 1),
+            }
+          : null,
+        items: queueItems,
+        clipboard: mockClipboard,
+      }
+      return cloneTransferStatus()
+    },
+
+    async getTransferStatus(): Promise<TransferStatusResponse> {
+      return cloneTransferStatus()
+    },
+
+    async resolveTransferConflict(payload): Promise<TransferStatusResponse> {
+      const isSkip = payload.action === "skip"
+      const totalBytes = mockTransferStatus.bytes_total
+      const updatedItems: TransferQueueItem[] = mockTransferStatus.items.map((item) => ({
+        ...item,
+        bytes_done: isSkip ? 0 : item.bytes_total,
+        status: isSkip ? "skipped" : "done",
+      }))
+      mockTransferStatus = {
+        ...mockTransferStatus,
+        job_id: payload.jobId || mockTransferStatus.job_id,
+        status: "completed",
+        completed_files: isSkip ? 0 : updatedItems.length,
+        skipped_files: isSkip ? updatedItems.length : 0,
+        bytes_done: isSkip ? 0 : totalBytes,
+        speed_bps: isSkip ? 0 : 38 * 1024 * 1024,
+        eta_seconds: 0,
+        active_workers: 0,
+        conflict: null,
+        items: updatedItems,
+      }
+      return cloneTransferStatus()
+    },
+
+    async pauseTransferJob(): Promise<TransferStatusResponse> {
+      mockTransferStatus = {
+        ...mockTransferStatus,
+        status: "paused",
+        speed_bps: 0,
+        active_workers: 0,
+      }
+      return cloneTransferStatus()
+    },
+
+    async resumeTransferJob(): Promise<TransferStatusResponse> {
+      mockTransferStatus = {
+        ...mockTransferStatus,
+        status: "running",
+        speed_bps: 28 * 1024 * 1024,
+        active_workers: 2,
+      }
+      return cloneTransferStatus()
+    },
+
+    async cancelTransferJob(): Promise<TransferStatusResponse> {
+      mockTransferStatus = {
+        ...mockTransferStatus,
+        status: "cancelled",
+        speed_bps: 0,
+        active_workers: 0,
+        conflict: null,
+        items: mockTransferStatus.items.map((item) =>
+          item.status === "done" || item.status === "skipped"
+            ? item
+            : { ...item, status: "cancelled" }
+        ),
+      }
+      return cloneTransferStatus()
+    },
+
+    async clearTransferHistory() {
+      mockTransferStatus = {
+        success: true,
+        mode: "progress",
+        status: "idle",
+        total_files: 0,
+        completed_files: 0,
+        failed_files: 0,
+        skipped_files: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        speed_bps: 0,
+        eta_seconds: null,
+        active_workers: 0,
+        max_workers: 3,
+        conflict: null,
+        items: [],
+        clipboard: mockClipboard,
+      }
+      return { success: true }
+    },
+
+    async setExplorerHotkeyEnabled(enabled: boolean) {
+      const next = Boolean(enabled)
+      settings = { ...settings, explorerHotkeyEnabled: next }
+      return { success: true, enabled: next }
+    },
+
+    async openTransferWindow(initialState) {
+      mockTransferWindowState = initialState ? { ...initialState } : { mode: "progress" }
+    },
+
+    async closeTransferWindow() {
+      mockTransferWindowState = null
+    },
+
+    async getTransferWindowState() {
+      return mockTransferWindowState ? { ...mockTransferWindowState } : null
     },
 
   }

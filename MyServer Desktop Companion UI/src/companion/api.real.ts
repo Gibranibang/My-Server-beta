@@ -32,6 +32,13 @@ import type {
   ShareAccountCandidatesResponse,
   AccountShareListResponse,
   AccountShareMutateResult,
+  ExplorerClipboardItem,
+  ExplorerClipboardState,
+  TransferWindowMode,
+  TransferConflictAction,
+  TransferStatusResponse,
+  QuickPickerBrowseResponse,
+  TransferPastePayload,
 } from "./types"
 
 
@@ -671,6 +678,10 @@ export function createRealApi(): CompanionApi {
               ...s,
               theme: resolvedTheme,
               explorerContextMenuEnabled: Boolean(s.explorerContextMenuEnabled),
+              explorerHotkeyEnabled:
+                s.explorerHotkeyEnabled !== undefined
+                  ? Boolean(s.explorerHotkeyEnabled)
+                  : DEFAULT_SETTINGS.explorerHotkeyEnabled,
             }
             return currentSettings
           }
@@ -2908,6 +2919,403 @@ export function createRealApi(): CompanionApi {
         }
       }
       return { success: false, error: "Core API unavailable" }
+    },
+
+    async getExplorerClipboard(): Promise<ExplorerClipboardState> {
+      try {
+        const res = await callCoreApi("transfer/clipboard/get", {})
+        if (res && typeof res === "object") {
+          return {
+            kind: res.kind === "local" || res.kind === "server" ? res.kind : "empty",
+            items: Array.isArray(res.items) ? res.items : [],
+            server_id: typeof res.server_id === "string" ? res.server_id : undefined,
+            server_name: typeof res.server_name === "string" ? res.server_name : undefined,
+            copied_at: typeof res.copied_at === "number" ? res.copied_at : undefined,
+            source_origin: typeof res.source_origin === "string" ? res.source_origin : undefined,
+          }
+        }
+      } catch (err) {
+        console.warn("[RealApi] getExplorerClipboard error:", extractErrorMessage(err, "Failed to read clipboard"))
+      }
+      return { kind: "empty", items: [] }
+    },
+
+    async copyServerItemsToClipboard(payload: {
+      serverId?: string
+      items: ExplorerClipboardItem[]
+    }): Promise<{ success: boolean; clipboard?: ExplorerClipboardState; error?: string }> {
+      try {
+        const res = await callCoreApi("transfer/copy", {
+          source: "companion",
+          server_id: payload.serverId,
+          items: payload.items.map((item) => ({
+            relative_path: item.relative_path,
+            name: item.name,
+            is_dir: Boolean(item.is_dir),
+            size: item.size,
+          })),
+        })
+        if (res && typeof res === "object") {
+          return res as { success: boolean; clipboard?: ExplorerClipboardState; error?: string }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: extractErrorMessage(err, "Failed to copy server items to clipboard."),
+        }
+      }
+      return { success: false, error: "Core API unavailable" }
+    },
+
+    async clearExplorerClipboard(): Promise<{ success: boolean }> {
+      try {
+        const res = await callCoreApi("transfer/clipboard/clear", {})
+        if (res && typeof res === "object") {
+          return { success: Boolean(res.success !== false) }
+        }
+      } catch (err) {
+        console.warn("[RealApi] clearExplorerClipboard error:", extractErrorMessage(err, "Failed to clear clipboard"))
+      }
+      return { success: false }
+    },
+
+    async browseTransferDirectory(opts?: {
+      serverId?: string
+      server_id?: string
+      path?: string
+      source?: "disks" | "shared"
+    }): Promise<QuickPickerBrowseResponse> {
+      try {
+        const res = await callCoreApi("transfer/browse", {
+          server_id: opts?.serverId ?? opts?.server_id,
+          path: opts?.path ?? "",
+          source: opts?.source ?? "disks",
+        })
+        if (res && typeof res === "object") {
+          return {
+            success: Boolean(res.success),
+            server_id: typeof res.server_id === "string" ? res.server_id : undefined,
+            server_name: typeof res.server_name === "string" ? res.server_name : undefined,
+            current_path: typeof res.current_path === "string" ? res.current_path : "",
+            parent_path: typeof res.parent_path === "string" ? res.parent_path : "",
+            effective_role: typeof res.effective_role === "string" ? res.effective_role : "viewer",
+            writable: Boolean(res.writable),
+            view_mode: res.view_mode,
+            items: Array.isArray(res.items) ? res.items : [],
+            needsAuth: Boolean(res.needsAuth),
+            error: typeof res.error === "string" ? res.error : undefined,
+          }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          current_path: opts?.path ?? "",
+          parent_path: "",
+          effective_role: "viewer",
+          writable: false,
+          items: [],
+          error: extractErrorMessage(err, "Failed to browse server directory."),
+        }
+      }
+      return {
+        success: false,
+        current_path: opts?.path ?? "",
+        parent_path: "",
+        effective_role: "viewer",
+        writable: false,
+        items: [],
+        error: "Core API unavailable",
+      }
+    },
+
+    async startTransferPaste(payload: TransferPastePayload): Promise<TransferStatusResponse> {
+      const serverId = payload.serverId ?? payload.server_id ?? ""
+      const destRel = payload.destRel ?? payload.dest_rel ?? ""
+      try {
+        const res = await callCoreApi("transfer/paste", {
+          source: "quick_picker",
+          server_id: serverId,
+          dest_rel: destRel,
+        })
+        if (res && typeof res === "object") {
+          return res as TransferStatusResponse
+        }
+      } catch (err) {
+        return {
+          success: false,
+          status: "error",
+          total_files: 0,
+          completed_files: 0,
+          bytes_done: 0,
+          bytes_total: 0,
+          speed_bps: 0,
+          active_workers: 0,
+          max_workers: 3,
+          items: [],
+          error: extractErrorMessage(err, "Failed to start paste transfer."),
+        }
+      }
+      return {
+        success: false,
+        status: "error",
+        total_files: 0,
+        completed_files: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        speed_bps: 0,
+        active_workers: 0,
+        max_workers: 3,
+        items: [],
+        error: "Core API unavailable",
+      }
+    },
+
+    async getTransferStatus(): Promise<TransferStatusResponse> {
+      try {
+        const res = await callCoreApi("transfer/status", {})
+        if (res && typeof res === "object") {
+          return res as TransferStatusResponse
+        }
+      } catch (err) {
+        return {
+          success: false,
+          status: "error",
+          total_files: 0,
+          completed_files: 0,
+          bytes_done: 0,
+          bytes_total: 0,
+          speed_bps: 0,
+          active_workers: 0,
+          max_workers: 3,
+          items: [],
+          error: extractErrorMessage(err, "Failed to load transfer status."),
+        }
+      }
+      return {
+        success: false,
+        status: "idle",
+        total_files: 0,
+        completed_files: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        speed_bps: 0,
+        active_workers: 0,
+        max_workers: 3,
+        items: [],
+      }
+    },
+
+    async resolveTransferConflict(payload: {
+      jobId: string
+      action: TransferConflictAction
+      applyToAll?: boolean
+    }): Promise<TransferStatusResponse> {
+      try {
+        const res = await callCoreApi("transfer/resolve_conflict", {
+          job_id: payload.jobId,
+          action: payload.action,
+          apply_to_all: payload.applyToAll,
+        })
+        if (res && typeof res === "object") {
+          return res as TransferStatusResponse
+        }
+      } catch (err) {
+        return {
+          success: false,
+          status: "error",
+          total_files: 0,
+          completed_files: 0,
+          bytes_done: 0,
+          bytes_total: 0,
+          speed_bps: 0,
+          active_workers: 0,
+          max_workers: 3,
+          items: [],
+          error: extractErrorMessage(err, "Failed to resolve transfer conflict."),
+        }
+      }
+      return {
+        success: false,
+        status: "error",
+        total_files: 0,
+        completed_files: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        speed_bps: 0,
+        active_workers: 0,
+        max_workers: 3,
+        items: [],
+        error: "Core API unavailable",
+      }
+    },
+
+    async pauseTransferJob(jobId?: string): Promise<TransferStatusResponse> {
+      try {
+        const res = await callCoreApi("transfer/pause", { job_id: jobId })
+        if (res && typeof res === "object") {
+          return res as TransferStatusResponse
+        }
+      } catch (err) {
+        return {
+          success: false,
+          status: "error",
+          total_files: 0,
+          completed_files: 0,
+          bytes_done: 0,
+          bytes_total: 0,
+          speed_bps: 0,
+          active_workers: 0,
+          max_workers: 3,
+          items: [],
+          error: extractErrorMessage(err, "Failed to pause transfer."),
+        }
+      }
+      return {
+        success: false,
+        status: "error",
+        total_files: 0,
+        completed_files: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        speed_bps: 0,
+        active_workers: 0,
+        max_workers: 3,
+        items: [],
+        error: "Core API unavailable",
+      }
+    },
+
+    async resumeTransferJob(jobId?: string): Promise<TransferStatusResponse> {
+      try {
+        const res = await callCoreApi("transfer/resume", { job_id: jobId })
+        if (res && typeof res === "object") {
+          return res as TransferStatusResponse
+        }
+      } catch (err) {
+        return {
+          success: false,
+          status: "error",
+          total_files: 0,
+          completed_files: 0,
+          bytes_done: 0,
+          bytes_total: 0,
+          speed_bps: 0,
+          active_workers: 0,
+          max_workers: 3,
+          items: [],
+          error: extractErrorMessage(err, "Failed to resume transfer."),
+        }
+      }
+      return {
+        success: false,
+        status: "error",
+        total_files: 0,
+        completed_files: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        speed_bps: 0,
+        active_workers: 0,
+        max_workers: 3,
+        items: [],
+        error: "Core API unavailable",
+      }
+    },
+
+    async cancelTransferJob(jobId?: string): Promise<TransferStatusResponse> {
+      try {
+        const res = await callCoreApi("transfer/cancel", { job_id: jobId })
+        if (res && typeof res === "object") {
+          return res as TransferStatusResponse
+        }
+      } catch (err) {
+        return {
+          success: false,
+          status: "error",
+          total_files: 0,
+          completed_files: 0,
+          bytes_done: 0,
+          bytes_total: 0,
+          speed_bps: 0,
+          active_workers: 0,
+          max_workers: 3,
+          items: [],
+          error: extractErrorMessage(err, "Failed to cancel transfer."),
+        }
+      }
+      return {
+        success: false,
+        status: "error",
+        total_files: 0,
+        completed_files: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        speed_bps: 0,
+        active_workers: 0,
+        max_workers: 3,
+        items: [],
+        error: "Core API unavailable",
+      }
+    },
+
+    async clearTransferHistory(): Promise<{ success: boolean }> {
+      try {
+        const res = await callCoreApi("transfer/clear", {})
+        if (res && typeof res === "object") {
+          return { success: Boolean(res.success !== false) }
+        }
+      } catch (err) {
+        console.warn("[RealApi] clearTransferHistory error:", extractErrorMessage(err, "Failed to clear transfer history"))
+      }
+      return { success: false }
+    },
+
+    async setExplorerHotkeyEnabled(enabled: boolean): Promise<{ success: boolean; enabled: boolean; error?: string }> {
+      const res = await callCoreApi("settings/explorer_hotkey", { enabled })
+      if (!res || typeof res !== "object" || res.success === false) {
+        throw new Error(extractErrorMessage(res, "Failed to update Explorer hotkey setting"))
+      }
+      const nextEnabled = res.enabled !== undefined ? Boolean(res.enabled) : Boolean(enabled)
+      const invoke = getTauriInvoke()
+      if (invoke) {
+        try {
+          await invoke("set_explorer_hotkey_enabled", { enabled: nextEnabled })
+        } catch (err) {
+          console.warn("[RealApi] set_explorer_hotkey_enabled invoke error:", extractErrorMessage(err, "Failed to sync Rust hotkey"))
+        }
+      }
+      currentSettings = { ...currentSettings, explorerHotkeyEnabled: nextEnabled }
+      return { success: true, enabled: nextEnabled }
+    },
+
+    async openTransferWindow(initialState?: { mode?: TransferWindowMode; [key: string]: unknown }): Promise<void> {
+      const invoke = getTauriInvoke()
+      if (!invoke) return
+      await invoke("open_transfer_window", { state: initialState ?? { mode: "progress" } })
+    },
+
+    async closeTransferWindow(): Promise<void> {
+      const invoke = getTauriInvoke()
+      if (!invoke) return
+      try {
+        await invoke("close_transfer_window")
+      } catch (err) {
+        console.warn("[RealApi] closeTransferWindow error:", extractErrorMessage(err, "Failed to close transfer window"))
+      }
+    },
+
+    async getTransferWindowState(): Promise<Record<string, unknown> | null> {
+      const invoke = getTauriInvoke()
+      if (!invoke) return null
+      try {
+        const res = await invoke("get_transfer_window_state")
+        if (res && typeof res === "object") {
+          return res as Record<string, unknown>
+        }
+        return null
+      } catch (err) {
+        console.warn("[RealApi] getTransferWindowState error:", extractErrorMessage(err, "Failed to read transfer window state"))
+        return null
+      }
     },
   }
 

@@ -534,18 +534,22 @@ class TestExplorerRegistryAndInstaller(_BaseRegistryToastTestCase):
             self.assertEqual(hive.keys, snapshot)
 
             expected = [
-                (r"Software\Classes\*\shell\MyServerShare", "Share via MyServer", "--share"),
-                (r"Software\Classes\*\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
-                (r"Software\Classes\Directory\shell\MyServerShare", "Share via MyServer", "--share"),
-                (r"Software\Classes\Directory\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
+                (r"Software\Classes\*\shell\MyServerShare", "Share via MyServer", "--share", "%1"),
+                (r"Software\Classes\*\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share", "%1"),
+                (r"Software\Classes\Directory\shell\MyServerShare", "Share via MyServer", "--share", "%1"),
+                (r"Software\Classes\Directory\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share", "%1"),
+                (r"Software\Classes\*\shell\MyServerHttpCopy", "Copy via MyServer", "--explorer-copy", "%1"),
+                (r"Software\Classes\Directory\shell\MyServerHttpCopy", "Copy via MyServer", "--explorer-copy", "%1"),
+                (r"Software\Classes\Directory\shell\MyServerHttpPaste", "Paste via MyServer", "--explorer-paste", "%1"),
+                (r"Software\Classes\Directory\Background\shell\MyServerHttpPaste", "Paste via MyServer", "--explorer-paste", "%V"),
             ]
-            for subkey, display_name, flag in expected:
+            for subkey, display_name, flag, arg_placeholder in expected:
                 self.assertEqual(hive.keys[subkey][""][1], display_name)
                 self.assertEqual(hive.keys[subkey]["Icon"][1], ico_path)
                 self.assertEqual(hive.keys[subkey]["MultiSelectModel"][1], "Single")
                 self.assertEqual(
                     hive.keys[rf"{subkey}\command"][""][1],
-                    f'"{exe_path}" {flag} "%1"',
+                    f'"{exe_path}" {flag} "{arg_placeholder}"',
                 )
 
             aumid_key = r"Software\Classes\AppUserModelId\com.algithaproject.myserver.companion.beta"
@@ -556,7 +560,7 @@ class TestExplorerRegistryAndInstaller(_BaseRegistryToastTestCase):
             ok3, err3 = core.set_explorer_context_menu_enabled(False)
             self.assertTrue(ok3, err3)
             self.assertFalse(core.is_explorer_context_menu_enabled())
-            for subkey, _, _ in expected:
+            for subkey, _, _, _ in expected:
                 self.assertNotIn(subkey, hive.keys)
                 self.assertNotIn(rf"{subkey}\command", hive.keys)
 
@@ -694,6 +698,10 @@ class TestExplorerRegistryAndInstaller(_BaseRegistryToastTestCase):
             r"Software\Classes\*\shell\MyServerQuickShare",
             r"Software\Classes\Directory\shell\MyServerShare",
             r"Software\Classes\Directory\shell\MyServerQuickShare",
+            r"Software\Classes\*\shell\MyServerHttpCopy",
+            r"Software\Classes\Directory\shell\MyServerHttpCopy",
+            r"Software\Classes\Directory\shell\MyServerHttpPaste",
+            r"Software\Classes\Directory\Background\shell\MyServerHttpPaste",
         ):
             self.assertIn(f'Root: HKCU; Subkey: "{subkey}"', iss_text)
             self.assertIn(f'Root: HKCU; Subkey: "{subkey}\\command"', iss_text)
@@ -705,6 +713,9 @@ class TestExplorerRegistryAndInstaller(_BaseRegistryToastTestCase):
         )
         self.assertIn('--share ""%1""', iss_text)
         self.assertIn('--quick-share ""%1""', iss_text)
+        self.assertIn('--explorer-copy ""%1""', iss_text)
+        self.assertIn('--explorer-paste ""%1""', iss_text)
+        self.assertIn('--explorer-paste ""%V""', iss_text)
 
 
 if __name__ == "__main__":

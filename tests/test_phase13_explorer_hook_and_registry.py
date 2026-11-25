@@ -170,5 +170,83 @@ class TestExplorerHookAndTauriTransferContract(unittest.TestCase):
         )
 
 
+class TestPhase13RegistryAndTabReaderContract(unittest.TestCase):
+    def test_01_installer_iss_byte_sync_and_http_copy_paste_verbs(self):
+        import build_installer_package
+
+        iss_path = os.path.join(REPO_ROOT, "installer.iss")
+        with open(iss_path, "r", encoding="utf-8") as fh:
+            iss_text = fh.read()
+        expected = build_installer_package.render_installer_iss(
+            build_installer_package.VERSION, build_installer_package.APP_NAME
+        )
+        self.assertEqual(iss_text, expected)
+        for required in (
+            r"Software\Classes\*\shell\MyServerHttpCopy",
+            r"Software\Classes\Directory\shell\MyServerHttpCopy",
+            r"Software\Classes\Directory\shell\MyServerHttpPaste",
+            r"Software\Classes\Directory\Background\shell\MyServerHttpPaste",
+            '--explorer-copy ""%1""',
+            '--explorer-paste ""%1""',
+            '--explorer-paste ""%V""',
+        ):
+            self.assertIn(required, iss_text)
+
+    def test_02_core_hkcu_targets_include_background_paste_percent_v(self):
+        import myserver_core_service as core
+
+        targets = {row[0]: row for row in core._EXPLORER_CTX_SHELL_TARGETS}
+        self.assertEqual(len(targets), 8)
+        bg_key = r"Software\Classes\Directory\Background\shell\MyServerHttpPaste"
+        self.assertIn(bg_key, targets)
+        self.assertEqual(targets[bg_key], (bg_key, "Paste via MyServer", "--explorer-paste", "%V"))
+
+    def test_03_explorer_tab_reader_short_circuit_contract(self):
+        import explorer_tab_reader
+
+        class _InactiveTab:
+            FullName = r"C:\Windows\explorer.exe"
+            HWND = 100
+
+            @property
+            def Document(self):
+                raise AssertionError("Inactive tab .Document must never be accessed")
+
+        class _ActiveTab:
+            FullName = r"C:\Windows\explorer.exe"
+            HWND = 100
+            LocationURL = "file:///Z:/Shared"
+
+            class _Folder:
+                class _Self:
+                    Path = r"Z:\Shared"
+
+                Self = _Self()
+
+            class _Doc:
+                Folder = None
+
+                def SelectedItems(self):
+                    return [type("_Item", (), {"Path": r"Z:\Shared\file.txt"})()]
+
+            def __init__(self):
+                self._doc = self._Doc()
+                self._doc.Folder = self._Folder()
+
+            @property
+            def Document(self):
+                return self._doc
+
+        res = explorer_tab_reader._extract_active_tab_from_shell_windows(
+            [_InactiveTab(), _ActiveTab()],
+            fg_hwnd=100,
+            top_tab_hwnd=2002,
+            get_tab_hwnd_fn=lambda w: 1001 if isinstance(w, _InactiveTab) else 2002,
+        )
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["folder_path"], r"Z:\Shared")
+        self.assertEqual(res["selected_items"], [r"Z:\Shared\file.txt"])
+
+
 if __name__ == "__main__":
     unittest.main()

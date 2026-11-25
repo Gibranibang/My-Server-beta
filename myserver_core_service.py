@@ -2284,21 +2284,25 @@ def set_autorun(enable=True):
 
 
 _EXPLORER_CTX_SHELL_TARGETS = (
-    (r"Software\Classes\*\shell\MyServerShare", "Share via MyServer", "--share"),
-    (r"Software\Classes\*\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
-    (r"Software\Classes\Directory\shell\MyServerShare", "Share via MyServer", "--share"),
-    (r"Software\Classes\Directory\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share"),
+    (r"Software\Classes\*\shell\MyServerShare", "Share via MyServer", "--share", "%1"),
+    (r"Software\Classes\*\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share", "%1"),
+    (r"Software\Classes\Directory\shell\MyServerShare", "Share via MyServer", "--share", "%1"),
+    (r"Software\Classes\Directory\shell\MyServerQuickShare", "Quick Share via MyServer", "--quick-share", "%1"),
+    (r"Software\Classes\*\shell\MyServerHttpCopy", "Copy via MyServer", "--explorer-copy", "%1"),
+    (r"Software\Classes\Directory\shell\MyServerHttpCopy", "Copy via MyServer", "--explorer-copy", "%1"),
+    (r"Software\Classes\Directory\shell\MyServerHttpPaste", "Paste via MyServer", "--explorer-paste", "%1"),
+    (r"Software\Classes\Directory\Background\shell\MyServerHttpPaste", "Paste via MyServer", "--explorer-paste", "%V"),
 )
 
 
 def is_explorer_context_menu_enabled() -> bool:
-    """Memeriksa apakah seluruh 4 entri menu klik kanan File Explorer terdaftar di HKCU."""
+    """Memeriksa apakah seluruh 8 entri menu klik kanan File Explorer terdaftar di HKCU."""
     if sys.platform != "win32":
         return False
     wreg = _get_winreg_module()
     if wreg is None:
         return False
-    for subkey, _display_name, _cli_flag in _EXPLORER_CTX_SHELL_TARGETS:
+    for subkey, _display_name, _cli_flag, _arg_placeholder in _EXPLORER_CTX_SHELL_TARGETS:
         cmd_subkey = rf"{subkey}\command"
         key = None
         try:
@@ -2318,7 +2322,7 @@ def is_explorer_context_menu_enabled() -> bool:
 
 
 def set_explorer_context_menu_enabled(enable: bool) -> tuple[bool, str]:
-    """Mendaftarkan atau menghapus 4 verb menu klik kanan Windows File Explorer di HKCU secara idempoten."""
+    """Mendaftarkan atau menghapus 8 verb menu klik kanan Windows File Explorer di HKCU secara idempoten."""
     if sys.platform != "win32":
         return False, "Windows Explorer context menu is only supported on Windows."
     wreg = _get_winreg_module()
@@ -2333,7 +2337,7 @@ def set_explorer_context_menu_enabled(enable: bool) -> tuple[bool, str]:
         ico_candidate = os.path.join(os.path.dirname(exe_path), "app_icon.ico")
         icon_path = ico_candidate if os.path.isfile(ico_candidate) else f"{exe_path},0"
         try:
-            for subkey, display_name, cli_flag in _EXPLORER_CTX_SHELL_TARGETS:
+            for subkey, display_name, cli_flag, arg_placeholder in _EXPLORER_CTX_SHELL_TARGETS:
                 key = None
                 cmd_key = None
                 try:
@@ -2349,7 +2353,7 @@ def set_explorer_context_menu_enabled(enable: bool) -> tuple[bool, str]:
                             pass
                 try:
                     cmd_key = wreg.CreateKey(wreg.HKEY_CURRENT_USER, rf"{subkey}\command")
-                    wreg.SetValueEx(cmd_key, "", 0, wreg.REG_SZ, f'"{exe_path}" {cli_flag} "%1"')
+                    wreg.SetValueEx(cmd_key, "", 0, wreg.REG_SZ, f'"{exe_path}" {cli_flag} "{arg_placeholder}"')
                 finally:
                     if cmd_key is not None:
                         try:
@@ -2366,7 +2370,7 @@ def set_explorer_context_menu_enabled(enable: bool) -> tuple[bool, str]:
             return False, str(exc)
     else:
         try:
-            for subkey, _display_name, _cli_flag in _EXPLORER_CTX_SHELL_TARGETS:
+            for subkey, _display_name, _cli_flag, _arg_placeholder in _EXPLORER_CTX_SHELL_TARGETS:
                 for target_key in (rf"{subkey}\command", subkey):
                     try:
                         wreg.DeleteKey(wreg.HKEY_CURRENT_USER, target_key)

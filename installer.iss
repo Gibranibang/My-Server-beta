@@ -47,7 +47,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "explorercontextmenu"; Description: "Add 'Share via MyServer' and 'Quick Share via MyServer' to Windows File Explorer context menu"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "explorercontextmenu"; Description: "Add MyServer Share, Quick Share, Copy, and Paste actions to Windows File Explorer context menu"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
 Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
@@ -87,6 +87,22 @@ Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare"; Value
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerQuickShare\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --quick-share ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerHttpCopy"; ValueType: string; ValueName: ""; ValueData: "Copy via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerHttpCopy"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerHttpCopy"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MyServerHttpCopy\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --explorer-copy ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpCopy"; ValueType: string; ValueName: ""; ValueData: "Copy via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpCopy"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpCopy"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpCopy\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --explorer-copy ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpPaste"; ValueType: string; ValueName: ""; ValueData: "Paste via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpPaste"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpPaste"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MyServerHttpPaste\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --explorer-paste ""%1"""; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MyServerHttpPaste"; ValueType: string; ValueName: ""; ValueData: "Paste via MyServer"; Flags: uninsdeletekey; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MyServerHttpPaste"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\app_icon.ico"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MyServerHttpPaste"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"; Tasks: explorercontextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MyServerHttpPaste\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --explorer-paste ""%V"""; Tasks: explorercontextmenu
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.algithaproject.myserver.companion.beta"; ValueType: string; ValueName: "DisplayName"; ValueData: "MyServer"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.algithaproject.myserver.companion.beta"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\app_icon.ico"
 

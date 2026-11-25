@@ -121,14 +121,23 @@ export default function SettingsView() {
   })
   const [details, setDetails] = useState<ServerDetails | null>(null)
   const explorerCtxId = useId()
+  const explorerHotkeyId = useId()
   const [contextMenuBusy, setContextMenuBusy] = useState(false)
   const [contextMenuChecked, setContextMenuChecked] = useState(
     Boolean(settings.explorerContextMenuEnabled),
+  )
+  const [explorerHotkeyBusy, setExplorerHotkeyBusy] = useState(false)
+  const [explorerHotkeyChecked, setExplorerHotkeyChecked] = useState(
+    settings.explorerHotkeyEnabled ?? true,
   )
 
   useEffect(() => {
     setContextMenuChecked(Boolean(settings.explorerContextMenuEnabled))
   }, [settings.explorerContextMenuEnabled])
+
+  useEffect(() => {
+    setExplorerHotkeyChecked(settings.explorerHotkeyEnabled ?? true)
+  }, [settings.explorerHotkeyEnabled])
 
   const t = getTranslation(settings?.language)
   const isId = settings?.language === "id"
@@ -163,6 +172,31 @@ export default function SettingsView() {
       )
     } finally {
       setContextMenuBusy(false)
+    }
+  }
+
+  const handleToggleExplorerHotkey = async (next: boolean) => {
+    if (explorerHotkeyBusy) return
+    const prev = explorerHotkeyChecked
+    setExplorerHotkeyBusy(true)
+    setExplorerHotkeyChecked(next)
+    try {
+      const res = await getCompanionApi().setExplorerHotkeyEnabled(next)
+      if (res?.success === false) {
+        throw new Error(res.error || "Hotkey error")
+      }
+      const settled = res?.enabled !== undefined ? Boolean(res.enabled) : next
+      setExplorerHotkeyChecked(settled)
+      void setSetting("explorerHotkeyEnabled", settled).catch(() => undefined)
+      notify(
+        t(settled ? "xfer_hotkey_enabled_toast" : "xfer_hotkey_disabled_toast"),
+        "success",
+      )
+    } catch (err) {
+      setExplorerHotkeyChecked(prev)
+      notify(errorText(err, settings?.language), "danger")
+    } finally {
+      setExplorerHotkeyBusy(false)
     }
   }
 
@@ -850,6 +884,34 @@ export default function SettingsView() {
                 <Info className="size-4 shrink-0 text-info-ink" aria-hidden />
                 <p className="text-caption font-normal text-ink-subtle">
                   {t("explorer_ctx_win11_hint")}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 px-3 py-2 transition-colors duration-150 hover:bg-surface-sunken">
+                <ClipboardCopy
+                  className="size-4 shrink-0 text-ink-subtle"
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <label htmlFor={explorerHotkeyId} className="min-w-0 flex-1 cursor-pointer">
+                  <span className="block text-label font-medium text-ink">
+                    {t("xfer_hotkey_label")}
+                  </span>
+                  <span className="block text-micro text-ink-subtle">
+                    {t(explorerHotkeyChecked ? "xfer_hotkey_on" : "xfer_hotkey_off")}
+                  </span>
+                </label>
+                <Toggle
+                  id={explorerHotkeyId}
+                  label={t("xfer_hotkey_label")}
+                  checked={explorerHotkeyChecked}
+                  disabled={explorerHotkeyBusy}
+                  onChange={(next) => void handleToggleExplorerHotkey(next)}
+                />
+              </div>
+              <div className="border-t border-line/60 bg-surface-sunken px-4 py-2 flex items-start gap-2">
+                <Info className="size-4 shrink-0 text-info-ink" aria-hidden />
+                <p className="text-caption font-normal text-ink-subtle">
+                  {t("xfer_hotkey_hint")}
                 </p>
               </div>
             </div>

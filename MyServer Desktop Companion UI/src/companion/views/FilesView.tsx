@@ -1,6 +1,6 @@
 import { getTranslation } from "../i18n"
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
-import { AlertTriangle, Folder, FolderOpen, HardDrive, RefreshCw, Send, Server, ShieldCheck, Unplug } from "lucide-react"
+import { AlertTriangle, Folder, FolderOpen, FolderSearch, HardDrive, RefreshCw, Send, Server, ShieldCheck, Unplug } from "lucide-react"
 import { FooterStatus, TrayChip } from "../FlyoutShell"
 import { useAsyncAction, useCompanion, useNotice } from "../store"
 import { getCompanionApi } from "../api"
@@ -784,6 +784,15 @@ export default function FilesView() {
               )
             }
           >{t("unmount_all_btn", "Disconnect All Drives")}</Button>
+          <Button
+            variant="secondary"
+            icon={FolderSearch}
+            block
+            title={t("xfer_browse_http_tip", "Browse & copy files via HTTP even if SMB drive is offline")}
+            onClick={() => void api.openTransferWindow?.({ mode: "browse" })}
+          >
+            {t("xfer_browse_http_btn", "Browse HTTP")}
+          </Button>
         </div>
       </ViewBody>
 

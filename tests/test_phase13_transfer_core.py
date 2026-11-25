@@ -493,5 +493,288 @@ class TestHttpTransferCore(unittest.TestCase):
         self.assertFalse(b_res["writable"])
 
 
+class TestCoreApiTransferIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import config_manager
+        import myserver_core_service as core
+
+        cls.config_manager = config_manager
+        cls.core = core
+        cls.tmp_dir = tempfile.TemporaryDirectory()
+        cls.base_dir_patch = patch.object(config_manager, "get_base_dir", return_value=cls.tmp_dir.name)
+        cls.base_dir_patch.start()
+        config_manager._config_cache = None
+        cfg = config_manager.get_default_config()
+        cfg["language"] = "en"
+        cfg["servers"] = [
+            {
+                "id": "srv_1",
+                "name": "TestNAS",
+                "host": "192.168.1.50",
+                "username": "admin_zima",
+                "smb_source": "backend",
+                "backend_smb_auth": {"username": "alice", "password": "secret", "access_token": "tok_alice"},
+            }
+        ]
+        cfg["active_server_id"] = "srv_1"
+        config_manager.save_config(cfg)
+
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), core.CoreApiHandler)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.base_dir_patch.stop()
+        cls.config_manager._config_cache = None
+        cls.tmp_dir.cleanup()
+
+    def setUp(self):
+        self.core._transfer_manager.clear_clipboard()
+
+    def _raw_http(self, method, path, payload=None, headers=None):
+        import http.client
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5.0)
+        hdrs = dict(headers or {})
+        body = None
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+            hdrs.setdefault("Content-Type", "application/json")
+        conn.request(method, path, body=body, headers=hdrs)
+        resp = conn.getresponse()
+        raw = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        try:
+            data = json.loads(raw) if raw else {}
+        except Exception:
+            data = {"raw": raw}
+        return resp.status, data
+
+    def test_requires_core_auth_token_on_all_transfer_endpoints(self):
+        for ep in (
+            "/api/transfer/copy",
+            "/api/transfer/paste",
+            "/api/transfer/status",
+            "/api/transfer/browse",
+            "/api/transfer/resolve_conflict",
+            "/api/transfer/pause",
+            "/api/transfer/resume",
+            "/api/transfer/cancel",
+            "/api/transfer/clear",
+            "/api/transfer/clipboard/get",
+            "/api/transfer/clipboard/clear",
+            "/api/settings/explorer_hotkey",
+        ):
+            st, data = self._raw_http("POST", ep, payload={})
+            self.assertEqual(st, 401, f"Expected 401 without token for POST {ep}")
+            self.assertIs(data.get("success"), False)
+
+        for ep in ("/api/transfer/status", "/api/transfer/clipboard/get"):
+            st, _ = self._raw_http("GET", ep)
+            self.assertEqual(st, 401, f"Expected 401 without token for GET {ep}")
+
+    def test_unified_copy_paste_status_controls_and_hotkey_setting(self):
+        auth = {"X-MyServer-Core-Token": self.core._CORE_AUTH_TOKEN}
+
+        # 1. Companion copy preserves is_dir and appears on POST + GET /api/transfer/clipboard/get
+        with patch.object(self.core, "_show_windows_toast", return_value=True):
+            st, res = self._raw_http(
+                "POST",
+                "/api/transfer/copy",
+                payload={
+                    "source": "companion",
+                    "server_id": "srv_1",
+                    "items": [
+                        {"relative_path": "DiskA/Folder1", "name": "Folder1", "is_dir": True, "size": 0},
+                        {"relative_path": "DiskA/doc.txt", "name": "doc.txt", "is_dir": False, "size": 12},
+                    ],
+                },
+                headers=auth,
+            )
+        self.assertEqual(st, 200)
+        self.assertTrue(res["success"])
+        self.assertEqual(res["clipboard"]["kind"], "server")
+        self.assertIs(res["clipboard"]["items"][0]["is_dir"], True)
+
+        st_p, clip_p = self._raw_http("POST", "/api/transfer/clipboard/get", payload={}, headers=auth)
+        st_g, clip_g = self._raw_http("GET", "/api/transfer/clipboard/get", headers=auth)
+        self.assertEqual(st_p, 200)
+        self.assertEqual(st_g, 200)
+        self.assertEqual(clip_p["kind"], "server")
+        self.assertEqual(clip_g["kind"], "server")
+        self.assertEqual(len(clip_g["items"]), 2)
+
+        # 2. Hotkey copy timeout & empty selection & local path
+        with patch.object(
+            self.core.explorer_tab_reader,
+            "read_active_explorer_tab",
+            return_value={"ok": False, "timed_out": True, "error": "TIMEOUT"},
+        ), patch.object(self.core, "_show_windows_toast", return_value=True):
+            st_to, res_to = self._raw_http(
+                "POST",
+                "/api/transfer/copy",
+                payload={"source": "hotkey", "fg_hwnd": 11, "top_tab_hwnd": 22},
+                headers=auth,
+            )
+        self.assertEqual(st_to, 200)
+        self.assertFalse(res_to["success"])
+        self.assertEqual(res_to["code"], "EXPLORER_TIMEOUT")
+
+        with patch.object(
+            self.core.explorer_tab_reader,
+            "read_active_explorer_tab",
+            return_value={"ok": True, "timed_out": False, "folder_path": r"C:\Local", "selected_items": []},
+        ), patch.object(self.core, "_show_windows_toast", return_value=True):
+            st_emp, res_emp = self._raw_http(
+                "POST",
+                "/api/transfer/copy",
+                payload={"source": "hotkey", "fg_hwnd": 11, "top_tab_hwnd": 22},
+                headers=auth,
+            )
+        self.assertEqual(st_emp, 200)
+        self.assertEqual(res_emp["code"], "EMPTY_SELECTION")
+
+        # 3. Context menu local copy + Hotkey paste timeout -> quick_picker
+        with patch.object(self.core, "_show_windows_toast", return_value=True):
+            st_cm, res_cm = self._raw_http(
+                "POST",
+                "/api/transfer/copy",
+                payload={"source": "context_menu", "paths": [r"C:\Users\alice\local_doc.txt"]},
+                headers=auth,
+            )
+        self.assertEqual(st_cm, 200)
+        self.assertTrue(res_cm["success"])
+        self.assertEqual(res_cm["clipboard"]["kind"], "local")
+
+        with patch.object(
+            self.core.explorer_tab_reader,
+            "read_active_explorer_tab",
+            return_value={"ok": False, "timed_out": True, "error": "TIMEOUT"},
+        ):
+            st_hp, res_hp = self._raw_http(
+                "POST",
+                "/api/transfer/paste",
+                payload={"source": "hotkey", "fg_hwnd": 11, "top_tab_hwnd": 22},
+                headers=auth,
+            )
+        self.assertEqual(st_hp, 200)
+        self.assertEqual(res_hp["ui_action"], "open_transfer_window")
+        self.assertEqual(res_hp["mode"], "quick_picker")
+
+        # 4. Context menu & Quick Picker paste delegate to _transfer_manager.dispatch_paste
+        with patch.object(
+            self.core._transfer_manager,
+            "dispatch_paste",
+            return_value={"success": True, "ui_action": "open_transfer_window", "mode": "progress", "job_id": "xfer_1"},
+        ) as mock_disp:
+            st_cmp, res_cmp = self._raw_http(
+                "POST",
+                "/api/transfer/paste",
+                payload={"source": "context_menu", "dest_path": r"Z:\Work"},
+                headers=auth,
+            )
+            self.assertEqual(st_cmp, 200)
+            self.assertEqual(res_cmp["job_id"], "xfer_1")
+            mock_disp.assert_called_with(dest_path=r"Z:\Work")
+
+            st_qp, res_qp = self._raw_http(
+                "POST",
+                "/api/transfer/paste",
+                payload={"source": "quick_picker", "serverId": "srv_1", "destRel": "DiskA/Target"},
+                headers=auth,
+            )
+            self.assertEqual(st_qp, 200)
+            self.assertEqual(res_qp["job_id"], "xfer_1")
+            mock_disp.assert_called_with(server_id="srv_1", dest_rel="DiskA/Target")
+
+        # 5. Status (POST & GET), browse, conflict, pause/resume/cancel/clear, clipboard/clear
+        st_sp, body_sp = self._raw_http("POST", "/api/transfer/status", payload={}, headers=auth)
+        st_sg, body_sg = self._raw_http("GET", "/api/transfer/status", headers=auth)
+        self.assertEqual(st_sp, 200)
+        self.assertEqual(st_sg, 200)
+        self.assertTrue(body_sp["success"])
+        self.assertTrue(body_sg["success"])
+
+        with patch.object(
+            self.core._transfer_manager,
+            "browse_directory",
+            return_value={"ok": True, "server_id": "srv_1", "server_name": "TestNAS", "source": "disks", "path": "DiskA/Sub", "effective_role": "editor", "writable": True, "items": []},
+        ):
+            st_br, body_br = self._raw_http(
+                "POST",
+                "/api/transfer/browse",
+                payload={"serverId": "srv_1", "path": "DiskA/Sub", "source": "disks"},
+                headers=auth,
+            )
+        self.assertEqual(st_br, 200)
+        self.assertTrue(body_br["success"])
+        self.assertEqual(body_br["current_path"], "DiskA/Sub")
+        self.assertEqual(body_br["parent_path"], "DiskA")
+
+        for ep, payload in (
+            ("/api/transfer/resolve_conflict", {"job_id": "missing", "action": "rename", "apply_to_all": True}),
+            ("/api/transfer/pause", {"job_id": "missing"}),
+            ("/api/transfer/resume", {"job_id": "missing"}),
+            ("/api/transfer/cancel", {"job_id": "missing"}),
+            ("/api/transfer/clear", {}),
+            ("/api/transfer/clipboard/clear", {}),
+        ):
+            st_c, _ = self._raw_http("POST", ep, payload=payload, headers=auth)
+            self.assertEqual(st_c, 200)
+
+        # 6. Explorer hotkey setting persists & appears in /api/load_settings
+        st_hk, body_hk = self._raw_http(
+            "POST",
+            "/api/settings/explorer_hotkey",
+            payload={"enabled": False},
+            headers=auth,
+        )
+        self.assertEqual(st_hk, 200)
+        self.assertFalse(body_hk["enabled"])
+        _, ls = self._raw_http("GET", "/api/load_settings", headers=auth)
+        self.assertIs(ls.get("explorerHotkeyEnabled"), False)
+        self._raw_http("POST", "/api/settings/explorer_hotkey", payload={"enabled": True}, headers=auth)
+
+    def test_sse_desktop_clipboard_copy_verifies_active_user(self):
+        cfg = self.config_manager.load_or_create_config()
+        srv = self.config_manager.get_active_server(cfg)
+
+        envelope_other = json.dumps({
+            "type": "desktop_clipboard_copy",
+            "ts": 1700000000,
+            "data": {
+                "username": "mallory",
+                "items": [{"rel_path": "DiskA/secret.txt", "name": "secret.txt", "is_dir": False}],
+            },
+        })
+        with patch.object(self.core, "_show_windows_toast", return_value=True) as mock_toast:
+            accepted_other = self.core._process_backend_sse_event("desktop_clipboard_copy", envelope_other, srv, cfg)
+        self.assertFalse(accepted_other)
+        self.assertEqual(self.core._transfer_manager.get_clipboard()["mode"], "")
+        mock_toast.assert_not_called()
+
+        envelope_alice = json.dumps({
+            "type": "desktop_clipboard_copy",
+            "ts": 1700000001,
+            "data": {
+                "username": "alice",
+                "items": [{"rel_path": "DiskA/report.pdf", "name": "report.pdf", "is_dir": False, "size": 42}],
+            },
+        })
+        with patch.object(self.core, "_show_windows_toast", return_value=True) as mock_toast:
+            accepted_alice = self.core._process_backend_sse_event("desktop_clipboard_copy", envelope_alice, srv, cfg)
+        self.assertTrue(accepted_alice)
+        clip = self.core._transfer_manager.get_clipboard()
+        self.assertEqual(clip["mode"], "server")
+        self.assertEqual(clip["source_origin"], "web_explorer")
+        self.assertEqual(clip["items"][0]["rel_path"], "DiskA/report.pdf")
+        mock_toast.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

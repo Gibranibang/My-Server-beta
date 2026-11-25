@@ -337,6 +337,22 @@ import dialog_helper
 
 
 
+import explorer_tab_reader
+
+
+
+
+
+
+
+import http_transfer_manager
+
+
+
+
+
+
+
 import logger_manager
 
 
@@ -2392,6 +2408,7 @@ def _build_load_settings_payload() -> dict:
     return {
         "autostart": is_autorun_enabled(),
         "explorerContextMenuEnabled": is_explorer_context_menu_enabled(),
+        "explorerHotkeyEnabled": bool(cfg.get("explorer_hotkey_enabled", True)),
         "openDashboard": bool(cfg.get("open_dashboard_on_launch", False)),
         "autoMountSmb": bool(cfg.get("auto_mount_smb", True)),
         "autoZeroTier": bool(cfg.get("auto_zerotier", True)),
@@ -19132,6 +19149,477 @@ def _handle_share_accounts_revoke(body=None):
     return 200, {"success": True, "grant_id": clean_gid}
 
 
+def _get_transfer_backend_session(server_id=None):
+    """Memperoleh (server_id, server_name, backend_url, bearer_token) dengan isolasi kredensial SECH-03."""
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    req_sid = str(server_id or "").strip() or None
+    srv = _select_target_server(cfg, target_server_id=req_sid, strict=bool(req_sid))
+    if not isinstance(srv, dict):
+        raise RuntimeError("BACKEND_SESSION_UNAVAILABLE")
+    backend_url = _resolve_share_backend_url(cfg, srv)
+    if not backend_url:
+        raise RuntimeError("BACKEND_SESSION_UNAVAILABLE")
+    st_code, _data, token = _backend_share_request(
+        srv, cfg, "/api/v1/storage/disks", method="GET", backend_url=backend_url
+    )
+    if st_code == 401 or not token:
+        raise RuntimeError("BACKEND_SESSION_UNAUTHENTICATED")
+    if st_code == 0 or st_code >= 500:
+        raise RuntimeError("BACKEND_SESSION_UNAVAILABLE")
+    sid = str(srv.get("id") or "")
+    sname = str(srv.get("name") or sid)
+    return (sid, sname, backend_url, str(token))
+
+
+_transfer_manager = http_transfer_manager.HttpTransferManager(
+    resolve_smb_target_fn=_resolve_smb_share_target,
+    get_backend_session_fn=_get_transfer_backend_session,
+    notify_local_dir_fn=smb_mount_manager.notify_local_folder_updated,
+    on_toast_fn=_show_windows_toast,
+)
+
+
+def _show_transfer_toast(title_id: str, body_id: str, title_en: str, body_en: str, level: str = "info") -> bool:
+    """Menampilkan Windows Toast dwibahasa (ID/EN) mengikuti preferensi bahasa konfigurasi aktif."""
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    lang = str((cfg or {}).get("language", "en") or "en").strip().lower()
+    if lang == "en":
+        return _show_windows_toast(title_en, body_en, level=level)
+    return _show_windows_toast(title_id, body_id, level=level)
+
+
+def _handle_transfer_copy(body=None):
+    """Jalur masuk tunggal POST /api/transfer/copy untuk hotkey, context_menu, dan companion."""
+    payload = body if isinstance(body, dict) else {}
+    source = str(payload.get("source") or "hotkey").strip().lower()
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+
+    if source == "companion":
+        req_sid = str(payload.get("server_id") or payload.get("serverId") or "").strip() or None
+        srv = _select_target_server(cfg, target_server_id=req_sid, strict=bool(req_sid))
+        if not isinstance(srv, dict):
+            return 400, {"success": False, "code": "FOREIGN_NAS", "error": "Target server not found."}
+        sid = str(srv.get("id") or "")
+        sname = str(srv.get("name") or sid)
+
+        norm_items = []
+        raw_items = payload.get("items")
+        if isinstance(raw_items, list):
+            for it in raw_items:
+                if isinstance(it, dict):
+                    rel = str(it.get("relative_path") or it.get("rel_path") or it.get("path") or "").strip().strip("/")
+                    if not rel:
+                        continue
+                    norm_items.append({
+                        "rel_path": rel,
+                        "name": str(it.get("name") or rel.split("/")[-1]),
+                        "is_dir": it.get("is_dir") if isinstance(it.get("is_dir"), bool) else None,
+                        "size": int(it.get("size") or 0),
+                    })
+                else:
+                    rel = str(it or "").strip().strip("/")
+                    if rel:
+                        norm_items.append({
+                            "rel_path": rel,
+                            "name": rel.split("/")[-1],
+                            "is_dir": None,
+                            "size": 0,
+                        })
+        elif isinstance(payload.get("relative_paths"), list):
+            for rel_str in payload.get("relative_paths"):
+                rel = str(rel_str or "").strip().strip("/")
+                if rel:
+                    norm_items.append({
+                        "rel_path": rel,
+                        "name": rel.split("/")[-1],
+                        "is_dir": None,
+                        "size": 0,
+                    })
+
+        if not norm_items:
+            return 200, {"success": False, "code": "EMPTY_SELECTION", "error": "No items selected."}
+
+        snap = _transfer_manager.set_clipboard_server(sid, sname, norm_items, source_origin="companion")
+        cnt = len(snap.get("items") or [])
+        _show_transfer_toast(
+            "Clipboard MyServer",
+            f"{cnt} item disalin ke Clipboard MyServer",
+            "MyServer Clipboard",
+            f"{cnt} item(s) copied to MyServer Clipboard",
+            level="info",
+        )
+        return 200, {"success": True, "clipboard": {**snap, "kind": snap.get("mode") or "empty"}}
+
+    if source == "hotkey":
+        fg_hwnd = int(payload.get("fg_hwnd") or 0)
+        top_tab_hwnd = int(payload.get("top_tab_hwnd") or 0)
+        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=1500)
+        if tab_res.get("timed_out"):
+            _show_transfer_toast(
+                "Explorer tidak merespons",
+                "Tab Explorer SMB/FUSE sedang hang. Coba lagi atau gunakan klik kanan.",
+                "Explorer not responding",
+                "SMB/FUSE Explorer tab hung. Try again or use right-click.",
+                level="error",
+            )
+            return 200, {
+                "success": False,
+                "code": "EXPLORER_TIMEOUT",
+                "error": str(tab_res.get("error") or "TIMEOUT"),
+            }
+        if not tab_res.get("ok"):
+            err_code = str(tab_res.get("error") or "EXPLORER_READ_FAILED")
+            return 200, {"success": False, "code": err_code, "error": err_code}
+        paths = [str(p).strip() for p in (tab_res.get("selected_items") or []) if str(p).strip()]
+        if not paths:
+            _show_transfer_toast(
+                "Tidak ada item dipilih",
+                "Sorot minimal satu file atau folder di Explorer sebelum menyalin.",
+                "No items selected",
+                "Select at least one file or folder in Explorer before copying.",
+                level="info",
+            )
+            return 200, {"success": False, "code": "EMPTY_SELECTION", "error": "No items selected in Explorer."}
+    elif source == "context_menu":
+        raw_paths = payload.get("paths")
+        if not isinstance(raw_paths, list) and payload.get("path"):
+            raw_paths = [payload.get("path")]
+        paths = [str(p).strip() for p in (raw_paths or []) if str(p).strip()]
+        if not paths:
+            _show_transfer_toast(
+                "Tidak ada item dipilih",
+                "Tidak ada file atau folder yang diteruskan untuk disalin.",
+                "No items selected",
+                "No files or folders provided to copy.",
+                level="info",
+            )
+            return 200, {"success": False, "code": "EMPTY_SELECTION", "error": "No paths provided."}
+    else:
+        return 400, {"success": False, "code": "UNSUPPORTED_SOURCE", "error": f"Unsupported copy source: {source}"}
+
+    local_paths = []
+    server_targets = []
+    bad_targets = []
+    for p in paths:
+        ok, res = _resolve_smb_share_target(p, cfg=cfg)
+        if ok:
+            server_targets.append(res)
+        else:
+            err_code = str((res or {}).get("code") or "INVALID_PATH")
+            if err_code == "LOCAL_DRIVE":
+                local_paths.append(p)
+            else:
+                bad_targets.append((err_code, res))
+
+    if bad_targets:
+        err_code, err_res = bad_targets[0]
+        _show_transfer_toast(
+            "Tidak dapat menyalin item",
+            f"Drive atau folder tidak didukung ({err_code}).",
+            "Cannot copy item",
+            f"Unsupported drive/folder or server offline ({err_code}).",
+            level="error",
+        )
+        return 200, {
+            "success": False,
+            "code": err_code,
+            "error": str((err_res or {}).get("message") or err_code),
+        }
+
+    if local_paths and server_targets:
+        _show_transfer_toast(
+            "Campuran sumber tidak didukung",
+            "Tidak dapat menyalin item lokal dan server MyServer sekaligus.",
+            "Mixed sources unsupported",
+            "Cannot copy local and MyServer items together.",
+            level="error",
+        )
+        return 200, {
+            "success": False,
+            "code": "MIXED_SOURCES",
+            "error": "Cannot mix local and MyServer items.",
+        }
+
+    if server_targets:
+        server_ids = {str(t.get("server_id") or "") for t in server_targets}
+        if len(server_ids) > 1:
+            _show_transfer_toast(
+                "Campuran server tidak didukung",
+                "Tidak dapat menyalin item dari dua server MyServer berbeda sekaligus.",
+                "Mixed servers unsupported",
+                "Cannot copy items from multiple MyServer instances at once.",
+                level="error",
+            )
+            return 200, {
+                "success": False,
+                "code": "MIXED_SERVERS",
+                "error": "Cannot mix items from different servers.",
+            }
+        first = server_targets[0]
+        srv_items = [
+            {
+                "rel_path": t["canonical_rel"],
+                "name": t["basename"],
+                "is_dir": bool(t.get("is_dir")),
+                "size": 0,
+            }
+            for t in server_targets
+        ]
+        snap = _transfer_manager.set_clipboard_server(
+            first["server_id"],
+            first["server_name"],
+            srv_items,
+            source_origin=source,
+        )
+        cnt = len(snap.get("items") or [])
+        _show_transfer_toast(
+            "Clipboard MyServer",
+            f"{cnt} item disalin ke Clipboard MyServer",
+            "MyServer Clipboard",
+            f"{cnt} item(s) copied to MyServer Clipboard",
+            level="info",
+        )
+        return 200, {"success": True, "clipboard": {**snap, "kind": snap.get("mode") or "empty"}}
+
+    snap = _transfer_manager.set_clipboard_local(local_paths)
+    cnt = len(snap.get("items") or [])
+    _show_transfer_toast(
+        "Clipboard MyServer",
+        f"{cnt} item disalin ke Clipboard MyServer",
+        "MyServer Clipboard",
+        f"{cnt} item(s) copied to MyServer Clipboard",
+        level="info",
+    )
+    return 200, {"success": True, "clipboard": {**snap, "kind": snap.get("mode") or "empty"}}
+
+
+def _handle_transfer_paste(body=None):
+    """Jalur masuk tunggal POST /api/transfer/paste untuk hotkey, context_menu, dan quick_picker."""
+    payload = body if isinstance(body, dict) else {}
+    source = str(payload.get("source") or "hotkey").strip().lower()
+
+    if source == "hotkey":
+        clip = _transfer_manager.get_clipboard()
+        if not clip.get("mode") or not clip.get("items"):
+            _show_transfer_toast(
+                "Clipboard MyServer kosong",
+                "Salin file atau folder terlebih dahulu sebelum menempel.",
+                "MyServer Clipboard empty",
+                "Copy files or folders first before pasting.",
+                level="info",
+            )
+            return 200, {"success": False, "code": "CLIPBOARD_EMPTY"}
+
+        fg_hwnd = int(payload.get("fg_hwnd") or 0)
+        top_tab_hwnd = int(payload.get("top_tab_hwnd") or 0)
+        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=1500)
+        if tab_res.get("timed_out"):
+            if clip.get("mode") == "local":
+                return 200, {
+                    "success": True,
+                    "ui_action": "open_transfer_window",
+                    "mode": "quick_picker",
+                    "direction": "upload",
+                }
+            res = _transfer_manager.dispatch_paste(force_quick_picker=True)
+            return 200, res
+
+        dest_path = str(tab_res.get("folder_path") or "").strip()
+        res = _transfer_manager.dispatch_paste(dest_path=dest_path)
+    elif source == "context_menu":
+        dest_path = str(payload.get("dest_path") or payload.get("path") or "").strip()
+        res = _transfer_manager.dispatch_paste(dest_path=dest_path)
+    elif source == "quick_picker":
+        server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip()
+        dest_rel = str(payload.get("dest_rel") or payload.get("destRel") or "").strip()
+        res = _transfer_manager.dispatch_paste(server_id=server_id, dest_rel=dest_rel)
+    else:
+        res = _transfer_manager.dispatch_paste(
+            dest_path=str(payload.get("dest_path") or "").strip(),
+            server_id=str(payload.get("server_id") or payload.get("serverId") or "").strip(),
+            dest_rel=str(payload.get("dest_rel") or payload.get("destRel") or "").strip(),
+        )
+
+    if not res.get("success") and res.get("code") == "CLIPBOARD_EMPTY":
+        _show_transfer_toast(
+            "Clipboard MyServer kosong",
+            "Salin file atau folder terlebih dahulu sebelum menempel.",
+            "MyServer Clipboard empty",
+            "Copy files or folders first before pasting.",
+            level="info",
+        )
+    return 200, res
+
+
+def _handle_transfer_status(body=None):
+    """Menangani GET/POST /api/transfer/status."""
+    payload = body if isinstance(body, dict) else {}
+    job_id = str(payload.get("job_id") or payload.get("jobId") or "").strip() or None
+    st = _transfer_manager.get_status(job_id=job_id)
+    return 200, {"success": True, "max_workers": _transfer_manager.max_workers, **st}
+
+
+def _handle_transfer_browse(body=None):
+    """Menangani POST /api/transfer/browse untuk Quick Picker."""
+    payload = body if isinstance(body, dict) else {}
+    sid = str(payload.get("server_id") or payload.get("serverId") or "").strip() or None
+    path = str(payload.get("path") or "").strip()
+    src = str(payload.get("source") or "disks").strip().lower()
+    try:
+        res = _transfer_manager.browse_directory(server_id=sid, path=path, source=src)
+    except RuntimeError as exc:
+        msg = str(exc)
+        return 200, {
+            "success": False,
+            "ok": False,
+            "current_path": path,
+            "parent_path": "",
+            "effective_role": "viewer",
+            "writable": False,
+            "items": [],
+            "needsAuth": ("UNAUTHENTICATED" in msg),
+            "error": msg,
+        }
+    ok = bool(res.get("ok"))
+    cur = str(res.get("path") or "")
+    parent = cur.rsplit("/", 1)[0] if "/" in cur else ""
+    return 200, {
+        **res,
+        "success": ok,
+        "current_path": cur,
+        "parent_path": parent,
+        "view_mode": res.get("source", src),
+        "needsAuth": (res.get("status") == 401),
+        "error": res.get("detail") if not ok else None,
+    }
+
+
+def _handle_transfer_resolve_conflict(body=None):
+    """Menangani POST /api/transfer/resolve_conflict."""
+    payload = body if isinstance(body, dict) else {}
+    job_id = str(payload.get("job_id") or payload.get("jobId") or "").strip()
+    action = str(payload.get("action") or "").strip()
+    apply_to_all = bool(
+        payload.get("apply_to_all") if "apply_to_all" in payload else payload.get("applyToAll", False)
+    )
+    res = _transfer_manager.resolve_conflict(job_id=job_id, action=action, apply_to_all=apply_to_all)
+    st = _transfer_manager.get_status(job_id=res.get("job_id") or job_id or None)
+    return 200, {**st, **res, "max_workers": _transfer_manager.max_workers}
+
+
+def _handle_transfer_pause(body=None):
+    """Menangani POST /api/transfer/pause."""
+    payload = body if isinstance(body, dict) else {}
+    job_id = str(payload.get("job_id") or payload.get("jobId") or "").strip() or None
+    res = _transfer_manager.pause_job(job_id=job_id)
+    st = _transfer_manager.get_status(job_id=res.get("job_id") or job_id)
+    return 200, {**st, **res, "max_workers": _transfer_manager.max_workers}
+
+
+def _handle_transfer_resume(body=None):
+    """Menangani POST /api/transfer/resume."""
+    payload = body if isinstance(body, dict) else {}
+    job_id = str(payload.get("job_id") or payload.get("jobId") or "").strip() or None
+    res = _transfer_manager.resume_job(job_id=job_id)
+    st = _transfer_manager.get_status(job_id=res.get("job_id") or job_id)
+    return 200, {**st, **res, "max_workers": _transfer_manager.max_workers}
+
+
+def _handle_transfer_cancel(body=None):
+    """Menangani POST /api/transfer/cancel."""
+    payload = body if isinstance(body, dict) else {}
+    job_id = str(payload.get("job_id") or payload.get("jobId") or "").strip() or None
+    res = _transfer_manager.cancel_job(job_id=job_id)
+    st = _transfer_manager.get_status(job_id=res.get("job_id") or job_id)
+    return 200, {**st, **res, "max_workers": _transfer_manager.max_workers}
+
+
+def _handle_transfer_clear(body=None):
+    """Menangani POST /api/transfer/clear."""
+    res = _transfer_manager.clear_finished()
+    st = _transfer_manager.get_status()
+    return 200, {**st, **res, "max_workers": _transfer_manager.max_workers}
+
+
+def _handle_transfer_clipboard_get():
+    """Menangani GET/POST /api/transfer/clipboard/get."""
+    clip = _transfer_manager.get_clipboard()
+    kind = clip.get("mode") if clip.get("mode") in ("local", "server") else "empty"
+    return 200, {"success": True, "kind": kind, **clip}
+
+
+def _handle_transfer_clipboard_clear():
+    """Menangani POST /api/transfer/clipboard/clear."""
+    _transfer_manager.clear_clipboard()
+    return 200, {"success": True, "kind": "empty", "items": []}
+
+
+def _handle_explorer_hotkey_setting(body=None):
+    """Menangani POST /api/settings/explorer_hotkey secara terautentikasi."""
+    payload = body if isinstance(body, dict) else {}
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    if "enabled" in payload:
+        want = bool(payload["enabled"])
+        cfg["explorer_hotkey_enabled"] = want
+        if config_manager:
+            config_manager.save_config(cfg)
+        return 200, {"success": True, "enabled": want}
+    return 200, {"success": True, "enabled": bool((cfg or {}).get("explorer_hotkey_enabled", True))}
+
+
+def _process_backend_sse_event(ev_name: str, data_raw: str, srv_s, cfg_s=None) -> bool:
+    """Memproses event SSE Backend (desktop_clipboard_copy) dengan verifikasi kecocokan akun aktif (ASVS V3)."""
+    if ev_name != "desktop_clipboard_copy" or not data_raw or not isinstance(srv_s, dict):
+        return False
+    try:
+        evt_data = json.loads(data_raw)
+    except Exception:
+        return False
+    if not isinstance(evt_data, dict):
+        return False
+    inner = evt_data.get("data") if isinstance(evt_data.get("data"), dict) else evt_data
+    event_user = str(inner.get("username") or "").strip().lower()
+    if not event_user:
+        return False
+
+    smb_cfg = (
+        config_manager.get_server_smb_source_config(srv_s)
+        if (config_manager and hasattr(config_manager, "get_server_smb_source_config"))
+        else {}
+    )
+    smb_source = str((smb_cfg or {}).get("source") or "zimaos").strip().lower()
+    if smb_source == "backend":
+        active_user = str((smb_cfg or {}).get("username") or "").strip().lower()
+    else:
+        creds = (
+            config_manager.get_server_credentials(srv_s)
+            if (config_manager and hasattr(config_manager, "get_server_credentials"))
+            else {}
+        )
+        active_user = str((creds or {}).get("username") or "").strip().lower()
+
+    if not active_user or event_user != active_user:
+        return False
+
+    items = inner.get("items") or []
+    if not isinstance(items, list) or not items:
+        return False
+    sid = str(srv_s.get("id") or "")
+    sname = str(srv_s.get("name") or sid)
+    snap = _transfer_manager.set_clipboard_server(sid, sname, items, source_origin="web_explorer")
+    cnt = len(snap.get("items") or [])
+    if cnt > 0:
+        _show_transfer_toast(
+            "Clipboard MyServer (Web)",
+            f"{cnt} item disalin dari Web Explorer",
+            "MyServer Clipboard (Web)",
+            f"{cnt} item(s) copied from Web Explorer",
+            level="info",
+        )
+        return True
+    return False
+
+
 def _scan_compose_apps_now():
 
 
@@ -26370,6 +26858,14 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     "networks": zt_nets
                 }
             })
+        elif path == "/api/transfer/status":
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            job_id = (query.get("job_id", [""])[0] or query.get("jobId", [""])[0]).strip() or None
+            status_code, res = _handle_transfer_status({"job_id": job_id} if job_id else {})
+            self._send_json(res, status=status_code)
+        elif path == "/api/transfer/clipboard/get":
+            status_code, res = _handle_transfer_clipboard_get()
+            self._send_json(res, status=status_code)
         elif path in ("/api/load_settings", "/api/get_settings"):
             self._send_json(_build_load_settings_payload())
         else:
@@ -33416,6 +33912,66 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             self._send_json(res, status=status_code)
             return
 
+        if path == "/api/settings/explorer_hotkey":
+            status_code, res = _handle_explorer_hotkey_setting(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/copy":
+            status_code, res = _handle_transfer_copy(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/paste":
+            status_code, res = _handle_transfer_paste(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/status":
+            status_code, res = _handle_transfer_status(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/browse":
+            status_code, res = _handle_transfer_browse(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/resolve_conflict":
+            status_code, res = _handle_transfer_resolve_conflict(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/pause":
+            status_code, res = _handle_transfer_pause(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/resume":
+            status_code, res = _handle_transfer_resume(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/cancel":
+            status_code, res = _handle_transfer_cancel(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/clear":
+            status_code, res = _handle_transfer_clear(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/clipboard/get":
+            status_code, res = _handle_transfer_clipboard_get()
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/transfer/clipboard/clear":
+            status_code, res = _handle_transfer_clipboard_clear()
+            self._send_json(res, status=status_code)
+            return
+
         if path == "/api/open_backend_file_manager":
             cfg = config_manager.load_or_create_config()
             req_srv_id = (
@@ -37679,6 +38235,7 @@ def _backend_sse_listener_loop():
                 headers={"Authorization": f"Bearer {tok}", "Accept": "text/event-stream"},
             )
             with urllib.request.urlopen(sse_req, timeout=45.0) as resp:
+                current_ev_name = ""
                 for raw_line in resp:
                     cfg_now = config_manager.load_or_create_config() if config_manager else {}
                     srv_now = config_manager.get_active_server(cfg_now) if config_manager else None
@@ -37686,10 +38243,15 @@ def _backend_sse_listener_loop():
                     if str((srv_now or {}).get("id") or "") != connected_srv_id or b_url_now != connected_url:
                         break
                     line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line:
+                        current_ev_name = ""
+                        continue
                     if line.startswith("event:"):
-                        ev_name = line[6:].strip()
-                        if ev_name in ("smb_mode_changed", "smb_synced", "storage_changed"):
+                        current_ev_name = line[6:].strip()
+                        if current_ev_name in ("smb_mode_changed", "smb_synced", "storage_changed"):
                             smb_mount_manager.clear_smb_share_cache()
+                    elif line.startswith("data:"):
+                        _process_backend_sse_event(current_ev_name, line[5:].strip(), srv_now, cfg_now)
         except urllib.error.HTTPError as he:
             if getattr(he, "code", None) in (401, 403) and not was_forced:
                 force_refresh_next = True

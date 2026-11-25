@@ -1582,4 +1582,44 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn parse_explorer_cli_action_parses_copy_and_paste_with_quotes_and_spaces() {
+        let exe = "MyServer-Beta.exe".to_string();
+        assert_eq!(
+            parse_explorer_cli_action(&[
+                exe.clone(),
+                "--explorer-copy".into(),
+                "D:\\Folder Uji\\berkas.txt".into()
+            ]),
+            Some(ExplorerTransferCliAction::Copy(
+                "D:\\Folder Uji\\berkas.txt".into()
+            ))
+        );
+        assert_eq!(
+            parse_explorer_cli_action(&[
+                exe.clone(),
+                "--explorer-copy=\"D:\\Folder Uji\\berkas.txt\"".into()
+            ]),
+            Some(ExplorerTransferCliAction::Copy(
+                "D:\\Folder Uji\\berkas.txt".into()
+            ))
+        );
+        assert_eq!(
+            parse_explorer_cli_action(&[exe.clone(), "--explorer-paste".into(), "Z:\"".into()]),
+            Some(ExplorerTransferCliAction::Paste("Z:\\".into()))
+        );
+        assert_eq!(
+            parse_explorer_cli_action(&[exe.clone(), "--explorer-paste=Z:\"".into()]),
+            Some(ExplorerTransferCliAction::Paste("Z:\\".into()))
+        );
+        assert_eq!(
+            parse_explorer_cli_action(&[exe.clone(), "--explorer-copy".into()]),
+            None
+        );
+        assert_eq!(
+            parse_explorer_cli_action(&[exe, "--explorer-paste=".into()]),
+            None
+        );
+    }
 }

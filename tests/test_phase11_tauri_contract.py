@@ -187,7 +187,7 @@ class TestRustAndCapabilitiesContract(unittest.TestCase):
 
     def test_01_capabilities_allowlists_main_and_share_window(self):
         self.assertEqual(self.cap.get("identifier"), "default")
-        self.assertEqual(self.cap.get("windows"), ["main", "share-window"])
+        self.assertEqual(self.cap.get("windows"), ["main", "share-window", "transfer-window"])
         self.assertEqual(self.cap.get("permissions"), ["core:default"])
 
     def test_02_lib_rs_delimiters_and_syntax_sanity(self):

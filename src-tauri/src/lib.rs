@@ -1051,6 +1051,10 @@ fn start_explorer_hook_worker(app: AppHandle) {
             }
         }
         last_trigger = Some((ev.action, ev.fg_hwnd, now));
+        trace_log(&format!(
+            "explorer_hook triggered: action={:?} fg_hwnd={} top_tab_hwnd={}",
+            ev.action, ev.fg_hwnd, ev.top_tab_hwnd
+        ));
 
         let app_clone = app.clone();
         let (endpoint, payload) = match ev.action {
@@ -1075,6 +1079,7 @@ fn start_explorer_hook_worker(app: AppHandle) {
         tauri::async_runtime::spawn(async move {
             match call_core_api(endpoint.clone(), payload).await {
                 Ok(res) => {
+                    trace_log(&format!("hotkey {} core response: {}", endpoint, res));
                     if res.get("ui_action").and_then(|v| v.as_str())
                         == Some("open_transfer_window")
                     {

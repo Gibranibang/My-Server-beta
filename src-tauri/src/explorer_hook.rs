@@ -103,7 +103,6 @@ mod imp {
             lParam: isize,
         ) -> i32;
         fn GetAsyncKeyState(vKey: i32) -> i16;
-        fn GetKeyState(nVirtKey: i32) -> i16;
         fn GetForegroundWindow() -> *mut c_void;
         fn GetClassNameW(
             hWnd: *mut c_void,
@@ -164,8 +163,8 @@ mod imp {
                 let shift_up = unsafe { GetAsyncKeyState(VK_SHIFT) } >= 0;
                 let lwin_up = unsafe { GetAsyncKeyState(VK_LWIN) } >= 0;
                 let rwin_up = unsafe { GetAsyncKeyState(VK_RWIN) } >= 0;
-                let altgr_only = unsafe { GetKeyState(VK_RMENU) } < 0
-                    && unsafe { GetKeyState(VK_LCONTROL) } >= 0;
+                let altgr_only = unsafe { GetAsyncKeyState(VK_RMENU) } < 0
+                    && unsafe { GetAsyncKeyState(VK_LCONTROL) } >= 0;
 
                 if ctrl_down && alt_down && shift_up && lwin_up && rwin_up && !altgr_only {
                     let fg = unsafe { GetForegroundWindow() };

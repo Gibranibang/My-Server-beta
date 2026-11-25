@@ -230,6 +230,81 @@ def _run_pythonnet_sta_worker(
     sta_thread.Start()
 
 
+_PS_LOCK = threading.Lock()
+_ps_persistent_proc = None
+_ps_cold_started = False
+
+
+def _ensure_persistent_ps_proc():
+    """Start or return a persistent hidden PowerShell -STA process with precompiled COM helper."""
+    global _ps_persistent_proc, _ps_cold_started
+    if _ps_persistent_proc is not None and _ps_persistent_proc.poll() is None:
+        return _ps_persistent_proc
+    ps_loop = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+$cs = @'
+{_CSHARP_COM_HELPER}
+'@
+if (-not ('ExplorerTabComHelper' -as [type])) {{
+    Add-Type -TypeDefinition $cs -Language CSharp | Out-Null
+}}
+$shell = New-Object -ComObject Shell.Application
+[Console]::Out.WriteLine("READY")
+[Console]::Out.Flush()
+while ($null -ne ($line = [Console]::In.ReadLine())) {{
+    $parts = $line.Split(',')
+    $fInt = [long]$parts[0]
+    $tInt = [long]$parts[1]
+    $wins = $shell.Windows()
+    $out = @{{ ok = $false; timed_out = $false; folder_path = ""; selected_items = @(); tab_hwnd = 0; error = "TAB_NOT_FOUND" }}
+    foreach ($w in $wins) {{
+        try {{
+            if ([string]$w.FullName -notlike "*explorer.exe") {{ continue }}
+            if ($fInt -ne 0 -and [long]$w.HWND -ne $fInt) {{ continue }}
+            $th = [ExplorerTabComHelper]::GetShellBrowserTabHwnd($w)
+            if ($tInt -ne 0 -and $th -ne $tInt) {{ continue }}
+            $doc = $w.Document
+            if ($null -eq $doc) {{ continue }}
+            $fp = ""
+            try {{ $fp = [string]$doc.Folder.Self.Path }} catch {{}}
+            $sel = @()
+            try {{
+                $items = $doc.SelectedItems()
+                if ($null -ne $items) {{
+                    foreach ($it in $items) {{
+                        $p = [string]$it.Path
+                        if ($p) {{ $sel += $p }}
+                    }}
+                }}
+            }} catch {{}}
+            $out = @{{ ok = $true; timed_out = $false; folder_path = $fp; selected_items = $sel; tab_hwnd = $th; error = "" }}
+            break
+        }} catch {{}}
+    }}
+    [Console]::Out.WriteLine(($out | ConvertTo-Json -Compress -Depth 4))
+    [Console]::Out.Flush()
+}}
+"""
+    _ps_persistent_proc = subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command", ps_loop],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    ready_line = _ps_persistent_proc.stdout.readline().strip() if _ps_persistent_proc.stdout else ""
+    if ready_line != "READY":
+        try:
+            _ps_persistent_proc.kill()
+        except Exception:
+            pass
+        _ps_persistent_proc = None
+        raise RuntimeError(f"POWERSHELL_DAEMON_NOT_READY:{ready_line}")
+    _ps_cold_started = True
+    return _ps_persistent_proc
+
+
 def _run_powershell_sta_worker(
     fg_hwnd: int,
     top_tab_hwnd: int,
@@ -239,60 +314,17 @@ def _run_powershell_sta_worker(
     on_finish: Callable[[], None],
 ) -> None:
     """Fallback PowerShell STA tersembunyi (CREATE_NO_WINDOW=0x08000000) bila pythonnet tidak tersedia."""
-    ps_script = f"""
-$ErrorActionPreference = 'SilentlyContinue'
-$cs = @'
-{_CSHARP_COM_HELPER}
-'@
-if (-not ('ExplorerTabComHelper' -as [type])) {{
-    Add-Type -TypeDefinition $cs -Language CSharp | Out-Null
-}}
-$fInt = [long]{int(fg_hwnd or 0)}
-$tInt = [long]{int(top_tab_hwnd or 0)}
-$shell = New-Object -ComObject Shell.Application
-$wins = $shell.Windows()
-$out = @{{ ok = $false; timed_out = $false; folder_path = ""; selected_items = @(); tab_hwnd = 0; error = "TAB_NOT_FOUND" }}
-foreach ($w in $wins) {{
-    try {{
-        if ([string]$w.FullName -notlike "*explorer.exe") {{ continue }}
-        if ($fInt -ne 0 -and [long]$w.HWND -ne $fInt) {{ continue }}
-        $th = [ExplorerTabComHelper]::GetShellBrowserTabHwnd($w)
-        if ($tInt -ne 0 -and $th -ne $tInt) {{ continue }}
-        $doc = $w.Document
-        if ($null -eq $doc) {{ continue }}
-        $fp = ""
-        try {{ $fp = [string]$doc.Folder.Self.Path }} catch {{}}
-        $sel = @()
-        try {{
-            $items = $doc.SelectedItems()
-            if ($null -ne $items) {{
-                foreach ($it in $items) {{
-                    $p = [string]$it.Path
-                    if ($p) {{ $sel += $p }}
-                }}
-            }}
-        }} catch {{}}
-        $out = @{{ ok = $true; timed_out = $false; folder_path = $fp; selected_items = $sel; tab_hwnd = $th; error = "" }}
-        break
-    }} catch {{}}
-}}
-$out | ConvertTo-Json -Compress -Depth 4
-"""
-
     def _ps_runner():
-        proc = None
+        global _ps_persistent_proc
         try:
-            proc = subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command", ps_script],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            stdout, _ = proc.communicate(timeout=max(0.2, timeout_ms / 1000.0 + 0.3))
-            raw = (stdout or "").strip()
+            with _PS_LOCK:
+                proc = _ensure_persistent_ps_proc()
+                assert proc.stdin is not None and proc.stdout is not None
+                proc.stdin.write(f"{int(fg_hwnd or 0)},{int(top_tab_hwnd or 0)}\n")
+                proc.stdin.flush()
+                raw = proc.stdout.readline().strip()
             if raw:
-                parsed = json.loads(raw.splitlines()[-1])
+                parsed = json.loads(raw)
                 sel = parsed.get("selected_items")
                 if isinstance(sel, str):
                     sel = [sel] if sel else []
@@ -315,21 +347,14 @@ $out | ConvertTo-Json -Compress -Depth 4
                     "tab_hwnd": 0,
                     "error": "POWERSHELL_EMPTY_OUTPUT",
                 })
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            result_box.update({
-                "ok": False,
-                "timed_out": True,
-                "folder_path": "",
-                "selected_items": [],
-                "tab_hwnd": 0,
-                "error": "TIMEOUT",
-            })
         except Exception as exc:
+            with _PS_LOCK:
+                if _ps_persistent_proc is not None:
+                    try:
+                        _ps_persistent_proc.kill()
+                    except Exception:
+                        pass
+                    _ps_persistent_proc = None
             result_box.update({
                 "ok": False,
                 "timed_out": False,
@@ -354,9 +379,11 @@ def _spawn_sta_com_worker(
     done_event: threading.Event,
     on_finish: Callable[[], None],
 ) -> None:
-    """Pilih pythonnet STA terlebih dahulu, jatuh ke PowerShell STA bila clr gagal dimuat."""
+    """Pilih PowerShell STA persisten (atau pythonnet STA bila CSharpCodeProvider tersedia)."""
     try:
         import clr  # type: ignore  # noqa: F401
+        import Microsoft.CSharp  # type: ignore  # noqa: F401
+        import System.CodeDom.Compiler  # type: ignore  # noqa: F401
         _run_pythonnet_sta_worker(fg_hwnd, top_tab_hwnd, result_box, done_event, on_finish)
     except Exception:
         _run_powershell_sta_worker(fg_hwnd, top_tab_hwnd, timeout_ms, result_box, done_event, on_finish)
@@ -430,6 +457,14 @@ def read_active_explorer_tab(fg_hwnd: int, top_tab_hwnd: int = 0, timeout_ms: in
 
     wait_sec = max(0.01, float(timeout_ms) / 1000.0)
     if not done_event.wait(wait_sec):
+        with _PS_LOCK:
+            global _ps_persistent_proc
+            if _ps_persistent_proc is not None:
+                try:
+                    _ps_persistent_proc.kill()
+                except Exception:
+                    pass
+                _ps_persistent_proc = None
         return {
             "ok": False,
             "timed_out": True,

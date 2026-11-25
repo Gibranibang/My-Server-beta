@@ -411,7 +411,11 @@ class HttpTransferManager:
                     any_writable = True
                 row = dict(it)
                 row["role"] = role
+                row["effective_role"] = role
                 row["writable"] = is_w
+                row["is_dir"] = bool(it.get("is_dir", True)) if str(it.get("type") or "").lower() != "file" else False
+                if not row.get("relative_path"):
+                    row["relative_path"] = str(it.get("created_path") or it.get("share_path") or it.get("path") or "").strip("/")
                 out_items.append(row)
             return {
                 "ok": True,
@@ -434,15 +438,28 @@ class HttpTransferManager:
                 return {"ok": False, "status": st, "detail": str(data), "items": [], "writable": False}
             is_admin = bool(data.get("is_admin", False))
             disks = data.get("disks") or []
+            norm_disks: List[Dict[str, Any]] = []
+            for d in disks:
+                if not isinstance(d, dict):
+                    continue
+                d_name = str(d.get("name") or d.get("id") or d.get("path") or "").strip("/")
+                if not d_name:
+                    continue
+                norm_disks.append({
+                    **d,
+                    "name": d_name,
+                    "relative_path": d_name,
+                    "is_dir": True,
+                })
             return {
                 "ok": True,
                 "server_id": sid,
                 "server_name": sname,
                 "source": "disks",
                 "path": "",
-                "effective_role": "system_admin" if is_admin else "user",
-                "writable": is_admin,
-                "items": disks,
+                "effective_role": "system_admin" if is_admin else "editor",
+                "writable": False,
+                "items": norm_disks,
             }
 
         st, data = self._browse_dir(base_url, token, clean_path)
@@ -450,6 +467,22 @@ class HttpTransferManager:
             return {"ok": False, "status": st, "detail": str(data), "items": [], "writable": False}
         eff_role = str(data.get("effective_role") or "").strip().lower()
         writable = eff_role in WRITABLE_ROLES
+        raw_dir_items = data.get("items") or []
+        norm_items: List[Dict[str, Any]] = []
+        for it in raw_dir_items:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "").strip()
+            rel = str(it.get("relative_path") or "").strip("/")
+            if not rel and name:
+                rel = f"{clean_path}/{name}".strip("/")
+            is_dir = bool(it.get("is_dir")) or str(it.get("type") or "").lower() in ("dir", "folder", "directory")
+            norm_items.append({
+                **it,
+                "name": name or rel.rsplit("/", 1)[-1],
+                "relative_path": rel,
+                "is_dir": is_dir,
+            })
         return {
             "ok": True,
             "server_id": sid,
@@ -458,7 +491,7 @@ class HttpTransferManager:
             "path": clean_path,
             "effective_role": eff_role,
             "writable": writable,
-            "items": data.get("items") or [],
+            "items": norm_items,
         }
 
     # ------------------------------------------------------------------

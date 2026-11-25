@@ -86,6 +86,8 @@ function roleLabelKey(role: string | undefined): string {
     case "owner":
       return "xfer_qp_role_owner"
     case "admin":
+    case "system_admin":
+    case "administrator":
       return "xfer_qp_role_admin"
     case "editor":
       return "xfer_qp_role_editor"
@@ -98,6 +100,8 @@ function roleTone(role: string | undefined): "success" | "info" | "warning" | "n
   switch ((role || "").toLowerCase()) {
     case "owner":
     case "admin":
+    case "system_admin":
+    case "administrator":
       return "success"
     case "editor":
       return "info"
@@ -954,7 +958,7 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
             </div>
 
             {/* Viewer Role Lock Banner (T-13-13) */}
-            {mode === "quick_picker" && isViewerLocked ? (
+            {mode === "quick_picker" && Boolean(browseData?.current_path) && isViewerLocked ? (
               <div
                 data-testid="quick-picker-viewer-banner"
                 role="alert"

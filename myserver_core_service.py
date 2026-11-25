@@ -19257,7 +19257,9 @@ def _handle_transfer_copy(body=None):
     if source == "hotkey":
         fg_hwnd = int(payload.get("fg_hwnd") or 0)
         top_tab_hwnd = int(payload.get("top_tab_hwnd") or 0)
-        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=1500)
+        print(f"[transfer] /api/transfer/copy hotkey fg_hwnd={fg_hwnd} top_tab_hwnd={top_tab_hwnd}", flush=True)
+        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=4000)
+        print(f"[transfer] read_active_explorer_tab result: ok={tab_res.get('ok')} err={tab_res.get('error')} sel={len(tab_res.get('selected_items') or [])}", flush=True)
         if tab_res.get("timed_out"):
             _show_transfer_toast(
                 "Explorer tidak merespons",
@@ -19273,6 +19275,13 @@ def _handle_transfer_copy(body=None):
             }
         if not tab_res.get("ok"):
             err_code = str(tab_res.get("error") or "EXPLORER_READ_FAILED")
+            _show_transfer_toast(
+                "Gagal membaca Explorer",
+                f"Tidak dapat membaca pilihan Explorer ({err_code}). Gunakan klik kanan.",
+                "Failed to read Explorer",
+                f"Could not read Explorer selection ({err_code}). Try right-click.",
+                level="error",
+            )
             return 200, {"success": False, "code": err_code, "error": err_code}
         paths = [str(p).strip() for p in (tab_res.get("selected_items") or []) if str(p).strip()]
         if not paths:
@@ -19416,7 +19425,9 @@ def _handle_transfer_paste(body=None):
 
         fg_hwnd = int(payload.get("fg_hwnd") or 0)
         top_tab_hwnd = int(payload.get("top_tab_hwnd") or 0)
-        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=1500)
+        print(f"[transfer] /api/transfer/paste hotkey fg_hwnd={fg_hwnd} top_tab_hwnd={top_tab_hwnd}", flush=True)
+        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=4000)
+        print(f"[transfer] paste read_active_explorer_tab result: ok={tab_res.get('ok')} folder={tab_res.get('folder_path')} err={tab_res.get('error')}", flush=True)
         if tab_res.get("timed_out"):
             if clip.get("mode") == "local":
                 return 200, {

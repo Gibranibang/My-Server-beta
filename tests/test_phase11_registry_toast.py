@@ -278,7 +278,7 @@ class TestQuickShareAndToast(_BaseRegistryToastTestCase):
             _, req_kwargs = mock_req.call_args
             self.assertEqual(
                 req_kwargs["json_body"],
-                {"path": "Storage/Docs/plan.pdf", "expires_in_hours": None, "password": None},
+                {"path": "Storage/Docs/plan.pdf", "expires_in_hours": None, "password": None, "role": "viewer"},
             )
             mock_clip.assert_called_once_with("https://files.example.com/s/pubTok123")
             mock_toast.assert_called_once_with(exp_title, exp_body, level="info")

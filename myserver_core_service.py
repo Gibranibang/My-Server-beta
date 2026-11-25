@@ -18569,10 +18569,50 @@ def _handle_share_create(body=None):
     raw_pwd = payload.get("password", None)
     clean_pwd = str(raw_pwd).strip() if (isinstance(raw_pwd, str) and raw_pwd.strip()) else None
 
+    raw_role = payload.get("role", None)
+    if raw_role is None or (isinstance(raw_role, str) and not raw_role.strip()):
+        clean_role = "viewer"
+    elif isinstance(raw_role, str) and raw_role.strip().lower() in ("viewer", "editor"):
+        clean_role = raw_role.strip().lower()
+    else:
+        return 400, {"success": False, "code": "INVALID_ROLE", "error": "Role must be viewer or editor."}
+
+    raw_max_mb = payload.get("max_upload_mb", None)
+    clean_max_mb = None
+    if raw_max_mb is not None and not (isinstance(raw_max_mb, str) and not raw_max_mb.strip()):
+        if isinstance(raw_max_mb, (bool, float)):
+            return 400, {
+                "success": False,
+                "code": "INVALID_MAX_UPLOAD_MB",
+                "error": "Max file size must be between 1 and 102400 MB.",
+            }
+        try:
+            if isinstance(raw_max_mb, int):
+                mb_val = raw_max_mb
+            elif isinstance(raw_max_mb, str) and raw_max_mb.strip().isdigit():
+                mb_val = int(raw_max_mb.strip())
+            else:
+                raise ValueError("not integer")
+            if mb_val < 1 or mb_val > 102400:
+                return 400, {
+                    "success": False,
+                    "code": "INVALID_MAX_UPLOAD_MB",
+                    "error": "Max file size must be between 1 and 102400 MB.",
+                }
+            clean_max_mb = mb_val
+        except (TypeError, ValueError):
+            return 400, {
+                "success": False,
+                "code": "INVALID_MAX_UPLOAD_MB",
+                "error": "Max file size must be between 1 and 102400 MB.",
+            }
+
     backend_body = {
         "path": canonical_rel,
         "password": clean_pwd,
         "expires_in_hours": clean_exp,
+        "role": clean_role,
+        "max_upload_mb": clean_max_mb,
     }
     if isinstance(payload.get("label"), str) and payload.get("label").strip():
         backend_body["label"] = payload.get("label").strip()
@@ -18830,7 +18870,7 @@ def _handle_share_quick(body=None):
         cfg,
         "/api/v1/storage/shares",
         method="POST",
-        json_body={"path": canonical_rel, "expires_in_hours": None, "password": None},
+        json_body={"path": canonical_rel, "expires_in_hours": None, "password": None, "role": "viewer"},
         backend_url=backend_url,
     )
 
@@ -18886,6 +18926,210 @@ def _handle_share_quick(body=None):
         "toast_title": title,
         "toast_body": msg,
     }
+
+
+_INTERNAL_SHARE_ROLES = ("viewer", "editor", "administrator")
+
+
+def _share_accounts_select_server(payload):
+    """Memilih server target dengan validasi strict FOREIGN_NAS dan resolusi URL Backend."""
+    cfg = config_manager.load_or_create_config() if config_manager else {}
+    req_server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip() or None
+    matched_srv = _select_target_server(cfg, target_server_id=req_server_id, strict=bool(req_server_id))
+    if not matched_srv:
+        return None, None, None, (400, {"success": False, "code": "FOREIGN_NAS", "error": "Server target not found."})
+    backend_url = _resolve_share_backend_url(cfg, matched_srv)
+    if not backend_url:
+        return None, None, None, (503, {"success": False, "code": "SERVER_OFFLINE", "error": "Server backend URL unreachable."})
+    return cfg, matched_srv, backend_url, None
+
+
+def _map_share_account_backend_error(st_code, resp_data):
+    """Memetakan status HTTP Backend ke format respons terstandar Core API."""
+    if st_code == 0 or st_code >= 500:
+        return 502, {"success": False, "code": "BACKEND_OFFLINE", "error": "MyServer Backend is offline or unreachable."}
+    if st_code == 401:
+        return 401, {"success": False, "code": "UNAUTHENTICATED_SESSION", "error": "Backend session is unauthenticated or expired."}
+    detail_403 = (resp_data.get("detail") or resp_data.get("error") or "Access denied.") if isinstance(resp_data, dict) else "Access denied."
+    if st_code == 403:
+        return 403, {"success": False, "code": "FORBIDDEN_PATH", "error": detail_403}
+    detail_404 = (resp_data.get("detail") or resp_data.get("error") or "Item not found.") if isinstance(resp_data, dict) else "Item not found."
+    if st_code == 404:
+        return 404, {"success": False, "code": "NOT_FOUND", "error": detail_404}
+    if st_code == 400:
+        detail_400 = (resp_data.get("detail") or resp_data.get("error") or "Invalid request.") if isinstance(resp_data, dict) else "Invalid request."
+        return 400, {"success": False, "code": "BAD_REQUEST", "error": detail_400}
+    return (st_code or 502), {"success": False, "code": "BACKEND_ERROR", "error": f"Backend error (HTTP {st_code})."}
+
+
+def _validate_share_target_path(raw_path):
+    """Memvalidasi target_path relatif agar bebas null-byte dan traversal '..'."""
+    if not isinstance(raw_path, str) or "\x00" in raw_path or not raw_path.strip():
+        return None
+    segs = [s for s in raw_path.strip().replace("\\", "/").split("/") if s]
+    if not segs or any(s in (".", "..") for s in segs):
+        return None
+    return "/".join(segs)
+
+
+def _parse_positive_grant_id(raw_gid):
+    """Memvalidasi grant_id secara ketat sebagai integer positif sebelum interpolasi URL."""
+    if isinstance(raw_gid, (bool, float)) or raw_gid is None:
+        return None
+    if isinstance(raw_gid, int):
+        return raw_gid if raw_gid > 0 else None
+    if isinstance(raw_gid, str):
+        s = raw_gid.strip()
+        if s.isdigit():
+            val = int(s)
+            return val if val > 0 else None
+    return None
+
+
+def _handle_share_accounts_candidates(body=None):
+    """Menangani POST /api/shares/accounts/candidates (GET /api/v1/storage/share-accounts)."""
+    payload = body if isinstance(body, dict) else {}
+    cfg, matched_srv, backend_url, err = _share_accounts_select_server(payload)
+    if err:
+        return err
+
+    st_code, resp_data, _ = _backend_share_request(
+        matched_srv,
+        cfg,
+        "/api/v1/storage/share-accounts",
+        method="GET",
+        backend_url=backend_url,
+    )
+    if st_code != 200 or not isinstance(resp_data, dict):
+        return _map_share_account_backend_error(st_code, resp_data)
+
+    return 200, {"success": True, "accounts": resp_data.get("accounts", [])}
+
+
+def _handle_share_accounts_list(body=None):
+    """Menangani POST /api/shares/accounts/list (GET /api/v1/storage/account-shares?target_path=...)."""
+    payload = body if isinstance(body, dict) else {}
+    raw_path = payload.get("target_path") if payload.get("target_path") is not None else payload.get("targetPath")
+    clean_path = _validate_share_target_path(raw_path)
+    if not clean_path:
+        return 400, {"success": False, "code": "INVALID_PATH", "error": "Invalid or empty target_path."}
+
+    cfg, matched_srv, backend_url, err = _share_accounts_select_server(payload)
+    if err:
+        return err
+
+    ep = f"/api/v1/storage/account-shares?target_path={urllib.parse.quote(clean_path, safe='')}"
+    st_code, resp_data, _ = _backend_share_request(
+        matched_srv,
+        cfg,
+        ep,
+        method="GET",
+        backend_url=backend_url,
+    )
+    if st_code != 200 or not isinstance(resp_data, dict):
+        return _map_share_account_backend_error(st_code, resp_data)
+
+    return 200, {
+        "success": True,
+        "shares": resp_data.get("shares", []),
+        "caller_role": resp_data.get("caller_role"),
+    }
+
+
+def _handle_share_accounts_grant(body=None):
+    """Menangani POST /api/shares/accounts/grant (POST /api/v1/storage/account-shares)."""
+    payload = body if isinstance(body, dict) else {}
+    raw_path = payload.get("target_path") if payload.get("target_path") is not None else payload.get("targetPath")
+    clean_path = _validate_share_target_path(raw_path)
+    if not clean_path:
+        return 400, {"success": False, "code": "INVALID_PATH", "error": "Invalid or empty target_path."}
+
+    raw_user = payload.get("grantee_username") if payload.get("grantee_username") is not None else payload.get("granteeUsername")
+    if not isinstance(raw_user, str) or "\x00" in raw_user or not raw_user.strip():
+        return 400, {"success": False, "code": "INVALID_USERNAME", "error": "Invalid or empty grantee_username."}
+    clean_user = raw_user.strip()
+
+    raw_role = payload.get("role")
+    if not isinstance(raw_role, str) or raw_role.strip().lower() not in _INTERNAL_SHARE_ROLES:
+        return 400, {"success": False, "code": "INVALID_ROLE", "error": "Role must be viewer, editor, or administrator."}
+    clean_role = raw_role.strip().lower()
+
+    cfg, matched_srv, backend_url, err = _share_accounts_select_server(payload)
+    if err:
+        return err
+
+    st_code, resp_data, _ = _backend_share_request(
+        matched_srv,
+        cfg,
+        "/api/v1/storage/account-shares",
+        method="POST",
+        json_body={
+            "target_path": clean_path,
+            "grantee_username": clean_user,
+            "role": clean_role,
+        },
+        backend_url=backend_url,
+    )
+    if st_code not in (200, 201) or not isinstance(resp_data, dict):
+        return _map_share_account_backend_error(st_code, resp_data)
+
+    return 200, {"success": True, "share": resp_data.get("share")}
+
+
+def _handle_share_accounts_update(body=None):
+    """Menangani POST /api/shares/accounts/update (PATCH /api/v1/storage/account-shares/{grant_id})."""
+    payload = body if isinstance(body, dict) else {}
+    raw_gid = payload.get("grant_id") if payload.get("grant_id") is not None else payload.get("grantId")
+    clean_gid = _parse_positive_grant_id(raw_gid)
+    if clean_gid is None:
+        return 400, {"success": False, "code": "INVALID_GRANT_ID", "error": "Invalid grant_id."}
+
+    raw_role = payload.get("role")
+    if not isinstance(raw_role, str) or raw_role.strip().lower() not in _INTERNAL_SHARE_ROLES:
+        return 400, {"success": False, "code": "INVALID_ROLE", "error": "Role must be viewer, editor, or administrator."}
+    clean_role = raw_role.strip().lower()
+
+    cfg, matched_srv, backend_url, err = _share_accounts_select_server(payload)
+    if err:
+        return err
+
+    st_code, resp_data, _ = _backend_share_request(
+        matched_srv,
+        cfg,
+        f"/api/v1/storage/account-shares/{clean_gid}",
+        method="PATCH",
+        json_body={"role": clean_role},
+        backend_url=backend_url,
+    )
+    if st_code != 200 or not isinstance(resp_data, dict):
+        return _map_share_account_backend_error(st_code, resp_data)
+
+    return 200, {"success": True, "share": resp_data.get("share")}
+
+
+def _handle_share_accounts_revoke(body=None):
+    """Menangani POST /api/shares/accounts/revoke (DELETE /api/v1/storage/account-shares/{grant_id})."""
+    payload = body if isinstance(body, dict) else {}
+    raw_gid = payload.get("grant_id") if payload.get("grant_id") is not None else payload.get("grantId")
+    clean_gid = _parse_positive_grant_id(raw_gid)
+    if clean_gid is None:
+        return 400, {"success": False, "code": "INVALID_GRANT_ID", "error": "Invalid grant_id."}
+
+    cfg, matched_srv, backend_url, err = _share_accounts_select_server(payload)
+    if err:
+        return err
+
+    st_code, resp_data, _ = _backend_share_request(
+        matched_srv,
+        cfg,
+        f"/api/v1/storage/account-shares/{clean_gid}",
+        method="DELETE",
+        backend_url=backend_url,
+    )
+    if st_code != 200:
+        return _map_share_account_backend_error(st_code, resp_data)
+
+    return 200, {"success": True, "grant_id": clean_gid}
 
 
 def _scan_compose_apps_now():
@@ -33139,6 +33383,31 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/shares/quick":
             status_code, res = _handle_share_quick(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/accounts/candidates":
+            status_code, res = _handle_share_accounts_candidates(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/accounts/list":
+            status_code, res = _handle_share_accounts_list(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/accounts/grant":
+            status_code, res = _handle_share_accounts_grant(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/accounts/update":
+            status_code, res = _handle_share_accounts_update(body)
+            self._send_json(res, status=status_code)
+            return
+
+        if path == "/api/shares/accounts/revoke":
+            status_code, res = _handle_share_accounts_revoke(body)
             self._send_json(res, status=status_code)
             return
 

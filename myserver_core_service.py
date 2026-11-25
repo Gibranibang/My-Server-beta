@@ -418,7 +418,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.9.1"
+APP_VERSION_NUMBER = "4.9.2"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -17435,6 +17435,7 @@ def _handle_smb_source_request(body=None):
                                 if (
                                     isinstance(disk_item, dict)
                                     and disk_item.get("is_accessible", True)
+                                    and not bool(disk_item.get("is_remote", False))
                                     and disk_item.get("name")
                                     and disk_item.get("relative_path", None) != ""
                                 ):
@@ -17706,6 +17707,7 @@ def _handle_smb_source_request(body=None):
                 if (
                     isinstance(disk_item, dict)
                     and disk_item.get("is_accessible", True)
+                    and not bool(disk_item.get("is_remote", False))
                     and disk_item.get("name")
                     and disk_item.get("relative_path", None) != ""
                 ):

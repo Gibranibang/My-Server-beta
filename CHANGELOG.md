@@ -1,5 +1,8 @@
 # Changelog MyServer Desktop
 
+## [v4.9.2 - Beta] - 2026-11-25
+
+
 ## [v4.9.1 - Beta] - 2026-11-25
 
 - Backend FUSE Scandir Timeout & Directory Cache (Backend v1.6.1): Menaikkan `SCANDIR_FUSE_TIMEOUT_SEC` dari `4.0s` menjadi `15.0s`, memakai `follow_symlinks=False` untuk mengurangi syscall FUSE, serta menambahkan cache listing direktori FUSE (TTL 30 detik, otomatis dibersihkan saat mutasi `mkdir`/`upload`/`copy`/`move`/`rename`/`delete`) agar folder Cloud/FUSE di Web File Manager dan `Browse HTTP` tidak mudah timeout.

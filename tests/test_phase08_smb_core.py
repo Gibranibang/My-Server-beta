@@ -605,6 +605,54 @@ class TestCoreServicePhase08(unittest.TestCase):
         self.assertEqual(default_shares, ["LocalDiskA"])
         self.assertEqual(all_shares, ["LocalDiskA", "RemoteCloudB"])
 
+    def test_smb_source_get_excludes_is_remote_to_prevent_acl_remount_loop(self):
+        import config_manager
+        import myserver_core_service as core
+
+        fake_cfg = {
+            "active_server_id": "srv_1",
+            "servers": [{
+                "id": "srv_1",
+                "name": "TestSrv",
+                "host": "192.0.2.20",
+                "smb_source": "backend",
+                "backend_smb_auth": {
+                    "username": "alice",
+                    "password": "pw",
+                    "access_token": "tok",
+                    "role": "admin",
+                    "allowed_disks": ["LocalDiskA"],
+                },
+            }],
+        }
+
+        def _fake_http(url, method="GET", timeout=2.0, retries=0):
+            return True, {"status": "ok"}, 200
+
+        def _fake_auth_req(b_url, path, smb_cfg, srv_id, method="GET"):
+            if path == "/api/v1/smb/status":
+                return 200, {"mode": "backend"}, "tok"
+            if path == "/api/v1/storage/disks":
+                return 200, {
+                    "disks": [
+                        {"name": "LocalDiskA", "relative_path": "LocalDiskA", "is_accessible": True, "is_remote": False},
+                        {"name": "RemoteCloudB", "relative_path": "RemoteCloudB", "is_accessible": True, "is_remote": True},
+                    ]
+                }, "tok"
+            return 404, {}, "tok"
+
+        with patch.object(config_manager, "load_or_create_config", return_value=fake_cfg), \
+             patch.object(core, "_backend_http_request", side_effect=_fake_http), \
+             patch.object(core, "_backend_authenticated_request", side_effect=_fake_auth_req), \
+             patch.object(core, "_schedule_debounced_acl_rebind") as mock_rebind, \
+             patch.object(core, "get_live_drives_list", return_value=[]):
+            st, payload = core._handle_smb_source_request({"action": "get"})
+
+        self.assertEqual(st, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["allowedDisks"], ["LocalDiskA"])
+        mock_rebind.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

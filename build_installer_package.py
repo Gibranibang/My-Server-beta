@@ -22,7 +22,7 @@ import zipfile
 BASE_BETA = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(BASE_BETA, "dist")
 STAGING_DIR = os.path.join(DIST_DIR, "staging_payload")
-VERSION = "4.9.1"
+VERSION = "4.9.2"
 APP_NAME = "My-Server by algitha BETA"
 
 ZEROTIER_MSI_FILENAME = "ZeroTier One.msi"

@@ -12,6 +12,16 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.9.2",
+        "channel": "Beta",
+        "date": "2026-11-25",
+        "highlights": [
+            "Perbaikan bug loop unmount/remount partisi SMB terus-menerus saat membuka atau berada di menu File Manager (pemicu backend_acl_changed).",
+            "Filter konsisten pada endpoint GET /api/smb/source untuk mengecualikan disk dengan flag is_remote=True agar selaras dengan daftar share SMB lokal yang di-mount.",
+            "Penambahan unit test regresi untuk memastikan disk remote tidak memicu loop rebind ACL SMB."
+        ]
+    },
+    {
         "version": "4.9.1",
         "channel": "Beta",
         "date": "2026-11-25",

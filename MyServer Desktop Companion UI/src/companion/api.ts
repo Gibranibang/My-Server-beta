@@ -28,6 +28,13 @@ import type {
   ShareSettingsResult,
   ShareRevokeResult,
   ExplorerContextMenuResult,
+  PublicShareRole,
+  InternalShareRole,
+  ShareAccountCandidate,
+  ShareAccountCandidatesResponse,
+  AccountShareItem,
+  AccountShareListResponse,
+  AccountShareMutateResult,
 } from "./types"
 
 import { APP_VERSION, APP_CHANNEL } from "./version"
@@ -423,6 +430,26 @@ export interface CompanionApi {
 
   getShareWindowTarget(): Promise<ShareTargetInfo | null>
 
+  /** Phase 12: Internal Backend Account Sharing */
+  listShareAccountCandidates(serverId?: string): Promise<ShareAccountCandidatesResponse>
+
+  listAccountShares(targetPath: string, serverId?: string): Promise<AccountShareListResponse>
+
+  grantAccountShare(payload: {
+    targetPath: string
+    granteeUsername: string
+    role: InternalShareRole
+    serverId?: string
+  }): Promise<AccountShareMutateResult>
+
+  updateAccountShareRole(
+    grantId: number,
+    role: InternalShareRole,
+    serverId?: string
+  ): Promise<AccountShareMutateResult>
+
+  revokeAccountShare(grantId: number, serverId?: string): Promise<AccountShareMutateResult>
+
 }
 
 
@@ -642,6 +669,12 @@ export function createMockApi(): CompanionApi {
       owner_username: "admin",
     },
   ]
+  const mockShareAccounts: ShareAccountCandidate[] = [
+    { id: 2, username: "bob" },
+    { id: 3, username: "charlie" },
+  ]
+  let mockAccountShares: AccountShareItem[] = []
+  let mockAccountShareSeq = 1
 
   let powerTimer: number | undefined
 
@@ -1514,11 +1547,20 @@ export function createMockApi(): CompanionApi {
           : null
       const segs = cleanPath.replace(/\\/g, "/").split("/").filter(Boolean)
       const label = payload.label || segs[segs.length - 1] || cleanPath
+      const isDir = !label.includes(".")
+      const cleanRole: PublicShareRole = isDir && payload.role === "editor" ? "editor" : "viewer"
+      const maxUploadMb =
+        cleanRole === "editor" && typeof payload.max_upload_mb === "number" && payload.max_upload_mb > 0
+          ? Math.floor(payload.max_upload_mb)
+          : null
       const item: PublicShareItem = {
         token,
         target_path: segs.join("/"),
-        is_dir: !label.includes("."),
+        is_dir: isDir,
         label,
+        role: cleanRole,
+        max_upload_mb: maxUploadMb,
+        max_upload_bytes: maxUploadMb ? maxUploadMb * 1024 * 1024 : null,
         share_url: shareUrl,
         resolved_url: shareUrl,
         is_lan_fallback: isLanFallback,
@@ -1554,6 +1596,7 @@ export function createMockApi(): CompanionApi {
         server_id: resolved.target.server_id,
         password: null,
         expires_in_hours: null,
+        role: "viewer",
         copy_to_clipboard: true,
       })
       if (!created.success || !created.share_url) {
@@ -1625,6 +1668,80 @@ export function createMockApi(): CompanionApi {
 
     async getShareWindowTarget() {
       return mockShareTarget
+    },
+
+    async listShareAccountCandidates() {
+      return { success: true, accounts: [...mockShareAccounts] }
+    },
+
+    async listAccountShares(targetPath: string) {
+      const norm = targetPath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+      return {
+        success: true,
+        shares: mockAccountShares.filter((s) => s.target_path === norm),
+        caller_role: "owner",
+      }
+    },
+
+    async grantAccountShare(payload) {
+      const norm = payload.targetPath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+      const candidate = mockShareAccounts.find((a) => a.username === payload.granteeUsername)
+      if (!candidate) {
+        return { success: false, error: "Account not found." }
+      }
+      const isDir = !norm.split("/").pop()?.includes(".")
+      const effectiveRole: InternalShareRole = isDir ? payload.role : "viewer"
+      const now = new Date().toISOString()
+      const existingIdx = mockAccountShares.findIndex(
+        (s) => s.target_path === norm && s.grantee_username === payload.granteeUsername
+      )
+      if (existingIdx !== -1) {
+        const updated: AccountShareItem = {
+          ...mockAccountShares[existingIdx],
+          role: effectiveRole,
+          updated_at: now,
+        }
+        mockAccountShares = mockAccountShares.map((s, i) => (i === existingIdx ? updated : s))
+        return { success: true, share: updated }
+      }
+      const created: AccountShareItem = {
+        id: mockAccountShareSeq++,
+        owner_user_id: 1,
+        owner_username: "admin",
+        target_path: norm,
+        is_dir: isDir,
+        grantee_user_id: candidate.id,
+        grantee_username: candidate.username,
+        role: effectiveRole,
+        created_at: now,
+        updated_at: now,
+      }
+      mockAccountShares = [created, ...mockAccountShares]
+      return { success: true, share: created }
+    },
+
+    async updateAccountShareRole(grantId: number, role: InternalShareRole) {
+      const existing = mockAccountShares.find((s) => s.id === grantId)
+      if (!existing) {
+        return { success: false, error: "Grant not found." }
+      }
+      const effectiveRole: InternalShareRole = existing.is_dir ? role : "viewer"
+      const updated: AccountShareItem = {
+        ...existing,
+        role: effectiveRole,
+        updated_at: new Date().toISOString(),
+      }
+      mockAccountShares = mockAccountShares.map((s) => (s.id === grantId ? updated : s))
+      return { success: true, share: updated }
+    },
+
+    async revokeAccountShare(grantId: number) {
+      const exists = mockAccountShares.some((s) => s.id === grantId)
+      if (!exists) {
+        return { success: false, error: "Grant not found." }
+      }
+      mockAccountShares = mockAccountShares.filter((s) => s.id !== grantId)
+      return { success: true, grant_id: grantId }
     },
 
   }

@@ -534,11 +534,20 @@ export interface ShareResolveResult {
   target?: ShareTargetInfo
 }
 
+export type PublicShareRole = "viewer" | "editor"
+
+export type InternalShareRole = "viewer" | "editor" | "administrator"
+
+export type MaxUploadMbPreset = "unlimited" | "25" | "100" | "500" | "1024" | "custom"
+
 export interface PublicShareItem {
   token: string
   target_path: string
   is_dir?: boolean
   label?: string | null
+  role?: PublicShareRole
+  max_upload_bytes?: number | null
+  max_upload_mb?: number | null
   share_url: string
   resolved_url?: string
   is_lan_fallback?: boolean
@@ -565,8 +574,48 @@ export interface ShareCreatePayload {
   server_id?: string
   password?: string | null
   expires_in_hours?: number | null
+  role?: PublicShareRole
+  max_upload_mb?: number | null
   label?: string | null
   copy_to_clipboard?: boolean
+}
+
+export interface ShareAccountCandidate {
+  id: number
+  username: string
+}
+
+export interface ShareAccountCandidatesResponse {
+  success: boolean
+  accounts: ShareAccountCandidate[]
+  error?: string
+}
+
+export interface AccountShareItem {
+  id: number
+  owner_user_id?: number
+  owner_username: string
+  target_path: string
+  is_dir: boolean
+  grantee_user_id: number
+  grantee_username: string
+  role: InternalShareRole
+  created_at?: string
+  updated_at?: string
+}
+
+export interface AccountShareListResponse {
+  success: boolean
+  shares: AccountShareItem[]
+  caller_role?: string
+  error?: string
+}
+
+export interface AccountShareMutateResult {
+  success: boolean
+  share?: AccountShareItem
+  grant_id?: number
+  error?: string
 }
 
 export interface ShareCreateResult {

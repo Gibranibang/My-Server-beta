@@ -28,6 +28,10 @@ import type {
   ShareSettingsResult,
   ShareRevokeResult,
   ExplorerContextMenuResult,
+  InternalShareRole,
+  ShareAccountCandidatesResponse,
+  AccountShareListResponse,
+  AccountShareMutateResult,
 } from "./types"
 
 
@@ -2660,6 +2664,8 @@ export function createRealApi(): CompanionApi {
           server_id: payload.server_id,
           password: payload.password ?? null,
           expires_in_hours: payload.expires_in_hours ?? null,
+          role: payload.role ?? "viewer",
+          max_upload_mb: payload.max_upload_mb ?? null,
           label: payload.label ?? null,
           copy_to_clipboard: payload.copy_to_clipboard ?? true,
         }
@@ -2792,6 +2798,116 @@ export function createRealApi(): CompanionApi {
         console.warn("[RealApi] getShareWindowTarget error:", extractErrorMessage(err, "Failed to read share target"))
         return null
       }
+    },
+
+    async listShareAccountCandidates(serverId?: string): Promise<ShareAccountCandidatesResponse> {
+      try {
+        const res = await callCoreApi("shares/accounts/candidates", { server_id: serverId })
+        if (res && typeof res === "object") {
+          return {
+            success: Boolean(res.success),
+            accounts: Array.isArray(res.accounts) ? res.accounts : [],
+            error: typeof res.error === "string" ? res.error : undefined,
+          }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          accounts: [],
+          error: extractErrorMessage(err, "Failed to load share account candidates."),
+        }
+      }
+      return { success: false, accounts: [], error: "Core API unavailable" }
+    },
+
+    async listAccountShares(targetPath: string, serverId?: string): Promise<AccountShareListResponse> {
+      try {
+        const res = await callCoreApi("shares/accounts/list", {
+          target_path: targetPath,
+          server_id: serverId,
+        })
+        if (res && typeof res === "object") {
+          return {
+            success: Boolean(res.success),
+            shares: Array.isArray(res.shares) ? res.shares : [],
+            caller_role: typeof res.caller_role === "string" ? res.caller_role : undefined,
+            error: typeof res.error === "string" ? res.error : undefined,
+          }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          shares: [],
+          error: extractErrorMessage(err, "Failed to load shared accounts."),
+        }
+      }
+      return { success: false, shares: [], error: "Core API unavailable" }
+    },
+
+    async grantAccountShare(payload: {
+      targetPath: string
+      granteeUsername: string
+      role: InternalShareRole
+      serverId?: string
+    }): Promise<AccountShareMutateResult> {
+      try {
+        const res = await callCoreApi("shares/accounts/grant", {
+          target_path: payload.targetPath,
+          grantee_username: payload.granteeUsername,
+          role: payload.role,
+          server_id: payload.serverId,
+        })
+        if (res && typeof res === "object") {
+          return res as AccountShareMutateResult
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: extractErrorMessage(err, "Failed to grant account access."),
+        }
+      }
+      return { success: false, error: "Core API unavailable" }
+    },
+
+    async updateAccountShareRole(
+      grantId: number,
+      role: InternalShareRole,
+      serverId?: string
+    ): Promise<AccountShareMutateResult> {
+      try {
+        const res = await callCoreApi("shares/accounts/update", {
+          grant_id: grantId,
+          role,
+          server_id: serverId,
+        })
+        if (res && typeof res === "object") {
+          return res as AccountShareMutateResult
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: extractErrorMessage(err, "Failed to update account permission."),
+        }
+      }
+      return { success: false, error: "Core API unavailable" }
+    },
+
+    async revokeAccountShare(grantId: number, serverId?: string): Promise<AccountShareMutateResult> {
+      try {
+        const res = await callCoreApi("shares/accounts/revoke", {
+          grant_id: grantId,
+          server_id: serverId,
+        })
+        if (res && typeof res === "object") {
+          return res as AccountShareMutateResult
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: extractErrorMessage(err, "Failed to remove account access."),
+        }
+      }
+      return { success: false, error: "Core API unavailable" }
     },
   }
 

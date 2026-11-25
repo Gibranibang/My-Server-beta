@@ -175,6 +175,7 @@ def clear_smb_share_cache():
 
 SHCNE_DRIVEREMOVED = 0x00000080
 SHCNE_DRIVEADD = 0x00000100
+SHCNE_UPDATEDIR = 0x00001000
 SHCNF_PATHW = 0x0005
 
 
@@ -335,6 +336,22 @@ def _notify_windows_explorer_refresh(added_drives=None, removed_drives=None):
             shell32.SHChangeNotify(SHCNE_DRIVEADD, SHCNF_PATHW, ctypes.c_wchar_p(r), None)
     except Exception:
         pass
+
+
+def notify_local_folder_updated(folder_path: str) -> bool:
+    """Memberitahu Windows Shell (Explorer) bahwa isi folder lokal berubah tanpa flush asosiasi global."""
+    if sys.platform != "win32" or not folder_path or not isinstance(folder_path, str):
+        return False
+    clean_path = folder_path.strip()
+    if not clean_path:
+        return False
+    try:
+        abs_path = os.path.abspath(clean_path)
+        shell32 = ctypes.windll.shell32
+        shell32.SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, ctypes.c_wchar_p(abs_path), None)
+        return True
+    except Exception:
+        return False
 
 
 def _get_dos_lanman_target(drive_letter):

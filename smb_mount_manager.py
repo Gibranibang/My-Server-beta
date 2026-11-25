@@ -1032,6 +1032,7 @@ def fetch_shares_from_backend_api(
     fallback_host="",
     on_token_refreshed=None,
     return_none_on_error=False,
+    skip_remote=True,
 ):
     """
     Mengambil daftar share disk yang diizinkan dari MyServer Backend (/api/v1/storage/disks).
@@ -1114,6 +1115,7 @@ def fetch_shares_from_backend_api(
                             if (
                                 isinstance(d, dict)
                                 and d.get("is_accessible", True)
+                                and not (skip_remote and bool(d.get("is_remote", False)))
                                 and d.get("name")
                                 and d.get("relative_path", None) != ""
                             ):
@@ -1156,6 +1158,7 @@ def get_remote_smb_shares(
     smb_source="zimaos",
     backend_url="",
     on_token_refreshed=None,
+    skip_remote=True,
 ):
     """
     Mendeteksi daftar share folder SMB yang tersedia di server.
@@ -1192,6 +1195,7 @@ def get_remote_smb_shares(
             fallback_host=clean_h,
             on_token_refreshed=on_token_refreshed,
             return_none_on_error=True,
+            skip_remote=skip_remote,
         )
         if api_shares is None:
             return None

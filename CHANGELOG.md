@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.9.1 - Beta] - 2026-11-25
+
+- Backend FUSE Scandir Timeout & Directory Cache (Backend v1.6.1): Menaikkan `SCANDIR_FUSE_TIMEOUT_SEC` dari `4.0s` menjadi `15.0s`, memakai `follow_symlinks=False` untuk mengurangi syscall FUSE, serta menambahkan cache listing direktori FUSE (TTL 30 detik, otomatis dibersihkan saat mutasi `mkdir`/`upload`/`copy`/`move`/`rename`/`delete`) agar folder Cloud/FUSE di Web File Manager dan `Browse HTTP` tidak mudah timeout.
+- Desktop SMB Anti-Crash untuk Mount Cloud/FUSE (`smb_mount_manager.py`): Secara dinamis melewati partisi bertanda `is_remote: true` (deteksi kernel Linux `/proc/self/mountinfo`, tanpa hardcode nama folder) saat Auto-Mount drive huruf SMB Windows sehingga Windows File Explorer tidak ikut hang/crash karena I/O FUSE; akses & transfer partisi cloud tetap penuh lewat `Browse HTTP`, `Quick Picker`, dan Web File Manager.
+
 ## [v4.9.0 - Beta] - 2026-11-25
 
 - Windows Explorer HTTP Copy-Paste (`CTRL+ALT+C` / `CTRL+ALT+V` & HKCU Context Menu): Menambahkan hook keyboard `WH_KEYBOARD_LL` terisolasi khusus `CabinetWClass`/`ExploreWClass` (`explorer_hook.rs`), pembacaan tab aktif Windows 11 3-tab via STA COM `IOleWindow::GetWindow()` (`explorer_tab_reader.py`), serta verb klik kanan Explorer `Copy via MyServer (HTTP)` dan `Paste via MyServer (HTTP)` untuk file, folder, maupun background.

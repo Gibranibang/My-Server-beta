@@ -582,6 +582,29 @@ class TestCoreServicePhase08(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_fetch_shares_skips_remote_fuse_disks_by_default(self):
+        import smb_mount_manager as smb
+
+        payload = json.dumps({
+            "disks": [
+                {"name": "LocalDiskA", "relative_path": "LocalDiskA", "is_accessible": True, "is_remote": False},
+                {"name": "RemoteCloudB", "relative_path": "RemoteCloudB", "is_accessible": True, "is_remote": True},
+            ]
+        }).encode("utf-8")
+
+        class _Resp:
+            status = 200
+            def read(self): return payload
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with patch.object(smb.urllib.request, "urlopen", return_value=_Resp()):
+            default_shares = smb.fetch_shares_from_backend_api("http://192.0.2.10:8080", auth_token="tok")
+            all_shares = smb.fetch_shares_from_backend_api("http://192.0.2.10:8080", auth_token="tok", skip_remote=False)
+
+        self.assertEqual(default_shares, ["LocalDiskA"])
+        self.assertEqual(all_shares, ["LocalDiskA", "RemoteCloudB"])
+
 
 if __name__ == "__main__":
     unittest.main()

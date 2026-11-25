@@ -12,6 +12,20 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.9.1",
+        "channel": "Beta",
+        "date": "2026-11-25",
+        "title": "FUSE/Cloud Timeout & Cache Hardening + Explorer SMB Anti-Crash (Backend v1.6.1)",
+        "notes": [
+            "Backend FUSE Scandir Timeout & Directory Cache (Backend v1.6.1): Menaikkan `SCANDIR_FUSE_TIMEOUT_SEC` dari `4.0s` menjadi `15.0s`, memakai `follow_symlinks=False` untuk mengurangi syscall FUSE, serta menambahkan cache listing direktori FUSE (TTL 30 detik, otomatis dibersihkan saat mutasi `mkdir`/`upload`/`copy`/`move`/`rename`/`delete`) agar folder Cloud/FUSE di Web File Manager dan `Browse HTTP` tidak mudah timeout.",
+            "Desktop SMB Anti-Crash untuk Mount Cloud/FUSE (`smb_mount_manager.py`): Secara dinamis melewati partisi bertanda `is_remote: true` (deteksi kernel Linux `/proc/self/mountinfo`, tanpa hardcode nama folder) saat Auto-Mount drive huruf SMB Windows sehingga Windows File Explorer tidak ikut hang/crash karena I/O FUSE; akses & transfer partisi cloud tetap penuh lewat `Browse HTTP`, `Quick Picker`, dan Web File Manager."
+        ],
+        "features": [
+            "Backend v1.6.1: 15s FUSE Directory Timeout & 30s Auto-Invalidated FUSE Scandir Cache",
+            "Dynamic is_remote FUSE Exclusion on Windows SMB Drive Auto-Mount (Explorer Anti-Crash)"
+        ]
+    },
+    {
         "version": "4.9.0",
         "channel": "Beta",
         "date": "2026-11-25",

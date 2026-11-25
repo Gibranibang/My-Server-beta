@@ -418,7 +418,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.9.0"
+APP_VERSION_NUMBER = "4.9.1"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -15442,12 +15442,16 @@ def _scan_live_drives_now():
                 for lt in (smb_mount_manager.get_available_drive_letters() or [])
                 if str(lt).rstrip(":").upper() not in used_letters
             ]
+            srv_id_scan = str((srv_scan or {}).get("id") or "")
             for disk_name in (smb_cfg_scan.get("allowed_disks") or []):
                 d_clean = str(disk_name).strip()
                 if not d_clean:
                     continue
                 d_key = d_clean.lower()
                 if d_key in seen_shares:
+                    continue
+                cached_u = _cached_backend_disks_usage.get((srv_id_scan, d_clean))
+                if cached_u and len(cached_u) >= 4 and bool(cached_u[3]):
                     continue
                 seen_shares.add(d_key)
                 next_letter = avail_pool.pop(0) if avail_pool else "–"

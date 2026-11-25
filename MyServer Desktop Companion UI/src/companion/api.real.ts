@@ -3038,7 +3038,19 @@ export function createRealApi(): CompanionApi {
           dest_rel: destRel,
         })
         if (res && typeof res === "object") {
-          return res as TransferStatusResponse
+          const obj = res as Record<string, unknown>
+          return {
+            ...(obj as TransferStatusResponse),
+            status: typeof obj.status === "string" ? (obj.status as TransferStatusResponse["status"]) : "scanning",
+            total_files: typeof obj.total_files === "number" ? obj.total_files : 0,
+            completed_files: typeof obj.completed_files === "number" ? obj.completed_files : 0,
+            bytes_done: typeof obj.bytes_done === "number" ? obj.bytes_done : 0,
+            bytes_total: typeof obj.bytes_total === "number" ? obj.bytes_total : 0,
+            speed_bps: typeof obj.speed_bps === "number" ? obj.speed_bps : 0,
+            active_workers: typeof obj.active_workers === "number" ? obj.active_workers : 0,
+            max_workers: typeof obj.max_workers === "number" ? obj.max_workers : 3,
+            items: Array.isArray(obj.items) ? obj.items : [],
+          }
         }
       } catch (err) {
         return {
@@ -3074,7 +3086,13 @@ export function createRealApi(): CompanionApi {
       try {
         const res = await callCoreApi("transfer/status", {})
         if (res && typeof res === "object") {
-          return res as TransferStatusResponse
+          const obj = res as Record<string, unknown>
+          const rawStatus = typeof obj.status === "string" ? obj.status : "idle"
+          return {
+            ...(obj as TransferStatusResponse),
+            status: (rawStatus === "failed" ? "error" : rawStatus) as TransferStatusResponse["status"],
+            items: Array.isArray(obj.items) ? obj.items : [],
+          }
         }
       } catch (err) {
         return {

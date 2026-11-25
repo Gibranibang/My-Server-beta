@@ -408,8 +408,16 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
         destRel: browseData.current_path,
       })
       if (!mountedRef.current) return
-      setTransferStatus(res)
+      if (!res.success && (res.status === "error" || res.error)) {
+        showToast(res.error || "Paste failed", "error")
+        return
+      }
+      setTransferStatus({
+        ...res,
+        items: Array.isArray(res.items) ? res.items : [],
+      })
       setMode("progress")
+      void refreshStatus()
     } catch (err) {
       if (mountedRef.current) {
         showToast(err instanceof Error ? err.message : String(err), "error")
@@ -470,6 +478,7 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
       case "cancelled":
         return t("xfer_status_cancelled")
       case "error":
+      case "failed" as string:
         return t("xfer_status_error")
       case "awaiting_conflict":
         return t("xfer_status_conflict")
@@ -489,6 +498,7 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
       case "paused":
         return "warning"
       case "error":
+      case "failed" as string:
       case "cancelled":
         return "danger"
       default:
@@ -510,15 +520,18 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
     return transferStatus.status === "completed" ? 100 : 0
   }, [transferStatus])
 
+  const clipboardItems = clipboard?.items ?? []
   const clipboardLabel = useMemo(() => {
-    if (!clipboard || clipboard.kind === "empty" || clipboard.items.length === 0) {
+    if (!clipboard || clipboard.kind === "empty" || clipboardItems.length === 0) {
       return t("xfer_clipboard_empty")
     }
-    const count = String(clipboard.items.length)
+    const count = String(clipboardItems.length)
     return clipboard.kind === "local"
       ? t("xfer_clipboard_local").replace("{count}", count)
       : t("xfer_clipboard_server").replace("{count}", count)
-  }, [clipboard, t])
+  }, [clipboard, clipboardItems.length, t])
+
+  const statusItems = transferStatus?.items ?? []
 
   const conflict = transferStatus?.status === "awaiting_conflict" ? transferStatus.conflict : null
   const isViewerLocked = Boolean(browseData && (!browseData.writable || browseData.effective_role === "viewer"))
@@ -713,7 +726,7 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
             </div>
 
             {!transferStatus ||
-            (transferStatus.status === "idle" && transferStatus.items.length === 0) ? (
+            (transferStatus.status === "idle" && statusItems.length === 0) ? (
               <div className="rounded-card border border-[var(--line)] bg-[var(--surface-elevated)] backdrop-blur-xs p-5 text-center space-y-2">
                 <div className="text-body font-semibold text-[var(--ink)]">
                   {t("xfer_empty_title")}
@@ -828,7 +841,8 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
 
                   {transferStatus.status === "completed" ||
                   transferStatus.status === "cancelled" ||
-                  transferStatus.status === "error" ? (
+                  transferStatus.status === "error" ||
+                  (transferStatus.status as string) === "failed" ? (
                     <Button
                       variant="secondary"
                       size="sm"
@@ -842,18 +856,25 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
                 </div>
 
                 {/* Queue Items */}
-                {transferStatus.items.length > 0 ? (
+                {statusItems.length > 0 ? (
                   <div className="space-y-1.5 pt-1 max-h-[180px] overflow-y-auto scrollbar-slim">
-                    {transferStatus.items.map((item) => {
+                    {statusItems.map((item, idx) => {
+                      const itemTotal =
+                        typeof item.bytes_total === "number"
+                          ? item.bytes_total
+                          : typeof (item as unknown as { size?: number }).size === "number"
+                            ? (item as unknown as { size?: number }).size!
+                            : 0
+                      const itemDone = typeof item.bytes_done === "number" ? item.bytes_done : 0
                       const itemPct =
-                        item.bytes_total > 0
-                          ? Math.min(100, Math.round((item.bytes_done / item.bytes_total) * 100))
+                        itemTotal > 0
+                          ? Math.min(100, Math.round((itemDone / itemTotal) * 100))
                           : item.status === "done"
                             ? 100
                             : 0
                       return (
                         <div
-                          key={item.id}
+                          key={item.id ?? `${idx}-${item.name}`}
                           className="rounded-control border border-[var(--line)] bg-[var(--surface)] px-2.5 py-2 flex items-center gap-2"
                         >
                           {item.status === "done" ? (
@@ -870,7 +891,7 @@ export function TransferWindow({ initialMode }: TransferWindowProps = {}) {
                               {item.name}
                             </div>
                             <div className="text-micro text-[var(--ink-subtle)] tabular-nums">
-                              {formatBytes(item.bytes_done)} / {formatBytes(item.bytes_total)}
+                              {formatBytes(itemDone)} / {formatBytes(itemTotal)}
                             </div>
                           </div>
                           <span className="text-micro font-semibold tabular-nums text-[var(--ink-muted)]">

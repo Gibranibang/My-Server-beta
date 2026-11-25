@@ -775,6 +775,70 @@ class TestCoreApiTransferIntegration(unittest.TestCase):
         self.assertEqual(clip["items"][0]["rel_path"], "DiskA/report.pdf")
         mock_toast.assert_called_once()
 
+    def test_disks_root_browse_normalizes_is_dir_and_paste_includes_items(self):
+        auth = {"X-MyServer-Core-Token": self.core._CORE_AUTH_TOKEN}
+
+        def _fake_http(method, url, headers=None, body_bytes=None, timeout=20.0):
+            if url.endswith("/api/v1/storage/disks"):
+                return 200, {
+                    "is_admin": True,
+                    "disks": [{"name": "Gdrive_01"}, {"name": "STIMI"}],
+                }
+            if "/api/v1/storage/browse-files" in url:
+                return 200, {"effective_role": "system_admin", "items": []}
+            return 200, {"success": True}
+
+        with patch.object(
+            self.core._transfer_manager,
+            "get_backend_session_fn",
+            return_value=("srv_1", "TestNAS", "http://127.0.0.1:9", "tok_test"),
+        ), patch.object(self.core._transfer_manager, "_http_request", side_effect=_fake_http):
+            st_b, res_b = self._raw_http(
+                "POST",
+                "/api/transfer/browse",
+                payload={"server_id": "srv_1", "path": "", "source": "disks"},
+                headers=auth,
+            )
+            self.assertEqual(st_b, 200)
+            self.assertTrue(res_b["success"])
+            self.assertIs(res_b["writable"], False)
+            self.assertEqual([d["name"] for d in res_b["items"]], ["Gdrive_01", "STIMI"])
+            for disk in res_b["items"]:
+                self.assertIs(disk.get("is_dir"), True)
+                self.assertTrue(disk.get("relative_path"))
+
+            with tempfile.NamedTemporaryFile(delete=False) as tf:
+                tf.write(b"hello-paste")
+                tmp_file = tf.name
+            try:
+                with patch.object(self.core, "_show_windows_toast", return_value=True), patch.object(
+                    self.core.smb_mount_manager,
+                    "resolve_local_path_to_smb_unc",
+                    return_value=(False, "LOCAL_DRIVE"),
+                ):
+                    st_c, res_c = self._raw_http(
+                        "POST",
+                        "/api/transfer/copy",
+                        payload={"source": "context_menu", "paths": [tmp_file]},
+                        headers=auth,
+                    )
+                    self.assertTrue(res_c["success"])
+                st_p, res_p = self._raw_http(
+                    "POST",
+                    "/api/transfer/paste",
+                    payload={"source": "quick_picker", "server_id": "srv_1", "dest_rel": "Gdrive_01"},
+                    headers=auth,
+                )
+                self.assertEqual(st_p, 200)
+                self.assertTrue(res_p["success"])
+                self.assertIsInstance(res_p.get("items"), list)
+                self.core._transfer_manager.wait_for_job(res_p["job_id"], timeout=5.0)
+            finally:
+                try:
+                    os.remove(tmp_file)
+                except OSError:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()

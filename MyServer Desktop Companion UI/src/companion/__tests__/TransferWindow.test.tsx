@@ -487,4 +487,55 @@ describe("TransferWindow", () => {
       }),
     )
   })
+
+  it("Quick Picker Paste Here safely handles minimal paste responses without items", async () => {
+    const api = makeTestApi({
+      browseTransferDirectory: vi.fn(async (opts?: { path?: string }) => {
+        if (!opts?.path) {
+          return {
+            success: true,
+            server_id: "srv_1",
+            current_path: "",
+            parent_path: "",
+            effective_role: "system_admin",
+            writable: false,
+            view_mode: "disks",
+            items: [{ name: "gibran1", relative_path: "gibran1", is_dir: true }],
+          }
+        }
+        return {
+          success: true,
+          server_id: "srv_1",
+          current_path: "gibran1",
+          parent_path: "",
+          effective_role: "system_admin",
+          writable: true,
+          view_mode: "disks",
+          items: [],
+        }
+      }),
+      startTransferPaste: vi.fn(async () => ({
+        success: true,
+        ui_action: "open_transfer_window",
+        mode: "progress",
+        direction: "upload",
+        job_id: "xfer_123",
+      }) as unknown as TransferStatusResponse),
+    })
+    setCompanionApi(api)
+
+    render(<TransferWindow initialMode="quick_picker" />)
+
+    // Root should NOT display the misleading Read-only (Viewer) lock banner
+    const diskRow = await screen.findByText("gibran1")
+    expect(screen.queryByTestId("quick-picker-viewer-banner")).not.toBeInTheDocument()
+
+    // Navigate into disk folder and Paste Here
+    fireEvent.click(diskRow)
+    const pasteBtn = await screen.findByRole("button", { name: I18N.en.xfer_qp_btn_paste_here })
+    await waitFor(() => expect(pasteBtn).toBeEnabled())
+    fireEvent.click(pasteBtn)
+
+    expect(await screen.findByText(I18N.en.xfer_title_progress)).toBeInTheDocument()
+  })
 })

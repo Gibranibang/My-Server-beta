@@ -668,6 +668,7 @@ class HttpTransferManager:
                 "server_id": job.server_id,
                 "server_name": job.server_name,
                 "dest_display": job.dest_display,
+                "dest_label": job.dest_display,
                 "speed_bps": speed_bps,
                 "eta_seconds": eta if job.status in ("running", "paused", "awaiting_conflict") else 0.0,
                 "active_workers": job.active_workers,
@@ -680,6 +681,7 @@ class HttpTransferManager:
                 "active_item": job.active_item,
                 "conflict": copy.deepcopy(job.conflict),
                 "items": copy.deepcopy(job.items),
+                "clipboard": self.get_clipboard(),
                 "error": job.error,
             }
 
@@ -855,12 +857,20 @@ class HttpTransferManager:
                         _stage_tree(os.path.join(abs_lp, child_name), actual_dir_rel)
                 else:
                     sz = os.path.getsize(abs_lp)
+                    item_id = f"up_{len(file_jobs)}_{chosen_name}"
                     file_jobs.append((abs_lp, target_parent_rel, chosen_name, sz))
                     existing[chosen_name] = {"name": chosen_name, "is_dir": False}
                     with self._jobs_lock:
                         job.total_files += 1
                         job.bytes_total += sz
-                        job.items.append({"name": chosen_name, "size": sz, "status": "queued"})
+                        job.items.append({
+                            "id": item_id,
+                            "name": chosen_name,
+                            "size": sz,
+                            "bytes_done": 0,
+                            "bytes_total": sz,
+                            "status": "queued",
+                        })
 
             clean_dest = server_dest_rel.strip("/")
             for src in local_sources:
@@ -1038,11 +1048,20 @@ class HttpTransferManager:
                             int(child.get("size") or 0),
                         )
                 else:
-                    download_jobs.append((clean_rel, target_local, int(hint_size or 0)))
+                    sz_hint = int(hint_size or 0)
+                    item_id = f"dl_{len(download_jobs)}_{base_name}"
+                    download_jobs.append((clean_rel, target_local, sz_hint))
                     with self._jobs_lock:
                         job.total_files += 1
-                        job.bytes_total += int(hint_size or 0)
-                        job.items.append({"name": os.path.basename(target_local), "size": int(hint_size or 0), "status": "queued"})
+                        job.bytes_total += sz_hint
+                        job.items.append({
+                            "id": item_id,
+                            "name": os.path.basename(target_local),
+                            "size": sz_hint,
+                            "bytes_done": 0,
+                            "bytes_total": sz_hint,
+                            "status": "queued",
+                        })
 
             for itm in server_items:
                 _collect_server_tree(

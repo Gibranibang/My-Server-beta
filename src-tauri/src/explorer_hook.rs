@@ -43,7 +43,18 @@ mod imp {
     const VK_LWIN: i32 = 0x5B;
     const VK_RWIN: i32 = 0x5C;
     const VK_LCONTROL: i32 = 0xA2;
+    const VK_RCONTROL: i32 = 0xA3;
     const VK_RMENU: i32 = 0xA5;
+    const LLKHF_ALTDOWN: u32 = 0x20;
+
+    #[repr(C)]
+    struct KbdLlHookStruct {
+        vk_code: u32,
+        scan_code: u32,
+        flags: u32,
+        time: u32,
+        dw_extra_info: usize,
+    }
 
     // "ShellTabWindowClass\0" in UTF-16LE (zero-allocation in hook callback)
     const SHELL_TAB_WINDOW_CLASS_UTF16: &[u16] = &[
@@ -122,6 +133,7 @@ mod imp {
     unsafe extern "system" {
         fn GetModuleHandleW(lpModuleName: *const u16) -> *mut c_void;
         fn GetCurrentThreadId() -> u32;
+        fn GetLastError() -> u32;
     }
 
     static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
@@ -150,7 +162,8 @@ mod imp {
             && (w_param == WM_KEYDOWN || w_param == WM_SYSKEYDOWN)
             && l_param != 0
         {
-            let vk_code = unsafe { *(l_param as *const u32) };
+            let kbd = unsafe { &*(l_param as *const KbdLlHookStruct) };
+            let vk_code = kbd.vk_code;
             let action = match vk_code {
                 VK_C => Some(ExplorerHotkeyAction::Copy),
                 VK_V => Some(ExplorerHotkeyAction::Paste),
@@ -159,12 +172,15 @@ mod imp {
 
             if let Some(action) = action {
                 let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } < 0;
-                let alt_down = unsafe { GetAsyncKeyState(VK_MENU) } < 0;
+                let alt_down =
+                    (kbd.flags & LLKHF_ALTDOWN) != 0 || unsafe { GetAsyncKeyState(VK_MENU) } < 0;
                 let shift_up = unsafe { GetAsyncKeyState(VK_SHIFT) } >= 0;
                 let lwin_up = unsafe { GetAsyncKeyState(VK_LWIN) } >= 0;
                 let rwin_up = unsafe { GetAsyncKeyState(VK_RWIN) } >= 0;
-                let altgr_only = unsafe { GetAsyncKeyState(VK_RMENU) } < 0
-                    && unsafe { GetAsyncKeyState(VK_LCONTROL) } >= 0;
+                let lctrl_down = unsafe { GetAsyncKeyState(VK_LCONTROL) } < 0;
+                let rctrl_down = unsafe { GetAsyncKeyState(VK_RCONTROL) } < 0;
+                let altgr_only =
+                    unsafe { GetAsyncKeyState(VK_RMENU) } < 0 && !lctrl_down && !rctrl_down;
 
                 if ctrl_down && alt_down && shift_up && lwin_up && rwin_up && !altgr_only {
                     let fg = unsafe { GetForegroundWindow() };
@@ -195,10 +211,19 @@ mod imp {
         unsafe { CallNextHookEx(core::ptr::null_mut(), n_code, w_param, l_param) }
     }
 
-    pub fn start_explorer_hook<F>(mut on_event: F)
+    pub fn start_explorer_hook<F>(on_event: F)
     where
         F: FnMut(ExplorerHotkeyEvent) + Send + 'static,
     {
+        start_explorer_hook_with_logger(on_event, |_| {});
+    }
+
+    pub fn start_explorer_hook_with_logger<F, L>(mut on_event: F, on_log: L)
+    where
+        F: FnMut(ExplorerHotkeyEvent) + Send + 'static,
+        L: Fn(&str) + Send + Sync + 'static,
+    {
+        let log_cb = std::sync::Arc::new(on_log);
         let (tx, rx) = mpsc::sync_channel::<ExplorerHotkeyEvent>(16);
         if let Ok(mut guard) = HOOK_SENDER.lock() {
             *guard = Some(tx);
@@ -213,6 +238,7 @@ mod imp {
             })
             .ok();
 
+        let log_hook = log_cb.clone();
         std::thread::Builder::new()
             .name("myserver-explorer-ll-hook".to_string())
             .spawn(move || {
@@ -224,12 +250,21 @@ mod imp {
                     SetWindowsHookExW(WH_KEYBOARD_LL, low_level_keyboard_proc, hmod, 0)
                 };
                 if hook.is_null() {
+                    let err = unsafe { GetLastError() };
+                    log_hook(&format!(
+                        "explorer_hook: SetWindowsHookExW FAILED GetLastError={} hmod={:?} tid={}",
+                        err, hmod, tid
+                    ));
                     HOOK_THREAD_ID.store(0, Ordering::SeqCst);
                     if let Ok(mut guard) = HOOK_SENDER.lock() {
                         *guard = None;
                     }
                     return;
                 }
+                log_hook(&format!(
+                    "explorer_hook: SetWindowsHookExW installed ok hook={:?} tid={}",
+                    hook, tid
+                ));
 
                 let mut msg = Msg {
                     hwnd: core::ptr::null_mut(),
@@ -278,7 +313,14 @@ mod imp {
     {
     }
 
+    pub fn start_explorer_hook_with_logger<F, L>(_on_event: F, _on_log: L)
+    where
+        F: FnMut(ExplorerHotkeyEvent) + Send + 'static,
+        L: Fn(&str) + Send + Sync + 'static,
+    {
+    }
+
     pub fn stop_explorer_hook() {}
 }
 
-pub use imp::{start_explorer_hook, stop_explorer_hook};
+pub use imp::{start_explorer_hook, start_explorer_hook_with_logger, stop_explorer_hook};

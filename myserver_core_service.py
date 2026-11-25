@@ -19257,9 +19257,11 @@ def _handle_transfer_copy(body=None):
     if source == "hotkey":
         fg_hwnd = int(payload.get("fg_hwnd") or 0)
         top_tab_hwnd = int(payload.get("top_tab_hwnd") or 0)
-        print(f"[transfer] /api/transfer/copy hotkey fg_hwnd={fg_hwnd} top_tab_hwnd={top_tab_hwnd}", flush=True)
-        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=4000)
-        print(f"[transfer] read_active_explorer_tab result: ok={tab_res.get('ok')} err={tab_res.get('error')} sel={len(tab_res.get('selected_items') or [])}", flush=True)
+        if logger_manager:
+            logger_manager.log_info(f"[Transfer] /api/transfer/copy hotkey fg_hwnd={fg_hwnd} top_tab_hwnd={top_tab_hwnd}")
+        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=1500)
+        if logger_manager:
+            logger_manager.log_info(f"[Transfer] read_active_explorer_tab result: ok={tab_res.get('ok')} err={tab_res.get('error')} sel={len(tab_res.get('selected_items') or [])}")
         if tab_res.get("timed_out"):
             _show_transfer_toast(
                 "Explorer tidak merespons",
@@ -19414,6 +19416,8 @@ def _handle_transfer_paste(body=None):
     if source == "hotkey":
         clip = _transfer_manager.get_clipboard()
         if not clip.get("mode") or not clip.get("items"):
+            if logger_manager:
+                logger_manager.log_info("[Transfer] /api/transfer/paste hotkey: clipboard empty")
             _show_transfer_toast(
                 "Clipboard MyServer kosong",
                 "Salin file atau folder terlebih dahulu sebelum menempel.",
@@ -19425,9 +19429,11 @@ def _handle_transfer_paste(body=None):
 
         fg_hwnd = int(payload.get("fg_hwnd") or 0)
         top_tab_hwnd = int(payload.get("top_tab_hwnd") or 0)
-        print(f"[transfer] /api/transfer/paste hotkey fg_hwnd={fg_hwnd} top_tab_hwnd={top_tab_hwnd}", flush=True)
-        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=4000)
-        print(f"[transfer] paste read_active_explorer_tab result: ok={tab_res.get('ok')} folder={tab_res.get('folder_path')} err={tab_res.get('error')}", flush=True)
+        if logger_manager:
+            logger_manager.log_info(f"[Transfer] /api/transfer/paste hotkey fg_hwnd={fg_hwnd} top_tab_hwnd={top_tab_hwnd}")
+        tab_res = explorer_tab_reader.read_active_explorer_tab(fg_hwnd, top_tab_hwnd, timeout_ms=1500)
+        if logger_manager:
+            logger_manager.log_info(f"[Transfer] paste read_active_explorer_tab result: ok={tab_res.get('ok')} folder={tab_res.get('folder_path')} err={tab_res.get('error')}")
         if tab_res.get("timed_out"):
             if clip.get("mode") == "local":
                 return 200, {
@@ -19435,6 +19441,8 @@ def _handle_transfer_paste(body=None):
                     "ui_action": "open_transfer_window",
                     "mode": "quick_picker",
                     "direction": "upload",
+                    "items": [],
+                    "status": "idle",
                 }
             res = _transfer_manager.dispatch_paste(force_quick_picker=True)
             return 200, res
@@ -19443,10 +19451,14 @@ def _handle_transfer_paste(body=None):
         res = _transfer_manager.dispatch_paste(dest_path=dest_path)
     elif source == "context_menu":
         dest_path = str(payload.get("dest_path") or payload.get("path") or "").strip()
+        if logger_manager:
+            logger_manager.log_info(f"[Transfer] /api/transfer/paste context_menu dest_path={dest_path}")
         res = _transfer_manager.dispatch_paste(dest_path=dest_path)
     elif source == "quick_picker":
         server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip()
         dest_rel = str(payload.get("dest_rel") or payload.get("destRel") or "").strip()
+        if logger_manager:
+            logger_manager.log_info(f"[Transfer] /api/transfer/paste quick_picker server_id={server_id} dest_rel={dest_rel}")
         res = _transfer_manager.dispatch_paste(server_id=server_id, dest_rel=dest_rel)
     else:
         res = _transfer_manager.dispatch_paste(
@@ -19454,6 +19466,12 @@ def _handle_transfer_paste(body=None):
             server_id=str(payload.get("server_id") or payload.get("serverId") or "").strip(),
             dest_rel=str(payload.get("dest_rel") or payload.get("destRel") or "").strip(),
         )
+
+    if res.get("job_id"):
+        st = _transfer_manager.get_status(job_id=res.get("job_id"))
+        res = {**st, **res, "max_workers": _transfer_manager.max_workers}
+    elif "items" not in res:
+        res["items"] = []
 
     if not res.get("success") and res.get("code") == "CLIPBOARD_EMPTY":
         _show_transfer_toast(
@@ -38616,6 +38634,8 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
     threading.Thread(target=ensure_autorun_registry_healthy, daemon=True).start()
     threading.Thread(target=cleanup_temp_update_artifacts, daemon=True).start()
+    if sys.platform == "win32" and parent_pid and parent_pid > 0:
+        threading.Thread(target=explorer_tab_reader.warmup, daemon=True).start()
 
 
 

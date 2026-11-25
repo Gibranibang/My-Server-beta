@@ -1040,60 +1040,63 @@ async fn handle_explorer_transfer_cli_action(
 fn start_explorer_hook_worker(app: AppHandle) {
     let mut last_trigger: Option<(explorer_hook::ExplorerHotkeyAction, isize, std::time::Instant)> =
         None;
-    explorer_hook::start_explorer_hook(move |ev| {
-        let now = std::time::Instant::now();
-        if let Some((prev_action, prev_hwnd, prev_at)) = last_trigger {
-            if prev_action == ev.action
-                && prev_hwnd == ev.fg_hwnd
-                && now.duration_since(prev_at) < std::time::Duration::from_millis(300)
-            {
-                return;
+    explorer_hook::start_explorer_hook_with_logger(
+        move |ev| {
+            let now = std::time::Instant::now();
+            if let Some((prev_action, prev_hwnd, prev_at)) = last_trigger {
+                if prev_action == ev.action
+                    && prev_hwnd == ev.fg_hwnd
+                    && now.duration_since(prev_at) < std::time::Duration::from_millis(300)
+                {
+                    return;
+                }
             }
-        }
-        last_trigger = Some((ev.action, ev.fg_hwnd, now));
-        trace_log(&format!(
-            "explorer_hook triggered: action={:?} fg_hwnd={} top_tab_hwnd={}",
-            ev.action, ev.fg_hwnd, ev.top_tab_hwnd
-        ));
+            last_trigger = Some((ev.action, ev.fg_hwnd, now));
+            trace_log(&format!(
+                "explorer_hook triggered: action={:?} fg_hwnd={} top_tab_hwnd={}",
+                ev.action, ev.fg_hwnd, ev.top_tab_hwnd
+            ));
 
-        let app_clone = app.clone();
-        let (endpoint, payload) = match ev.action {
-            explorer_hook::ExplorerHotkeyAction::Copy => (
-                "transfer/copy".to_string(),
-                serde_json::json!({
-                    "source": "hotkey",
-                    "fg_hwnd": ev.fg_hwnd,
-                    "top_tab_hwnd": ev.top_tab_hwnd,
-                }),
-            ),
-            explorer_hook::ExplorerHotkeyAction::Paste => (
-                "transfer/paste".to_string(),
-                serde_json::json!({
-                    "source": "hotkey",
-                    "fg_hwnd": ev.fg_hwnd,
-                    "top_tab_hwnd": ev.top_tab_hwnd,
-                }),
-            ),
-        };
+            let app_clone = app.clone();
+            let (endpoint, payload) = match ev.action {
+                explorer_hook::ExplorerHotkeyAction::Copy => (
+                    "transfer/copy".to_string(),
+                    serde_json::json!({
+                        "source": "hotkey",
+                        "fg_hwnd": ev.fg_hwnd,
+                        "top_tab_hwnd": ev.top_tab_hwnd,
+                    }),
+                ),
+                explorer_hook::ExplorerHotkeyAction::Paste => (
+                    "transfer/paste".to_string(),
+                    serde_json::json!({
+                        "source": "hotkey",
+                        "fg_hwnd": ev.fg_hwnd,
+                        "top_tab_hwnd": ev.top_tab_hwnd,
+                    }),
+                ),
+            };
 
-        tauri::async_runtime::spawn(async move {
-            match call_core_api(endpoint.clone(), payload).await {
-                Ok(res) => {
-                    trace_log(&format!("hotkey {} core response: {}", endpoint, res));
-                    if res.get("ui_action").and_then(|v| v.as_str())
-                        == Some("open_transfer_window")
-                    {
-                        if let Err(e) = open_or_focus_transfer_window(&app_clone, res) {
-                            trace_log(&format!("open_or_focus_transfer_window error: {}", e));
+            tauri::async_runtime::spawn(async move {
+                match call_core_api(endpoint.clone(), payload).await {
+                    Ok(res) => {
+                        trace_log(&format!("hotkey {} core response: {}", endpoint, res));
+                        if res.get("ui_action").and_then(|v| v.as_str())
+                            == Some("open_transfer_window")
+                        {
+                            if let Err(e) = open_or_focus_transfer_window(&app_clone, res) {
+                                trace_log(&format!("open_or_focus_transfer_window error: {}", e));
+                            }
                         }
                     }
+                    Err(e) => {
+                        trace_log(&format!("hotkey {} call_core_api error: {}", endpoint, e));
+                    }
                 }
-                Err(e) => {
-                    trace_log(&format!("hotkey {} call_core_api error: {}", endpoint, e));
-                }
-            }
-        });
-    });
+            });
+        },
+        |msg| trace_log(msg),
+    );
 }
 
 #[tauri::command]
@@ -1286,6 +1289,7 @@ pub fn run() {
                 .and_then(|val| val.get("explorer_hotkey_enabled"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
+            trace_log(&format!("setup: explorer_hotkey_enabled={}", explorer_hotkey_enabled));
             explorer_hook::set_explorer_hotkey_enabled(explorer_hotkey_enabled);
             start_explorer_hook_worker(app.handle().clone());
 

@@ -371,6 +371,18 @@ def _run_powershell_sta_worker(
     t.start()
 
 
+def warmup() -> bool:
+    """Pra-inisialisasi PowerShell STA persisten di background agar hotkey pertama < 20 ms."""
+    if sys.platform != "win32":
+        return False
+    try:
+        with _PS_LOCK:
+            _ensure_persistent_ps_proc()
+        return True
+    except Exception:
+        return False
+
+
 def _spawn_sta_com_worker(
     fg_hwnd: int,
     top_tab_hwnd: int,
@@ -379,14 +391,8 @@ def _spawn_sta_com_worker(
     done_event: threading.Event,
     on_finish: Callable[[], None],
 ) -> None:
-    """Pilih PowerShell STA persisten (atau pythonnet STA bila CSharpCodeProvider tersedia)."""
-    try:
-        import clr  # type: ignore  # noqa: F401
-        import Microsoft.CSharp  # type: ignore  # noqa: F401
-        import System.CodeDom.Compiler  # type: ignore  # noqa: F401
-        _run_pythonnet_sta_worker(fg_hwnd, top_tab_hwnd, result_box, done_event, on_finish)
-    except Exception:
-        _run_powershell_sta_worker(fg_hwnd, top_tab_hwnd, timeout_ms, result_box, done_event, on_finish)
+    """Jalankan pembacaan COM Explorer melalui PowerShell -STA persisten (proven Spike 001/002)."""
+    _run_powershell_sta_worker(fg_hwnd, top_tab_hwnd, timeout_ms, result_box, done_event, on_finish)
 
 
 def read_active_explorer_tab(fg_hwnd: int, top_tab_hwnd: int = 0, timeout_ms: int = 1500) -> Dict[str, Any]:
@@ -456,6 +462,8 @@ def read_active_explorer_tab(fg_hwnd: int, top_tab_hwnd: int = 0, timeout_ms: in
         }
 
     wait_sec = max(0.01, float(timeout_ms) / 1000.0)
+    if timeout_ms >= 500 and not _ps_cold_started:
+        wait_sec = max(wait_sec, 6.0)
     if not done_event.wait(wait_sec):
         with _PS_LOCK:
             global _ps_persistent_proc

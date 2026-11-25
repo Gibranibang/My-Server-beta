@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import {
+  AlertTriangle,
   Check,
   Copy,
   ExternalLink,
@@ -11,12 +12,23 @@ import {
   LoaderCircle,
   Lock,
   Trash2,
+  UserPlus,
+  Users,
   X,
 } from "lucide-react"
 import { getCompanionApi } from "../api"
 import { assets } from "../assets"
 import { getTranslation, type Language } from "../i18n"
-import type { PublicShareItem, ShareErrorCode, ShareTargetInfo } from "../types"
+import type {
+  AccountShareItem,
+  InternalShareRole,
+  MaxUploadMbPreset,
+  PublicShareItem,
+  PublicShareRole,
+  ShareAccountCandidate,
+  ShareErrorCode,
+  ShareTargetInfo,
+} from "../types"
 import { Button, Chip, IconBadge, Mono, SectionLabel, StatusDot, TextAction, cx } from "../ui"
 import { QrCodeSvg } from "./QrCodeSvg"
 
@@ -24,6 +36,7 @@ export interface ShareWindowProps {
   initialTarget?: ShareTargetInfo | null
 }
 
+type ShareTab = "public" | "accounts"
 type ExpiryMode = "unlimited" | "1h" | "24h" | "168h" | "custom"
 
 type ShareToast = {
@@ -53,6 +66,13 @@ function isValidCustomHours(raw: string): boolean {
   if (!/^\d+$/.test(trimmed)) return false
   const n = Number(trimmed)
   return Number.isInteger(n) && n >= 1 && n <= 8760
+}
+
+function isValidCustomMaxMb(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) return false
+  const n = Number(trimmed)
+  return Number.isInteger(n) && n >= 1 && n <= 102400
 }
 
 function formatExpiryLabel(expiresAt: string, language: Language): string {
@@ -104,6 +124,11 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
   const [targetLoading, setTargetLoading] = useState<boolean>(!initialTarget)
   const [targetError, setTargetError] = useState<string | null>(null)
 
+  const [activeTab, setActiveTab] = useState<ShareTab>("public")
+
+  const [publicRole, setPublicRole] = useState<PublicShareRole>("viewer")
+  const [maxSizeMode, setMaxSizeMode] = useState<MaxUploadMbPreset>("unlimited")
+  const [customMaxMb, setCustomMaxMb] = useState("250")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [expiryMode, setExpiryMode] = useState<ExpiryMode>("unlimited")
@@ -129,17 +154,37 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
   const [revokeConfirmToken, setRevokeConfirmToken] = useState<string | null>(null)
   const [revokingToken, setRevokingToken] = useState<string | null>(null)
 
+  const [accountCandidates, setAccountCandidates] = useState<ShareAccountCandidate[]>([])
+  const [accountShares, setAccountShares] = useState<AccountShareItem[]>([])
+  const [callerRole, setCallerRole] = useState<string>("")
+  const [accountsLoading, setAccountsLoading] = useState<boolean>(false)
+  const [accountsError, setAccountsError] = useState<string | null>(null)
+  const [selectedAccount, setSelectedAccount] = useState<string>("")
+  const [accountRole, setAccountRole] = useState<InternalShareRole>("viewer")
+  const [grantingAccount, setGrantingAccount] = useState<boolean>(false)
+  const [updatingGrantId, setUpdatingGrantId] = useState<number | null>(null)
+  const [removeConfirmGrantId, setRemoveConfirmGrantId] = useState<number | null>(null)
+  const [removingGrantId, setRemovingGrantId] = useState<number | null>(null)
+
   const [toast, setToast] = useState<ShareToast>(null)
   const toastTimerRef = useRef<number | null>(null)
   const copiedTimerRef = useRef<number | null>(null)
   const currentTargetRelRef = useRef<string | null>(initialTarget?.canonical_rel ?? null)
+  const publicTabBtnRef = useRef<HTMLButtonElement | null>(null)
+  const accountsTabBtnRef = useRef<HTMLButtonElement | null>(null)
 
   const passwordId = useId()
   const baseUrlId = useId()
+  const accountSelectId = useId()
+  const publicTabId = useId()
+  const accountsTabId = useId()
+  const publicPanelId = useId()
+  const accountsPanelId = useId()
   const t = useMemo(() => getTranslation(language), [language])
   const tRef = useRef(t)
   tRef.current = t
   const fetchSeqRef = useRef(0)
+  const accountFetchSeqRef = useRef(0)
 
   const showToast = useCallback((text: string, tone: "info" | "success" | "error" | "warning" = "info") => {
     setToast({ text, tone })
@@ -271,10 +316,53 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
     [],
   )
 
+  const fetchAccountData = useCallback(
+    async (activeTarget: ShareTargetInfo | null) => {
+      if (!activeTarget) return
+      const seq = ++accountFetchSeqRef.current
+      setAccountsLoading(true)
+      setAccountsError(null)
+      try {
+        const api = getCompanionApi()
+        const [candRes, listRes] = await Promise.all([
+          api.listShareAccountCandidates(activeTarget.server_id),
+          api.listAccountShares(activeTarget.canonical_rel, activeTarget.server_id),
+        ])
+        if (seq !== accountFetchSeqRef.current) return
+        if (candRes.success) {
+          setAccountCandidates(Array.isArray(candRes.accounts) ? candRes.accounts : [])
+        } else {
+          setAccountCandidates([])
+        }
+        if (listRes.success) {
+          setAccountShares(Array.isArray(listRes.shares) ? listRes.shares : [])
+          setCallerRole(typeof listRes.caller_role === "string" ? listRes.caller_role : "")
+          setAccountsError(null)
+        } else {
+          setAccountShares([])
+          setCallerRole("")
+          setAccountsError(listRes.error || tRef.current("share_acct_fetch_error"))
+        }
+      } catch (err) {
+        if (seq !== accountFetchSeqRef.current) return
+        setAccountCandidates([])
+        setAccountShares([])
+        setCallerRole("")
+        setAccountsError(err instanceof Error ? err.message : tRef.current("share_acct_fetch_error"))
+      } finally {
+        if (seq === accountFetchSeqRef.current) {
+          setAccountsLoading(false)
+        }
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     if (!target) return
     void fetchShares(target)
-  }, [target, fetchShares])
+    void fetchAccountData(target)
+  }, [target, fetchShares, fetchAccountData])
 
   // Re-target in-place when Tauri reuses an already-open share-window without re-centering
   useEffect(() => {
@@ -288,6 +376,10 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
       setTargetError(null)
       setRevokeConfirmToken(null)
       if (changed) {
+        setActiveTab("public")
+        setPublicRole("viewer")
+        setMaxSizeMode("unlimited")
+        setCustomMaxMb("250")
         setGeneratedLink(null)
         setJustCopied(false)
         setPassword("")
@@ -295,6 +387,9 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
         setExpiryMode("unlimited")
         setCustomHours("48")
         setBaseUrlError(null)
+        setSelectedAccount("")
+        setAccountRole("viewer")
+        setRemoveConfirmGrantId(null)
       }
     }
 
@@ -322,7 +417,34 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
     void getCompanionApi().startDrag().catch(() => undefined)
   }
 
+  const effectivePublicRole: PublicShareRole = target?.is_dir ? publicRole : "viewer"
   const isCustomExpiryValid = expiryMode !== "custom" || isValidCustomHours(customHours)
+  const isCustomMaxSizeValid =
+    effectivePublicRole !== "editor" || maxSizeMode !== "custom" || isValidCustomMaxMb(customMaxMb)
+  const effectiveMaxUploadMb: number | null = useMemo(() => {
+    if (effectivePublicRole !== "editor") return null
+    if (maxSizeMode === "unlimited") return null
+    if (maxSizeMode === "custom") {
+      return isValidCustomMaxMb(customMaxMb) ? Number.parseInt(customMaxMb.trim(), 10) : null
+    }
+    return Number.parseInt(maxSizeMode, 10)
+  }, [effectivePublicRole, maxSizeMode, customMaxMb])
+
+  const canGrantAdmin = Boolean(target?.is_dir) && (
+    callerRole
+      ? callerRole === "system_admin" || callerRole === "owner" || callerRole === "administrator"
+      : isAdmin === true
+  )
+  const effectiveAccountRole: InternalShareRole = target?.is_dir
+    ? accountRole === "administrator" && !canGrantAdmin
+      ? "viewer"
+      : accountRole
+    : "viewer"
+
+  const availableCandidates = useMemo(() => {
+    const granted = new Set(accountShares.map((s) => s.grantee_username.toLowerCase()))
+    return accountCandidates.filter((c) => !granted.has(c.username.toLowerCase()))
+  }, [accountCandidates, accountShares])
 
   const handleSaveBaseUrl = async () => {
     if (savingBaseUrl || isAdmin !== true) return
@@ -368,7 +490,7 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
 
   const handleCreateShare = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (creating || !target || !isCustomExpiryValid) return
+    if (creating || !target || !isCustomExpiryValid || !isCustomMaxSizeValid) return
 
     let expiresInHours: number | null = null
     if (expiryMode === "1h") expiresInHours = 1
@@ -384,6 +506,8 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
         server_id: target.server_id,
         password: password.trim() ? password : null,
         expires_in_hours: expiresInHours,
+        role: effectivePublicRole,
+        max_upload_mb: effectiveMaxUploadMb,
         label: target.basename,
         copy_to_clipboard: true,
       })
@@ -453,6 +577,98 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
     }
   }
 
+  const internalRoleDisplay = useCallback(
+    (role: InternalShareRole): string => {
+      if (role === "administrator") return t("share_acct_role_admin")
+      if (role === "editor") return t("share_role_editor")
+      return t("share_role_viewer")
+    },
+    [t],
+  )
+
+  const handleGrantAccountShare = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (grantingAccount || !target || !selectedAccount) return
+    setGrantingAccount(true)
+    const targetUsername = selectedAccount
+    const targetRole = effectiveAccountRole
+    try {
+      const res = await getCompanionApi().grantAccountShare({
+        targetPath: target.canonical_rel,
+        granteeUsername: targetUsername,
+        role: targetRole,
+        serverId: target.server_id,
+      })
+      if (!res.success || !res.share) {
+        showToast(res.error || t("share_acct_fetch_error"), "error")
+        return
+      }
+      setAccountShares((prev) => [res.share!, ...prev.filter((s) => s.id !== res.share!.id)])
+      setSelectedAccount("")
+      showToast(t("share_acct_granted_toast").replace("{username}", targetUsername), "success")
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t("share_acct_fetch_error"), "error")
+    } finally {
+      setGrantingAccount(false)
+    }
+  }
+
+  const handleUpdateAccountRole = async (row: AccountShareItem, nextRole: InternalShareRole) => {
+    if (updatingGrantId !== null || removingGrantId !== null || row.role === nextRole) return
+    setUpdatingGrantId(row.id)
+    try {
+      const res = await getCompanionApi().updateAccountShareRole(row.id, nextRole, target?.server_id)
+      if (!res.success) {
+        showToast(res.error || t("share_acct_fetch_error"), "error")
+        return
+      }
+      const updated = res.share ?? { ...row, role: nextRole }
+      setAccountShares((prev) => prev.map((item) => (item.id === row.id ? updated : item)))
+      showToast(
+        t("share_acct_updated_toast")
+          .replace("{username}", row.grantee_username)
+          .replace("{role}", internalRoleDisplay(updated.role)),
+        "success",
+      )
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t("share_acct_fetch_error"), "error")
+    } finally {
+      setUpdatingGrantId(null)
+    }
+  }
+
+  const handleConfirmRemoveAccount = async (row: AccountShareItem) => {
+    if (removingGrantId !== null) return
+    setRemovingGrantId(row.id)
+    try {
+      const res = await getCompanionApi().revokeAccountShare(row.id, target?.server_id)
+      if (!res.success) {
+        showToast(res.error || t("share_acct_fetch_error"), "error")
+        return
+      }
+      setAccountShares((prev) => prev.filter((item) => item.id !== row.id))
+      setRemoveConfirmGrantId(null)
+      showToast(t("share_acct_removed_toast").replace("{username}", row.grantee_username), "success")
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t("share_acct_fetch_error"), "error")
+    } finally {
+      setRemovingGrantId(null)
+    }
+  }
+
+  const handleTabKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      e.preventDefault()
+      const next: ShareTab = activeTab === "public" ? "accounts" : "public"
+      setActiveTab(next)
+      if (next === "public") {
+        publicTabBtnRef.current?.focus()
+      } else {
+        accountsTabBtnRef.current?.focus()
+      }
+    }
+  }
+
   const activeItemShares = useMemo(() => {
     if (!target) return []
     const now = Date.now()
@@ -478,6 +694,15 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
     { mode: "24h", label: t("share_expiry_24h") },
     { mode: "168h", label: t("share_expiry_7d") },
     { mode: "custom", label: t("share_expiry_custom") },
+  ]
+
+  const maxSizeOptions: Array<{ mode: MaxUploadMbPreset; label: string }> = [
+    { mode: "unlimited", label: t("share_max_size_unlimited") },
+    { mode: "25", label: "25 MB" },
+    { mode: "100", label: "100 MB" },
+    { mode: "500", label: "500 MB" },
+    { mode: "1024", label: "1 GB" },
+    { mode: "custom", label: t("share_max_size_custom") },
   ]
 
   const serverDiskLabel = target ? `${target.server_name} · ${target.disk_name}` : ""
@@ -581,11 +806,184 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
               </Chip>
             </div>
 
-            {/* B. Share Configuration Card (E2) */}
+            {/* E7 Dual-Tab Switcher: Public Link | Backend Accounts */}
+            <div
+              role="tablist"
+              aria-label={t("share_win_title")}
+              onKeyDown={handleTabKeyDown}
+              className="grid grid-cols-2 gap-1 p-1 rounded-[10px] border border-[var(--line)] bg-[var(--seg-track)]"
+            >
+              <button
+                ref={publicTabBtnRef}
+                id={publicTabId}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "public"}
+                aria-controls={publicPanelId}
+                tabIndex={activeTab === "public" ? 0 : -1}
+                onClick={() => setActiveTab("public")}
+                className={
+                  activeTab === "public"
+                    ? "inline-flex items-center justify-center gap-1.5 rounded-control border border-[var(--seg-active-border)] bg-[var(--seg-active)] text-[var(--seg-active-ink)] px-2 py-2 text-caption font-semibold shadow-xs cursor-pointer truncate"
+                    : "inline-flex items-center justify-center gap-1.5 rounded-control border border-transparent bg-transparent text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)] px-2 py-2 text-caption font-normal cursor-pointer truncate"
+                }
+              >
+                <Link2 className="size-4 shrink-0" aria-hidden />
+                <span className="truncate">{t("share_tab_public")}</span>
+              </button>
+              <button
+                ref={accountsTabBtnRef}
+                id={accountsTabId}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "accounts"}
+                aria-controls={accountsPanelId}
+                tabIndex={activeTab === "accounts" ? 0 : -1}
+                onClick={() => setActiveTab("accounts")}
+                className={
+                  activeTab === "accounts"
+                    ? "inline-flex items-center justify-center gap-1.5 rounded-control border border-[var(--seg-active-border)] bg-[var(--seg-active)] text-[var(--seg-active-ink)] px-2 py-2 text-caption font-semibold shadow-xs cursor-pointer truncate"
+                    : "inline-flex items-center justify-center gap-1.5 rounded-control border border-transparent bg-transparent text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)] px-2 py-2 text-caption font-normal cursor-pointer truncate"
+                }
+              >
+                <Users className="size-4 shrink-0" aria-hidden />
+                <span className="truncate">{t("share_tab_accounts")}</span>
+                {accountShares.length > 0 ? (
+                  <span
+                    data-testid="accounts-tab-count"
+                    className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--ink)] text-[10px] font-semibold tabular-nums"
+                  >
+                    {accountShares.length}
+                  </span>
+                ) : null}
+              </button>
+            </div>
+
+            {activeTab === "public" ? (
+              <div
+                id={publicPanelId}
+                role="tabpanel"
+                aria-labelledby={publicTabId}
+                className="space-y-4"
+              >
+            {/* B. Share Configuration Card (E2 / E7) */}
             <form
               onSubmit={handleCreateShare}
               className="rounded-card border border-[var(--line)] bg-[var(--surface-elevated)] backdrop-blur-xs p-4 space-y-4"
             >
+              {/* Link Role Selector (Viewer default | Editor) */}
+              <div className="space-y-2">
+                <span className="block text-caption font-semibold text-[var(--ink)]">
+                  {t("share_role_label")}
+                </span>
+                <div
+                  role="radiogroup"
+                  aria-label={t("share_role_label")}
+                  className="grid grid-cols-2 gap-1 p-1 rounded-tile border border-[var(--line)] bg-[var(--seg-track)]"
+                >
+                  {(["viewer", "editor"] as const).map((roleOption) => {
+                    const selected = effectivePublicRole === roleOption
+                    const isEditorDisabled = roleOption === "editor" && !target.is_dir
+                    return (
+                      <button
+                        key={roleOption}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        aria-disabled={isEditorDisabled ? "true" : undefined}
+                        disabled={isEditorDisabled}
+                        onClick={() => {
+                          if (!isEditorDisabled) setPublicRole(roleOption)
+                        }}
+                        className={
+                          selected
+                            ? "rounded-control border border-[var(--seg-active-border)] bg-[var(--seg-active)] text-[var(--seg-active-ink)] px-2 py-2 text-caption font-semibold shadow-xs cursor-pointer truncate"
+                            : "rounded-control border border-transparent bg-transparent text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)] disabled:opacity-45 disabled:cursor-not-allowed px-2 py-2 text-caption font-normal cursor-pointer truncate"
+                        }
+                      >
+                        {roleOption === "editor" ? t("share_role_editor") : t("share_role_viewer")}
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="text-caption font-normal text-[var(--ink-subtle)]">
+                  {!target.is_dir
+                    ? t("share_role_single_file_note")
+                    : effectivePublicRole === "editor"
+                      ? t("share_role_editor_hint")
+                      : t("share_role_viewer_hint")}
+                </p>
+
+                {effectivePublicRole === "editor" && password.trim() === "" ? (
+                  <div
+                    role="note"
+                    data-testid="editor-nopwd-warning"
+                    className="rounded-control border border-[var(--warn-border)] bg-[var(--warn-bg)] px-3 py-2 text-caption font-normal text-[var(--warn-ink)] flex items-start gap-2"
+                  >
+                    <AlertTriangle className="size-4 shrink-0 mt-0.5" aria-hidden />
+                    <span>{t("share_editor_nopwd_warn")}</span>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Max File Size Selector (visible ONLY when role === "editor") */}
+              {effectivePublicRole === "editor" ? (
+                <div className="space-y-2">
+                  <span className="block text-caption font-semibold text-[var(--ink)]">
+                    {t("share_max_size_label")}
+                  </span>
+                  <div
+                    role="radiogroup"
+                    aria-label={t("share_max_size_label")}
+                    className="grid grid-cols-3 gap-1 p-1 rounded-tile border border-[var(--line)] bg-[var(--seg-track)]"
+                  >
+                    {maxSizeOptions.map((opt) => {
+                      const selected = maxSizeMode === opt.mode
+                      return (
+                        <button
+                          key={opt.mode}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setMaxSizeMode(opt.mode)}
+                          className={
+                            selected
+                              ? "rounded-control border border-[var(--seg-active-border)] bg-[var(--seg-active)] text-[var(--seg-active-ink)] px-2 py-2 text-caption font-semibold shadow-xs cursor-pointer truncate"
+                              : "rounded-control border border-transparent bg-transparent text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)] px-2 py-2 text-caption font-normal cursor-pointer truncate"
+                          }
+                        >
+                          {opt.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {maxSizeMode === "custom" ? (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={1}
+                          max={102400}
+                          step={1}
+                          aria-label={t("share_max_size_custom")}
+                          value={customMaxMb}
+                          onChange={(e) => setCustomMaxMb(e.target.value)}
+                          className="w-28 rounded-control border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-2 text-body font-normal text-[var(--ink)] outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_var(--input-focus)]"
+                        />
+                        <span className="text-caption font-normal text-[var(--ink-subtle)]">
+                          {t("share_max_size_unit")}
+                        </span>
+                      </div>
+                      {!isCustomMaxSizeValid ? (
+                        <p role="alert" className="text-caption font-normal text-[var(--danger-ink)]">
+                          {t("share_max_size_invalid")}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {/* Optional Password */}
               <div className="space-y-2">
                 <label
@@ -725,7 +1123,7 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
               {/* Primary CTA */}
               <button
                 type="submit"
-                disabled={creating || !target || !isCustomExpiryValid}
+                disabled={creating || !target || !isCustomExpiryValid || !isCustomMaxSizeValid}
                 aria-busy={creating || undefined}
                 className="w-full inline-flex items-center justify-center gap-2 rounded-control px-4 py-2 text-body font-semibold border border-[var(--btn-primary-border)] bg-[image:var(--btn-primary-bg)] text-[var(--btn-primary-ink)] shadow-[var(--btn-primary-shadow)] hover:brightness-105 active:translate-y-px disabled:bg-[var(--btn-primary-disabled-bg)] disabled:bg-none disabled:border-[var(--btn-primary-disabled-border)] disabled:text-[var(--btn-primary-disabled-ink)] disabled:shadow-none cursor-pointer"
               >
@@ -857,6 +1255,12 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
                     const shareUrl = share.resolved_url || share.share_url
                     const isConfirming = revokeConfirmToken === share.token
                     const isRevoking = revokingToken === share.token
+                    const shareRole: PublicShareRole = share.role === "editor" ? "editor" : "viewer"
+                    const shareMaxMb =
+                      share.max_upload_mb ??
+                      (typeof share.max_upload_bytes === "number" && share.max_upload_bytes > 0
+                        ? Math.round(share.max_upload_bytes / (1024 * 1024))
+                        : null)
 
                     return (
                       <div
@@ -871,6 +1275,14 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
                           >
                             {`/s/${share.token}`}
                           </Mono>
+                          <Chip size="sm" tone={shareRole === "editor" ? "success" : "neutral"}>
+                            {shareRole === "editor" ? t("share_role_editor") : t("share_role_viewer")}
+                          </Chip>
+                          {shareRole === "editor" && shareMaxMb !== null ? (
+                            <Chip size="sm" tone="neutral">
+                              {t("share_max_size_chip").replace("{mb}", String(shareMaxMb))}
+                            </Chip>
+                          ) : null}
                           <Chip size="sm" tone="neutral">
                             <span title={share.expires_at || undefined}>
                               {share.expires_at
@@ -949,6 +1361,257 @@ export function ShareWindow({ initialTarget }: ShareWindowProps = {}) {
                 </div>
               )}
             </div>
+              </div>
+            ) : (
+              <div
+                id={accountsPanelId}
+                role="tabpanel"
+                aria-labelledby={accountsTabId}
+                className="space-y-4"
+              >
+                {/* Grant Access Form Card */}
+                <form
+                  onSubmit={handleGrantAccountShare}
+                  className="rounded-card border border-[var(--line)] bg-[var(--surface-elevated)] backdrop-blur-xs p-4 space-y-4"
+                >
+                  <div className="space-y-2">
+                    <label
+                      htmlFor={accountSelectId}
+                      className="block text-caption font-semibold text-[var(--ink)]"
+                    >
+                      {t("share_acct_picker_label")}
+                    </label>
+                    {!accountsLoading &&
+                    !accountsError &&
+                    accountCandidates.length > 0 &&
+                    availableCandidates.length === 0 ? (
+                      <p className="text-caption font-normal text-[var(--ink-subtle)]">
+                        {t("share_acct_all_granted")}
+                      </p>
+                    ) : (
+                      <select
+                        id={accountSelectId}
+                        value={selectedAccount}
+                        onChange={(e) => setSelectedAccount(e.target.value)}
+                        disabled={grantingAccount || accountsLoading || availableCandidates.length === 0}
+                        className="w-full rounded-control border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-2 text-body font-normal text-[var(--ink)] outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_var(--input-focus)] disabled:opacity-50"
+                      >
+                        <option value="">{t("share_acct_picker_placeholder")}</option>
+                        {availableCandidates.map((cand) => (
+                          <option key={cand.id} value={cand.username}>
+                            {cand.username}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Account Role Selector (Viewer | Editor | Admin) */}
+                  <div className="space-y-2">
+                    <span className="block text-caption font-semibold text-[var(--ink)]">
+                      {t("share_acct_role_label")}
+                    </span>
+                    <div
+                      role="radiogroup"
+                      aria-label={t("share_acct_role_label")}
+                      className="grid grid-cols-3 gap-1 p-1 rounded-tile border border-[var(--line)] bg-[var(--seg-track)]"
+                    >
+                      {(
+                        [
+                          { role: "viewer" as const, label: t("share_role_viewer"), disabled: false },
+                          { role: "editor" as const, label: t("share_role_editor"), disabled: !target.is_dir },
+                          {
+                            role: "administrator" as const,
+                            label: t("share_acct_role_admin"),
+                            disabled: !canGrantAdmin,
+                            title: t("share_acct_role_admin_tip"),
+                          },
+                        ] as Array<{
+                          role: InternalShareRole
+                          label: string
+                          disabled: boolean
+                          title?: string
+                        }>
+                      ).map((opt) => {
+                        const selected = effectiveAccountRole === opt.role
+                        return (
+                          <button
+                            key={opt.role}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            aria-disabled={opt.disabled ? "true" : undefined}
+                            disabled={opt.disabled}
+                            title={opt.title}
+                            onClick={() => {
+                              if (!opt.disabled) setAccountRole(opt.role)
+                            }}
+                            className={
+                              selected
+                                ? "rounded-control border border-[var(--seg-active-border)] bg-[var(--seg-active)] text-[var(--seg-active-ink)] px-2 py-2 text-caption font-semibold shadow-xs cursor-pointer truncate"
+                                : "rounded-control border border-transparent bg-transparent text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)] disabled:opacity-45 disabled:cursor-not-allowed px-2 py-2 text-caption font-normal cursor-pointer truncate"
+                            }
+                          >
+                            {opt.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <p className="text-caption font-normal text-[var(--ink-subtle)]">
+                      {!target.is_dir
+                        ? t("share_role_single_file_note")
+                        : effectiveAccountRole === "administrator"
+                          ? t("share_acct_scope_admin")
+                          : effectiveAccountRole === "editor"
+                            ? t("share_acct_scope_editor")
+                            : t("share_acct_scope_viewer")}
+                    </p>
+                  </div>
+
+                  {/* Primary CTA */}
+                  <button
+                    type="submit"
+                    disabled={grantingAccount || !selectedAccount || accountsLoading}
+                    aria-busy={grantingAccount || undefined}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-control px-4 py-2 text-body font-semibold border border-[var(--btn-primary-border)] bg-[image:var(--btn-primary-bg)] text-[var(--btn-primary-ink)] shadow-[var(--btn-primary-shadow)] hover:brightness-105 active:translate-y-px disabled:bg-[var(--btn-primary-disabled-bg)] disabled:bg-none disabled:border-[var(--btn-primary-disabled-border)] disabled:text-[var(--btn-primary-disabled-ink)] disabled:shadow-none cursor-pointer"
+                  >
+                    {grantingAccount ? (
+                      <>
+                        <LoaderCircle className="size-4 animate-spin shrink-0" aria-hidden />
+                        <span>{t("share_acct_grant_busy")}</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="size-4 shrink-0" aria-hidden />
+                        <span>{t("share_acct_grant_cta")}</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+
+                {/* Shared Accounts List */}
+                <div className="space-y-2">
+                  <SectionLabel trailing={String(accountShares.length)}>
+                    {t("share_acct_section")}
+                  </SectionLabel>
+
+                  {accountsLoading ? (
+                    <div data-testid="account-shares-skeleton" className="space-y-2">
+                      <div className="h-14 rounded-tile border border-[var(--line)] bg-[var(--surface-elevated)] animate-pulse" />
+                      <div className="h-14 rounded-tile border border-[var(--line)] bg-[var(--surface-elevated)] animate-pulse" />
+                    </div>
+                  ) : accountsError ? (
+                    <div className="rounded-tile border border-[var(--danger-border)] bg-[var(--danger-bg)] p-3 flex items-center justify-between gap-2">
+                      <span className="text-caption font-normal text-[var(--danger-ink)]">
+                        {accountsError}
+                      </span>
+                      <TextAction tone="neutral" onClick={() => void fetchAccountData(target)}>
+                        {t("share_acct_btn_refresh")}
+                      </TextAction>
+                    </div>
+                  ) : accountShares.length === 0 ? (
+                    <div className="rounded-tile border border-[var(--line)] bg-[var(--surface-elevated)] backdrop-blur-xs p-6 text-center space-y-2">
+                      <p className="text-body font-semibold text-[var(--ink)]">
+                        {t("share_acct_empty_title")}
+                      </p>
+                      <p className="text-caption font-normal text-[var(--ink-subtle)]">
+                        {t("share_acct_empty_body")}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {accountShares.map((row) => {
+                        const isConfirming = removeConfirmGrantId === row.id
+                        const isUpdating = updatingGrantId === row.id
+                        const isRemoving = removingGrantId === row.id
+                        return (
+                          <div
+                            key={row.id}
+                            data-testid={`account-share-row-${row.id}`}
+                            className="rounded-tile border border-[var(--line)] bg-[var(--surface-elevated)] backdrop-blur-xs p-2 space-y-2"
+                          >
+                            <div className="flex items-center justify-between gap-2 min-w-0">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <span
+                                  aria-hidden="true"
+                                  className="size-7 rounded-full border border-[var(--line)] bg-[var(--seg-track)] flex items-center justify-center text-caption font-semibold text-[var(--ink)] shrink-0"
+                                >
+                                  {row.grantee_username.slice(0, 1).toUpperCase()}
+                                </span>
+                                <span
+                                  className="min-w-0 truncate text-body font-semibold text-[var(--ink)]"
+                                  title={row.grantee_username}
+                                >
+                                  {row.grantee_username}
+                                </span>
+                              </div>
+
+                              {!isConfirming ? (
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <select
+                                    aria-label={`${t("share_acct_role_label")} ${row.grantee_username}`}
+                                    value={row.role}
+                                    disabled={isUpdating || isRemoving}
+                                    onChange={(e) =>
+                                      void handleUpdateAccountRole(row, e.target.value as InternalShareRole)
+                                    }
+                                    className="rounded-control border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-caption font-semibold text-[var(--ink)] outline-none focus:border-[var(--accent)] disabled:opacity-50 cursor-pointer"
+                                  >
+                                    <option value="viewer">{t("share_role_viewer")}</option>
+                                    <option value="editor" disabled={!target.is_dir}>
+                                      {t("share_role_editor")}
+                                    </option>
+                                    <option value="administrator" disabled={!canGrantAdmin}>
+                                      {t("share_acct_role_admin")}
+                                    </option>
+                                  </select>
+                                  <button
+                                    type="button"
+                                    disabled={isUpdating || isRemoving}
+                                    aria-label={`${t("share_acct_btn_remove")} ${row.grantee_username}`}
+                                    onClick={() => setRemoveConfirmGrantId(row.id)}
+                                    className="inline-flex items-center gap-1 rounded-control px-2 py-1 text-caption font-semibold text-[var(--danger-ink)] hover:bg-[var(--danger-bg)] disabled:opacity-50 cursor-pointer"
+                                  >
+                                    <Trash2 className="size-3.5 shrink-0" aria-hidden />
+                                    <span>{t("share_acct_btn_remove")}</span>
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            {isConfirming ? (
+                              <div className="rounded-control border border-[var(--danger-border)] bg-[var(--danger-bg)] p-2 flex items-center justify-between gap-2">
+                                <span className="text-caption font-semibold text-[var(--danger-ink)] truncate">
+                                  {t("share_acct_remove_prompt").replace("{username}", row.grantee_username)}
+                                </span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <TextAction
+                                    tone="neutral"
+                                    disabled={isRemoving}
+                                    onClick={() => setRemoveConfirmGrantId(null)}
+                                  >
+                                    {t("share_acct_btn_keep")}
+                                  </TextAction>
+                                  <Button
+                                    size="sm"
+                                    variant="danger"
+                                    state={isRemoving ? "busy" : "idle"}
+                                    disabled={isRemoving}
+                                    onClick={() => void handleConfirmRemoveAccount(row)}
+                                  >
+                                    {t("share_acct_btn_remove")}
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

@@ -16664,7 +16664,53 @@ def _resolve_smb_route_params(srv, active_u):
 
 
 
-def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=False, expected_gen=None):
+def _try_heal_backend_smb_mode(backend_url, smb_cfg, srv_id, username, password):
+    """Best-effort memastikan Backend smbd aktif di port 445 saat smb_source == 'backend'."""
+    if not backend_url or not (
+        (smb_cfg or {}).get("access_token") or (smb_cfg or {}).get("hasCredentials")
+    ):
+        return False
+    try:
+        st_code, st_data, _ = _backend_authenticated_request(
+            backend_url, "/api/v1/smb/status", smb_cfg, srv_id, method="GET"
+        )
+        if st_code != 200 or not isinstance(st_data, dict):
+            return False
+        remote_mode = str(st_data.get("mode") or "").strip().lower()
+        remote_running = st_data.get("running", True)
+        if remote_mode == "backend" and remote_running is not False:
+            return False
+        logger_manager.log_info(
+            f"[SMB Pipeline] Backend SMB mode terdeteksi '{remote_mode or 'unknown'}' "
+            f"(running={remote_running}); menyembuhkan mode ke 'backend'..."
+        )
+        mode_payload = {"mode": "backend"}
+        if username:
+            mode_payload["username"] = username
+        if password:
+            mode_payload["password"] = password
+        m_status, _, _ = _backend_authenticated_request(
+            backend_url,
+            "/api/v1/smb/mode",
+            smb_cfg,
+            srv_id,
+            method="POST",
+            json_body=mode_payload,
+        )
+        return m_status == 200
+    except Exception as exc:
+        logger_manager.log_debug(f"[SMB Pipeline] Gagal menyembuhkan mode SMB Backend: {exc}")
+        return False
+
+
+def rebind_storage_pipeline(
+    reason="manual",
+    force_refresh=True,
+    pre_unmounted=False,
+    expected_gen=None,
+    ignore_cooldown=False,
+    allow_soft_mode=True,
+):
 
 
 
@@ -16782,7 +16828,7 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
         server_switched_since_mount = bool(
             _last_mounted_server_id and cur_srv_id_pipeline and _last_mounted_server_id != cur_srv_id_pipeline
         )
-        soft_mode = (reason in ("startup_auto", "server_recovered")) and not server_switched_since_mount
+        soft_mode = bool(allow_soft_mode) and (reason in ("startup_auto", "server_recovered")) and not server_switched_since_mount
 
         if soft_mode:
             active_hosts = _collect_myserver_smb_hosts(cfg=cfg, server=srv, include_all_servers=False)
@@ -16880,12 +16926,33 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
                 backend_url = smb_mount_manager._normalize_backend_api_url(
                     raw_backend_url, fallback_host=resolved_b_host
                 )
+                b_host = _extract_host_from_url(backend_url)
                 if (
-                    _is_wan_host_safe(_extract_host_from_url(backend_url))
+                    _is_wan_host_safe(b_host)
                     and resolved_b_host
                     and not _is_wan_host_safe(resolved_b_host)
                 ):
                     backend_url = _format_backend_url(resolved_b_host, 8080)
+                elif (
+                    b_host
+                    and resolved_b_host
+                    and not _is_wan_host_safe(resolved_b_host)
+                    and b_host.lower() != resolved_b_host.lower()
+                ):
+                    try:
+                        b_parsed = urllib.parse.urlparse(backend_url)
+                        b_port = b_parsed.port or (443 if b_parsed.scheme == "https" else 80)
+                    except Exception:
+                        b_port = 8080
+                    if (
+                        not smb_mount_manager.is_port_open(b_host, b_port, timeout=0.6)
+                        and smb_mount_manager.is_port_open(resolved_b_host, 8080, timeout=0.6)
+                    ):
+                        backend_url = _format_backend_url(resolved_b_host, 8080)
+                        _backend_url_cache.pop(srv.get("id") or "default", None)
+                        logger_manager.log_info(
+                            f"[SMB Pipeline] Backend URL '{b_host}:{b_port}' tidak terjangkau; beralih ke host SMB aktif '{backend_url}'."
+                        )
             elif active_u:
                 backend_url = smb_mount_manager._normalize_backend_api_url(
                     active_u, fallback_host=resolved_b_host
@@ -16919,7 +16986,7 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
             host, is_domain, zt_ip = _resolve_smb_route_params(srv, active_u)
 
         auto_mount_reason = reason in ("startup_auto", "server_recovered", "auto_route_changed")
-        if auto_mount_reason and srv and _is_smb_mount_in_cooldown(srv.get("id")):
+        if auto_mount_reason and not ignore_cooldown and srv and _is_smb_mount_in_cooldown(srv.get("id")):
             logger_manager.log_debug(f"[SMB Pipeline] Melewati '{reason}' karena server {srv.get('id')} dalam masa cooldown kegagalan mount.")
             return []
 
@@ -16956,6 +17023,31 @@ def rebind_storage_pipeline(reason="manual", force_refresh=True, pre_unmounted=F
             logger_manager.log_info(f"[SMB Pipeline] Sinkronisasi '{reason}' dibatalkan saat/setelah mount; hasil diabaikan.")
             return res
         mount_ok = bool(isinstance(res, tuple) and res[0])
+        if (
+            not mount_ok
+            and smb_source == "backend"
+            and backend_url
+            and (smb_cfg.get("access_token") or smb_cfg.get("hasCredentials"))
+            and _try_heal_backend_smb_mode(backend_url, smb_cfg, srv.get("id"), u_val, p_val)
+        ):
+            smb_mount_manager.clear_smb_share_cache()
+            smb_mount_manager.purge_smb_sessions(known_srv_hosts, notify_explorer=False)
+            time.sleep(0.3)
+            if not _is_pipeline_aborted():
+                try:
+                    cfg_healed = config_manager.load_or_create_config()
+                    srv_healed = _select_target_server(cfg_healed, target_server_id=srv.get("id")) or srv
+                    smb_cfg_healed = config_manager.get_server_smb_source_config(srv_healed)
+                    if smb_cfg_healed.get("access_token"):
+                        mount_kwargs["auth_token"] = smb_cfg_healed["access_token"]
+                except Exception:
+                    pass
+                res = smb_mount_manager.mount_all_smb_shares(**mount_kwargs)
+                logger_manager.log_info(f"[SMB Pipeline] Hasil pemasangan ulang pasca self-heal ({reason}): {res}")
+                if _is_pipeline_aborted():
+                    logger_manager.log_info(f"[SMB Pipeline] Sinkronisasi '{reason}' dibatalkan setelah self-heal; hasil diabaikan.")
+                    return res
+                mount_ok = bool(isinstance(res, tuple) and res[0])
         if srv and srv.get("id"):
             _record_smb_mount_outcome(srv.get("id"), mount_ok)
         mount_summary = {}
@@ -21703,6 +21795,63 @@ def get_cached_metrics_client(srv, active_u):
 
 
 _startup_auto_mount_attempted = False
+_startup_auto_mount_inflight = False
+
+
+def _invoke_rebind_with_startup_opts(reason, ignore_cooldown=False, allow_soft_mode=True):
+    """Memanggil rebind_storage_pipeline secara kompatibel terhadap mock test berparameter minimal."""
+    try:
+        import inspect as _insp
+        params = _insp.signature(rebind_storage_pipeline).parameters
+        kw = {}
+        if "ignore_cooldown" in params or any(
+            p.kind == _insp.Parameter.VAR_KEYWORD for p in params.values()
+        ):
+            kw["ignore_cooldown"] = bool(ignore_cooldown)
+        if "allow_soft_mode" in params or any(
+            p.kind == _insp.Parameter.VAR_KEYWORD for p in params.values()
+        ):
+            kw["allow_soft_mode"] = bool(allow_soft_mode)
+        return rebind_storage_pipeline(reason, **kw)
+    except Exception:
+        return rebind_storage_pipeline(reason)
+
+
+def _maybe_trigger_deferred_startup_smb_mount(
+    srv,
+    active_url,
+    auto_mount_enabled=True,
+    is_online=True,
+    spawn_async=True,
+):
+    """Memicu pemulihan startup_auto SMB ketika host port 445 baru siap setelah percobaan awal gagal."""
+    if not srv or not active_url or not auto_mount_enabled or not is_online:
+        return False
+    if not _startup_auto_mount_attempted or _startup_auto_mount_inflight or _is_smb_auto_suppressed():
+        return False
+    sid = srv.get("id")
+    if _last_mounted_server_id and sid and _last_mounted_server_id == sid:
+        return False
+    if _is_smb_mount_in_cooldown(sid):
+        return False
+    host_p, is_dom_p, zt_p = _resolve_smb_route_params(srv, active_url)
+    eff_host = smb_mount_manager.resolve_smb_host(
+        host_p,
+        srv.get("connections", []),
+        is_dom_p,
+        zt_p,
+        max_age_seconds=15,
+    )
+    if not eff_host:
+        return False
+    logger_manager.log_info(
+        f"[SMB Pipeline] Host SMB '{eff_host}' terdeteksi siap pasca-startup untuk '{srv.get('name', sid)}'; memicu startup_auto tertunda..."
+    )
+    if spawn_async:
+        threading.Thread(target=run_auto_mount_with_retry, args=("startup_auto",), daemon=True).start()
+    else:
+        run_auto_mount_with_retry("startup_auto")
+    return True
 
 
 
@@ -21743,150 +21892,55 @@ AUTO_MOUNT_RETRY_STEP_SECONDS = 3.0
 
 
 def run_auto_mount_with_retry(reason):
-
-
-
-
-
-
-
     """
-
-
-
-
-
-
-
     Memasang SMB otomatis (startup_auto / server_recovered) dengan retry adaptif karena jaringan
-
-
-
-
-
-
-
-    (Wi-Fi/LAN/ZeroTier) sering baru siap beberapa detik setelah server terdeteksi reachable.
-
-
-
-
-
-
-
-    Berhenti bila berhasil, server kembali offline, atau pipeline lain sedang berjalan.
-
-
-
-
-
-
-
+    (Wi-Fi/LAN/ZeroTier/EasyTier) sering baru siap beberapa detik setelah server terdeteksi reachable.
+    Berhenti bila berhasil, server kembali offline, disupresi switch aktif, atau pipeline lain sedang berjalan.
     """
-
-
-
-
-
-
-
-    for attempt in range(AUTO_MOUNT_MAX_ATTEMPTS):
-
-
-
-
-
-
-
-        res = rebind_storage_pipeline(reason)
-
-
-
-
-
-
-
-        if isinstance(res, tuple) and res and res[0]:
-
-
-
-
-
-
-
-            return res
-
-
-
-
-
-
-
-        if _smb_pipeline_lock.locked():
-
-
-
-
-
-
-
-            return res
-
-
-
-
-
-
-
-        with _state_lock:
-
-
-
-
-
-
-
-            still_online = bool(_cached_state.get("is_online", False))
-
-
-
-
-
-
-
-        if not still_online or attempt >= AUTO_MOUNT_MAX_ATTEMPTS - 1:
-
-
-
-
-
-
-
-            return res
-
-
-
-
-
-
-
-        logger_manager.log_info(f"[SMB Pipeline] Auto-mount ({reason}) belum berhasil, mencoba lagi (percobaan {attempt + 2}/{AUTO_MOUNT_MAX_ATTEMPTS})...")
-
-
-
-
-
-
-
-        time.sleep(AUTO_MOUNT_RETRY_STEP_SECONDS * (attempt + 1))
-
-
-
-
-
-
-
-    return []
+    global _startup_auto_mount_inflight
+    _startup_auto_mount_inflight = True
+    res = []
+    try:
+        for attempt in range(AUTO_MOUNT_MAX_ATTEMPTS):
+            if attempt > 0:
+                if _is_smb_auto_suppressed():
+                    return res
+                try:
+                    smb_mount_manager.invalidate_smb_host_cache()
+                    smb_mount_manager.clear_smb_share_cache()
+                except Exception:
+                    pass
+                try:
+                    _backend_url_cache.clear()
+                except Exception:
+                    pass
+
+            res = _invoke_rebind_with_startup_opts(
+                reason,
+                ignore_cooldown=True,
+                allow_soft_mode=(attempt == 0),
+            )
+
+            if isinstance(res, tuple) and res and res[0]:
+                return res
+
+            if _smb_pipeline_lock.locked():
+                return res
+
+            with _state_lock:
+                still_online = bool(_cached_state.get("is_online", False))
+
+            if not still_online or attempt >= AUTO_MOUNT_MAX_ATTEMPTS - 1:
+                return res
+
+            logger_manager.log_info(
+                f"[SMB Pipeline] Auto-mount ({reason}) belum berhasil, mencoba lagi (percobaan {attempt + 2}/{AUTO_MOUNT_MAX_ATTEMPTS})..."
+            )
+            time.sleep(AUTO_MOUNT_RETRY_STEP_SECONDS * (attempt + 1))
+
+        return []
+    finally:
+        _startup_auto_mount_inflight = False
 
 
 
@@ -22462,6 +22516,12 @@ def update_metrics_loop():
 
             if is_on and s and bool(cfg.get("auto_mount_smb", True)) and not srv_changed and not _is_smb_auto_suppressed():
                 _check_effective_smb_host_transition_for_server(
+                    s,
+                    active_u,
+                    auto_mount_enabled=True,
+                    is_online=True,
+                )
+                _maybe_trigger_deferred_startup_smb_mount(
                     s,
                     active_u,
                     auto_mount_enabled=True,
@@ -26490,6 +26550,15 @@ def auto_start_easytier_worker():
                         ipv4=ipv4,
                         peers=peers
                     )
+                    try:
+                        smb_mount_manager.invalidate_smb_host_cache()
+                    except Exception:
+                        pass
+                    try:
+                        _backend_url_cache.clear()
+                    except Exception:
+                        pass
+                    clear_smb_mount_failure_cooldown()
     except Exception as e:
         logger_manager.log_debug(f"[EasyTierAutoStart] Error: {e}")
 

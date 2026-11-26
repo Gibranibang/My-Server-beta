@@ -157,6 +157,7 @@ class TransferJobState:
     apply_to_all_action: Optional[str] = None
     active_part_paths: Set[str] = field(default_factory=set)
     local_dest_dir: str = ""
+    clipboard_copied_at: float = 0.0
 
     def __post_init__(self) -> None:
         self.pause_gate.set()
@@ -290,7 +291,26 @@ class HttpTransferManager:
 
     def get_clipboard(self) -> Dict[str, Any]:
         with self._clipboard_lock:
-            return copy.deepcopy(self._EXPLORER_CLIPBOARD)
+            snap = copy.deepcopy(self._EXPLORER_CLIPBOARD)
+        mode = snap.get("mode")
+        snap["kind"] = mode if mode in ("local", "server") else "empty"
+        return snap
+
+    def _clear_clipboard_if_unchanged(self, expected_copied_at: float) -> bool:
+        if not expected_copied_at:
+            return False
+        with self._clipboard_lock:
+            if float(self._EXPLORER_CLIPBOARD.get("copied_at") or 0.0) == float(expected_copied_at):
+                self._EXPLORER_CLIPBOARD = {
+                    "mode": "",
+                    "server_id": "",
+                    "server_name": "",
+                    "source_origin": "",
+                    "items": [],
+                    "copied_at": 0.0,
+                }
+                return True
+        return False
 
     def clear_clipboard(self) -> None:
         with self._clipboard_lock:
@@ -653,6 +673,7 @@ class HttpTransferManager:
                 "failed_files": 0,
                 "conflict": None,
                 "items": [],
+                "clipboard": self.get_clipboard(),
             }
         with self._jobs_lock:
             end_ts = job.finished_monotonic or time.monotonic()
@@ -696,6 +717,7 @@ class HttpTransferManager:
         filename: str,
         local_path: str,
         job: TransferJobState,
+        item_state: Optional[Dict[str, Any]] = None,
     ) -> None:
         job.pause_gate.wait()
         if job.cancel_event.is_set():
@@ -718,6 +740,10 @@ class HttpTransferManager:
         with self._jobs_lock:
             job.bytes_done += len(raw_bytes)
             job.completed_files += 1
+            if item_state is not None:
+                item_state["bytes_done"] = len(raw_bytes)
+                item_state["bytes_total"] = max(int(item_state.get("bytes_total") or 0), len(raw_bytes))
+                item_state["status"] = "done"
 
     def _upload_file_chunked(
         self,
@@ -727,6 +753,7 @@ class HttpTransferManager:
         filename: str,
         local_path: str,
         job: TransferJobState,
+        item_state: Optional[Dict[str, Any]] = None,
     ) -> None:
         file_size = os.path.getsize(local_path)
         total_chunks = max(1, (file_size + self.chunk_size - 1) // self.chunk_size)
@@ -775,6 +802,8 @@ class HttpTransferManager:
                     raise last_err
                 with self._jobs_lock:
                     job.bytes_done += len(chunk_bytes)
+                    if item_state is not None:
+                        item_state["bytes_done"] = int(item_state.get("bytes_done") or 0) + len(chunk_bytes)
 
         job.pause_gate.wait()
         if job.cancel_event.is_set():
@@ -797,6 +826,14 @@ class HttpTransferManager:
             raise RuntimeError(f"HTTP {st} on upload-commit({filename}): {resp}")
         with self._jobs_lock:
             job.completed_files += 1
+            if item_state is not None:
+                item_state["bytes_done"] = max(
+                    int(item_state.get("bytes_done") or 0),
+                    int(item_state.get("bytes_total") or 0),
+                    file_size,
+                )
+                item_state["bytes_total"] = max(int(item_state.get("bytes_total") or 0), file_size)
+                item_state["status"] = "done"
 
     def _run_upload_job(
         self,
@@ -820,7 +857,7 @@ class HttpTransferManager:
                     }
                 return dir_cache[rel_dir]
 
-            file_jobs: List[Tuple[str, str, str, int]] = []
+            file_jobs: List[Tuple[str, str, str, int, Dict[str, Any]]] = []
 
             def _stage_tree(local_path: str, target_parent_rel: str) -> None:
                 if job.cancel_event.is_set():
@@ -858,34 +895,44 @@ class HttpTransferManager:
                 else:
                     sz = os.path.getsize(abs_lp)
                     item_id = f"up_{len(file_jobs)}_{chosen_name}"
-                    file_jobs.append((abs_lp, target_parent_rel, chosen_name, sz))
+                    item_dict: Dict[str, Any] = {
+                        "id": item_id,
+                        "name": chosen_name,
+                        "size": sz,
+                        "bytes_done": 0,
+                        "bytes_total": sz,
+                        "status": "pending",
+                    }
+                    file_jobs.append((abs_lp, target_parent_rel, chosen_name, sz, item_dict))
                     existing[chosen_name] = {"name": chosen_name, "is_dir": False}
                     with self._jobs_lock:
                         job.total_files += 1
                         job.bytes_total += sz
-                        job.items.append({
-                            "id": item_id,
-                            "name": chosen_name,
-                            "size": sz,
-                            "bytes_done": 0,
-                            "bytes_total": sz,
-                            "status": "queued",
-                        })
+                        job.items.append(item_dict)
 
             clean_dest = server_dest_rel.strip("/")
             for src in local_sources:
                 _stage_tree(src, clean_dest)
 
-            def _worker(item_job: Tuple[str, str, str, int]) -> None:
-                local_path, srv_dir_rel, target_name, sz = item_job
+            def _worker(item_job: Tuple[str, str, str, int, Dict[str, Any]]) -> None:
+                local_path, srv_dir_rel, target_name, sz, item_dict = item_job
                 with self._jobs_lock:
                     job.active_workers += 1
                     job.active_item = f"{srv_dir_rel}/{target_name}".strip("/")
+                    item_dict["status"] = "active"
                 try:
                     if sz > self.chunk_threshold:
-                        self._upload_file_chunked(base_url, token, srv_dir_rel, target_name, local_path, job)
+                        self._upload_file_chunked(
+                            base_url, token, srv_dir_rel, target_name, local_path, job, item_state=item_dict
+                        )
                     else:
-                        self._upload_file_direct(base_url, token, srv_dir_rel, target_name, local_path, job)
+                        self._upload_file_direct(
+                            base_url, token, srv_dir_rel, target_name, local_path, job, item_state=item_dict
+                        )
+                except BaseException:
+                    with self._jobs_lock:
+                        item_dict["status"] = "cancelled" if job.cancel_event.is_set() else "error"
+                    raise
                 finally:
                     with self._jobs_lock:
                         job.active_workers = max(0, job.active_workers - 1)
@@ -911,6 +958,9 @@ class HttpTransferManager:
                 else:
                     job.status = "completed"
                 job.finished_monotonic = time.monotonic()
+                final_status = job.status
+            if final_status == "completed":
+                self._clear_clipboard_if_unchanged(job.clipboard_copied_at)
         except Exception as exc:
             with self._jobs_lock:
                 job.status = "cancelled" if job.cancel_event.is_set() else "failed"
@@ -927,6 +977,7 @@ class HttpTransferManager:
         srv_rel: str,
         local_target: str,
         job: TransferJobState,
+        item_state: Optional[Dict[str, Any]] = None,
     ) -> None:
         job.pause_gate.wait()
         if job.cancel_event.is_set():
@@ -945,6 +996,17 @@ class HttpTransferManager:
         )
         try:
             with urllib.request.urlopen(req, timeout=30.0) as resp, open(part_path, "wb") as f_out:
+                if item_state is not None and int(item_state.get("bytes_total") or 0) <= 0:
+                    try:
+                        cl = int(resp.headers.get("Content-Length") or 0)
+                    except (TypeError, ValueError):
+                        cl = 0
+                    if cl > 0:
+                        with self._jobs_lock:
+                            if int(item_state.get("bytes_total") or 0) <= 0:
+                                item_state["bytes_total"] = cl
+                                item_state["size"] = cl
+                                job.bytes_total += cl
                 while True:
                     job.pause_gate.wait()
                     if job.cancel_event.is_set():
@@ -955,11 +1017,22 @@ class HttpTransferManager:
                     f_out.write(chunk)
                     with self._jobs_lock:
                         job.bytes_done += len(chunk)
+                        if item_state is not None:
+                            item_state["bytes_done"] = int(item_state.get("bytes_done") or 0) + len(chunk)
             if job.cancel_event.is_set():
                 raise InterruptedError("CANCELLED")
             os.replace(part_path, local_target)
             with self._jobs_lock:
                 job.completed_files += 1
+                if item_state is not None:
+                    done_b = int(item_state.get("bytes_done") or 0)
+                    tot_b = int(item_state.get("bytes_total") or 0)
+                    if tot_b < done_b:
+                        diff = done_b - tot_b
+                        item_state["bytes_total"] = done_b
+                        item_state["size"] = done_b
+                        job.bytes_total += diff
+                    item_state["status"] = "done"
         except Exception:
             if os.path.exists(part_path):
                 try:
@@ -982,7 +1055,7 @@ class HttpTransferManager:
             dest_real = os.path.realpath(os.path.abspath(local_dest_dir))
             os.makedirs(dest_real, exist_ok=True)
 
-            download_jobs: List[Tuple[str, str, int]] = []
+            download_jobs: List[Tuple[str, str, int, Dict[str, Any]]] = []
 
             def _collect_server_tree(
                 rel_path: str,
@@ -1050,18 +1123,19 @@ class HttpTransferManager:
                 else:
                     sz_hint = int(hint_size or 0)
                     item_id = f"dl_{len(download_jobs)}_{base_name}"
-                    download_jobs.append((clean_rel, target_local, sz_hint))
+                    item_dict: Dict[str, Any] = {
+                        "id": item_id,
+                        "name": os.path.basename(target_local),
+                        "size": sz_hint,
+                        "bytes_done": 0,
+                        "bytes_total": sz_hint,
+                        "status": "pending",
+                    }
+                    download_jobs.append((clean_rel, target_local, sz_hint, item_dict))
                     with self._jobs_lock:
                         job.total_files += 1
                         job.bytes_total += sz_hint
-                        job.items.append({
-                            "id": item_id,
-                            "name": os.path.basename(target_local),
-                            "size": sz_hint,
-                            "bytes_done": 0,
-                            "bytes_total": sz_hint,
-                            "status": "queued",
-                        })
+                        job.items.append(item_dict)
 
             for itm in server_items:
                 _collect_server_tree(
@@ -1071,13 +1145,18 @@ class HttpTransferManager:
                     int(itm.get("size") or 0),
                 )
 
-            def _worker(dl_job: Tuple[str, str, int]) -> None:
-                srv_rel, target_local, _ = dl_job
+            def _worker(dl_job: Tuple[str, str, int, Dict[str, Any]]) -> None:
+                srv_rel, target_local, _, item_dict = dl_job
                 with self._jobs_lock:
                     job.active_workers += 1
                     job.active_item = srv_rel
+                    item_dict["status"] = "active"
                 try:
-                    self._stream_download_file(base_url, token, srv_rel, target_local, job)
+                    self._stream_download_file(base_url, token, srv_rel, target_local, job, item_state=item_dict)
+                except BaseException:
+                    with self._jobs_lock:
+                        item_dict["status"] = "cancelled" if job.cancel_event.is_set() else "error"
+                    raise
                 finally:
                     with self._jobs_lock:
                         job.active_workers = max(0, job.active_workers - 1)
@@ -1106,12 +1185,15 @@ class HttpTransferManager:
                 else:
                     job.status = "completed"
                 job.finished_monotonic = time.monotonic()
+                final_status = job.status
 
             if not job.cancel_event.is_set() and job.completed_files > 0:
                 try:
                     self.notify_local_dir_fn(dest_real)
                 except Exception:
                     pass
+            if final_status == "completed":
+                self._clear_clipboard_if_unchanged(job.clipboard_copied_at)
         except Exception as exc:
             self._cleanup_part_files(job)
             with self._jobs_lock:
@@ -1179,6 +1261,7 @@ class HttpTransferManager:
                 job.skipped_files = len(skipped)
                 job.status = "completed"
                 job.finished_monotonic = time.monotonic()
+            self._clear_clipboard_if_unchanged(job.clipboard_copied_at)
         except Exception as exc:
             with self._jobs_lock:
                 job.status = "cancelled" if job.cancel_event.is_set() else "failed"
@@ -1216,6 +1299,7 @@ class HttpTransferManager:
         clip = self.get_clipboard()
         mode = clip.get("mode")
         items = clip.get("items") or []
+        clip_ts = float(clip.get("copied_at") or 0.0)
         if not mode or not items:
             return {"success": False, "code": "CLIPBOARD_EMPTY"}
 
@@ -1229,6 +1313,7 @@ class HttpTransferManager:
                     server_id=sid,
                     server_name=sname,
                     dest_display=dest_rel,
+                    clipboard_copied_at=clip_ts,
                 )
                 self._spawn_job(job, self._run_upload_job, local_paths, dest_rel.strip("/"))
                 return {
@@ -1251,6 +1336,7 @@ class HttpTransferManager:
                         server_id=target_sid,
                         server_name=target_sname,
                         dest_display=target_rel,
+                        clipboard_copied_at=clip_ts,
                     )
                     self._spawn_job(job, self._run_upload_job, local_paths, target_rel)
                     return {
@@ -1281,6 +1367,7 @@ class HttpTransferManager:
                     server_id=clip_sid,
                     server_name=clip_sname,
                     dest_display=dest_rel.strip("/"),
+                    clipboard_copied_at=clip_ts,
                 )
                 self._spawn_job(job, self._run_server_copy_job, src_rels, dest_rel.strip("/"))
                 return {
@@ -1301,6 +1388,7 @@ class HttpTransferManager:
                         server_id=clip_sid,
                         server_name=clip_sname,
                         dest_display=target_rel,
+                        clipboard_copied_at=clip_ts,
                     )
                     self._spawn_job(job, self._run_server_copy_job, src_rels, target_rel)
                     return {
@@ -1319,6 +1407,7 @@ class HttpTransferManager:
                         server_name=clip_sname,
                         dest_display=os.path.abspath(dest_path),
                         local_dest_dir=os.path.abspath(dest_path),
+                        clipboard_copied_at=clip_ts,
                     )
                     self._spawn_job(job, self._run_download_job, items, dest_path)
                     return {

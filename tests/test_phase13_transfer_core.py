@@ -492,6 +492,93 @@ class TestHttpTransferCore(unittest.TestCase):
         self.assertEqual(b_res["effective_role"], "viewer")
         self.assertFalse(b_res["writable"])
 
+    def test_per_file_progress_updates_and_clipboard_autoclears_on_completion(self):
+        mgr = self._make_manager(self.admin_token)
+        with tempfile.TemporaryDirectory() as local_root:
+            # 1. Direct + chunked upload: per-file bytes_done/bytes_total/status=='done' and clipboard cleared
+            small_path = os.path.join(local_root, "small_up.txt")
+            big_path = os.path.join(local_root, "big_up.bin")
+            with open(small_path, "wb") as f:
+                f.write(b"abc123")
+            big_size = (mgr.chunk_threshold // 1024 + 300) * 1024  # > chunk_threshold (512 KB)
+            with open(big_path, "wb") as f:
+                f.write(b"Z" * big_size)
+
+            mgr.set_clipboard_local([small_path, big_path])
+            res_up = mgr.dispatch_paste(dest_rel="DiskA/AdminWork", server_id="srv_1")
+            self.assertTrue(res_up["success"])
+            st_up = mgr.wait_for_job(res_up["job_id"], timeout=15.0)
+            self.assertEqual(st_up["status"], "completed")
+            self.assertEqual(len(st_up["items"]), 2)
+            items_by_name = {it["name"]: it for it in st_up["items"]}
+            self.assertEqual(items_by_name["small_up.txt"]["bytes_done"], 6)
+            self.assertEqual(items_by_name["small_up.txt"]["bytes_total"], 6)
+            self.assertEqual(items_by_name["small_up.txt"]["status"], "done")
+            self.assertEqual(items_by_name["big_up.bin"]["bytes_done"], big_size)
+            self.assertEqual(items_by_name["big_up.bin"]["bytes_total"], big_size)
+            self.assertEqual(items_by_name["big_up.bin"]["status"], "done")
+            clip_after_up = mgr.get_clipboard()
+            self.assertEqual(clip_after_up["mode"], "")
+            self.assertEqual(clip_after_up["kind"], "empty")
+            self.assertEqual(clip_after_up["items"], [])
+
+            # 2. Download with size=0 hint populates bytes_total from Content-Length and clears clipboard
+            dl_src = os.path.join(self.storage_dir, "DiskA", "AdminWork", "dl_item.bin")
+            dl_bytes = b"D" * 4096
+            with open(dl_src, "wb") as f:
+                f.write(dl_bytes)
+            dl_dest = os.path.join(local_root, "dl_out_progress")
+            os.makedirs(dl_dest, exist_ok=True)
+            mgr.set_clipboard_server(
+                "srv_1",
+                "TestNAS",
+                [{"rel_path": "DiskA/AdminWork/dl_item.bin", "name": "dl_item.bin", "is_dir": False, "size": 0}],
+            )
+            res_dl = mgr.dispatch_paste(dest_path=dl_dest, server_id="srv_1")
+            self.assertTrue(res_dl["success"])
+            st_dl = mgr.wait_for_job(res_dl["job_id"], timeout=15.0)
+            self.assertEqual(st_dl["status"], "completed")
+            self.assertEqual(st_dl["items"][0]["bytes_done"], len(dl_bytes))
+            self.assertEqual(st_dl["items"][0]["bytes_total"], len(dl_bytes))
+            self.assertEqual(st_dl["items"][0]["status"], "done")
+            self.assertEqual(mgr.get_clipboard()["kind"], "empty")
+
+            # 3. Server-to-server copy clears clipboard on completion
+            mgr.set_clipboard_server(
+                "srv_1",
+                "TestNAS",
+                [{"rel_path": "DiskA/AdminWork/small_up.txt", "name": "small_up.txt", "is_dir": False}],
+            )
+            res_sc = mgr.dispatch_paste(dest_rel="DiskA/Proj", server_id="srv_1")
+            self.assertTrue(res_sc["success"])
+            st_sc = mgr.wait_for_job(res_sc["job_id"], timeout=10.0)
+            self.assertEqual(st_sc["status"], "completed")
+            self.assertEqual(mgr.get_clipboard()["kind"], "empty")
+
+            # 4. Idle status includes normalized clipboard with kind == 'empty'
+            mgr.clear_finished()
+            idle_st = mgr.get_status()
+            self.assertEqual(idle_st["status"], "idle")
+            self.assertEqual(idle_st["clipboard"]["kind"], "empty")
+
+            # 5. Failed job (bob viewer uploading to ViewerDir) does NOT clear clipboard
+            bob_mgr = self._make_manager(self.bob_token)
+            bob_mgr.set_clipboard_local([small_path])
+            res_fail = bob_mgr.dispatch_paste(dest_rel="DiskA/ViewerDir", server_id="srv_1")
+            st_fail = bob_mgr.wait_for_job(res_fail["job_id"], timeout=10.0)
+            self.assertEqual(st_fail["status"], "failed")
+            self.assertEqual(bob_mgr.get_clipboard()["mode"], "local")
+            self.assertEqual(len(bob_mgr.get_clipboard()["items"]), 1)
+
+            # 6. Newer copy protection via _clear_clipboard_if_unchanged
+            first_snap = mgr.set_clipboard_local([small_path])
+            second_snap = mgr.set_clipboard_local([big_path])
+            self.assertNotEqual(first_snap["copied_at"], second_snap["copied_at"])
+            self.assertFalse(mgr._clear_clipboard_if_unchanged(first_snap["copied_at"]))
+            self.assertEqual(mgr.get_clipboard()["items"][0]["name"], "big_up.bin")
+            self.assertTrue(mgr._clear_clipboard_if_unchanged(second_snap["copied_at"]))
+            self.assertEqual(mgr.get_clipboard()["kind"], "empty")
+
 
 class TestCoreApiTransferIntegration(unittest.TestCase):
     @classmethod

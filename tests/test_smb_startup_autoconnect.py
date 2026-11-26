@@ -289,6 +289,94 @@ class TestSmbStartupAutoConnect(unittest.TestCase):
             self.assertFalse(did_run_again)
             self.assertEqual(triggered, ["startup_auto"])
 
+    def test_05_switch_server_clears_backend_http_pool_and_jwt_url_caches(self):
+        import io
+
+        cfg = config_manager.load_or_create_config()
+        cfg["servers"].append({
+            "id": "srv_2",
+            "name": "OfficeNAS",
+            "active_connection": "c_et",
+            "connections": [{"id": "c_et", "url": "http://10.126.126.1:80"}],
+            "easytier_virtual_ip": "10.126.126.1",
+            "smb_source": "backend",
+        })
+        config_manager.save_server_smb_source_config(
+            cfg,
+            "srv_2",
+            source="backend",
+            username="bob",
+            password="BobSecretPassword1!",
+            role="user",
+            allowed_disks=["Docs"],
+            access_token="tok_srv2",
+        )
+        config_manager.save_config(cfg)
+
+        closed_flags = []
+
+        class _DummyConn:
+            def close(self):
+                closed_flags.append(True)
+
+        with core._BACKEND_HTTP_POOL_LOCK:
+            core._BACKEND_HTTP_POOL[("http", "10.126.126.1:8080")] = {"conn": _DummyConn(), "ts": 100.0}
+        core._backend_url_cache["srv_1"] = ("http://10.126.126.1:8080", 9999999999.0)
+        with core._BACKEND_JWT_CACHE_LOCK:
+            core._BACKEND_JWT_CACHE[("srv_1", "http://10.126.126.1:8080", "default")] = {"token": "tok_old", "fail_until": 0.0}
+
+        payload = json.dumps({"serverId": "srv_2"}).encode("utf-8")
+        handler = core.CoreApiHandler.__new__(core.CoreApiHandler)
+        handler.path = "/api/switch_server"
+        handler.rfile = io.BytesIO(payload)
+        handler.headers = {
+            "Content-Length": str(len(payload)),
+            "X-MyServer-Core-Token": core.get_core_auth_token(),
+        }
+        sent = {}
+        handler._send_json = lambda obj, code=200: sent.update({"obj": obj, "code": code})
+
+        class _NoopThread:
+            def __init__(self, target=None, daemon=None, **kw):
+                pass
+
+            def start(self):
+                pass
+
+        with patch.object(core, "get_server_details_data", return_value={"activeServerId": "srv_2"}), \
+             patch.object(core, "invalidate_active_route_cache"), \
+             patch.object(core.threading, "Thread", _NoopThread):
+            handler.do_POST()
+
+        self.assertEqual(sent.get("code"), 200)
+        self.assertTrue(closed_flags)
+        with core._BACKEND_HTTP_POOL_LOCK:
+            self.assertEqual(core._BACKEND_HTTP_POOL, {})
+        self.assertEqual(core._backend_url_cache, {})
+        with core._BACKEND_JWT_CACHE_LOCK:
+            self.assertEqual(core._BACKEND_JWT_CACHE, {})
+
+    def test_06_get_smb_source_skips_backend_probe_during_switch_server_sync(self):
+        with core._state_lock:
+            core._cached_state["smb_syncing"] = True
+            core._cached_state["smb_sync_reason"] = "switch_server"
+        try:
+            with patch.object(core, "_get_active_server_backend_url", return_value="http://10.126.126.1:8080"), \
+                 patch.object(core, "_backend_http_request", side_effect=AssertionError("Must not probe backend during switch_server")), \
+                 patch.object(core, "_backend_authenticated_request", side_effect=AssertionError("Must not auth-probe backend during switch_server")), \
+                 patch.object(core, "get_live_drives_list", return_value=[]):
+                code, res = core._handle_smb_source_request({"action": "get"})
+
+            self.assertEqual(code, 200)
+            self.assertTrue(res.get("success"))
+            self.assertEqual(res.get("source"), "backend")
+            self.assertTrue(res.get("hasCredentials"))
+            self.assertFalse(res.get("needsAuth"))
+        finally:
+            with core._state_lock:
+                core._cached_state["smb_syncing"] = False
+                core._cached_state["smb_sync_reason"] = ""
+
 
 if __name__ == "__main__":
     unittest.main()

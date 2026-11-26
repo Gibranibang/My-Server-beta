@@ -152,6 +152,7 @@ export default function FilesView() {
   const isDefaultExplorer = (settings?.fileManagerClickTarget || "explorer") === "explorer"
   const { notify } = useNotice()
 
+  const activeServerId = metrics?.activeServerId || ""
   const [smbSource, setSmbSource] = useState<SmbSourceMode>("zimaos")
   const [sourceStatus, setSourceStatus] = useState<FileManagerSourceStatus | null>(null)
   const [isSwitchingSource, setIsSwitchingSource] = useState(false)
@@ -160,6 +161,9 @@ export default function FilesView() {
   const [backendPass, setBackendPass] = useState("")
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false)
   const userTouchedSourceRef = useRef(false)
+  const lastServerIdRef = useRef<string>(activeServerId)
+  const prevSmbSyncingRef = useRef<boolean>(false)
+  const sourceSyncSeqRef = useRef<number>(0)
   const backendPassInputRef = useRef<HTMLInputElement | null>(null)
   const lastPollRef = useRef<number>(Date.now())
   const lastSourcePollRef = useRef<number>(Date.now())
@@ -228,27 +232,56 @@ export default function FilesView() {
     }
   }, [api, editingBackendAuth, isSubmittingAuth, isSwitchingSource, refreshDrives, smbSource])
 
-  useEffect(() => {
-    let active = true
-    if (typeof api.getFileManagerSource !== "function") return
-    void api
-      .getFileManagerSource()
-      .then((res) => {
-        if (!active || !res || userTouchedSourceRef.current) return
+  const syncFileManagerSource = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (typeof api.getFileManagerSource !== "function") return
+      const seq = ++sourceSyncSeqRef.current
+      try {
+        const res = await api.getFileManagerSource()
+        if (seq !== sourceSyncSeqRef.current || !res) return
+        if (!options?.force && userTouchedSourceRef.current) return
         setSourceStatus(res)
         const nextSource: SmbSourceMode = res.source === "backend" ? "backend" : "zimaos"
         setSmbSource(nextSource)
         if (res.needsAuth && res.username) {
           setBackendUser((prev) => prev || res.username || "")
         }
-      })
-      .catch(() => {
+      } catch {
         // Fallback aman ke mode zimaos saat Core API belum siap
-      })
-    return () => {
-      active = false
+      }
+    },
+    [api],
+  )
+
+  useEffect(() => {
+    if (lastServerIdRef.current !== activeServerId) {
+      lastServerIdRef.current = activeServerId
+      userTouchedSourceRef.current = false
+      setEditingBackendAuth(false)
+      setBackendPass("")
+      setBackendUser("")
     }
-  }, [api])
+
+    void syncFileManagerSource()
+
+    const onRefresh = () => {
+      userTouchedSourceRef.current = false
+      setEditingBackendAuth(false)
+      setBackendPass("")
+      void syncFileManagerSource({ force: true })
+    }
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("myserver:refresh", onRefresh)
+    }
+
+    return () => {
+      sourceSyncSeqRef.current += 1
+      if (typeof window !== "undefined") {
+        window.removeEventListener("myserver:refresh", onRefresh)
+      }
+    }
+  }, [activeServerId, syncFileManagerSource])
 
   const formatBackendError = useCallback(
     (rawError?: string) => {
@@ -435,6 +468,13 @@ export default function FilesView() {
   const [mountState, runMount] = useAsyncAction(mountAll)
   const [unmountState, runUnmount] = useAsyncAction(unmountAll)
   const isSmbSyncing = Boolean(metrics?.smbSyncing) || isSwitchingSource
+  useEffect(() => {
+    const wasSyncing = prevSmbSyncingRef.current
+    prevSmbSyncingRef.current = isSmbSyncing
+    if (wasSyncing && !isSmbSyncing && !isSwitchingSource && !isSubmittingAuth && !editingBackendAuth) {
+      void syncFileManagerSource()
+    }
+  }, [editingBackendAuth, isSmbSyncing, isSubmittingAuth, isSwitchingSource, syncFileManagerSource])
   const mounted = drives.filter((d) => d.mounted).length
   const online = isOnline ? mounted : 0
 

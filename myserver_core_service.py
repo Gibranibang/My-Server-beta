@@ -17502,7 +17502,13 @@ def _handle_smb_source_request(body=None):
         smb_mode = smb_cfg["source"]
         needs_auth = False
 
-        if backend_url:
+        with _state_lock:
+            is_server_switching = bool(
+                _cached_state.get("smb_syncing")
+                and _cached_state.get("smb_sync_reason") == "switch_server"
+            )
+
+        if backend_url and not is_server_switching:
             h_ok, h_data, _ = _backend_http_request(
                 f"{backend_url.rstrip('/')}/health", method="GET", timeout=2.0, retries=0
             )
@@ -35303,6 +35309,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                     _auto_route_smb_tracker["pending_since_ts"] = 0.0
                 smb_mount_manager.clear_smb_share_cache()
                 smb_mount_manager.invalidate_smb_host_cache()
+                _clear_backend_http_pool()
+                _backend_url_cache.clear()
+                with _BACKEND_JWT_CACHE_LOCK:
+                    _BACKEND_JWT_CACHE.clear()
                 target_smb_cfg = (
                     config_manager.get_server_smb_source_config(target_srv)
                     if hasattr(config_manager, "get_server_smb_source_config")
@@ -35581,6 +35591,8 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                                     ipv4=et_ipv4,
                                 )
                                 invalidate_active_route_cache()
+                                _clear_backend_http_pool()
+                                _backend_url_cache.clear()
                             except Exception as et_switch_err:
                                 logger_manager.log_error(f"[CoreService] Gagal beralih EasyTier ke server target: {et_switch_err}")
 
@@ -35721,6 +35733,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 _bump_smb_pipeline_epoch(suppress_auto_sec=8.0)
                 smb_mount_manager.clear_smb_share_cache()
                 smb_mount_manager.invalidate_smb_host_cache()
+                _clear_backend_http_pool()
+                _backend_url_cache.clear()
+                with _BACKEND_JWT_CACHE_LOCK:
+                    _BACKEND_JWT_CACHE.clear()
                 _set_smb_sync_state(True, reason="switch_route", message="Menyinkronkan partisi SMB rute baru...")
 
 
@@ -36026,6 +36042,10 @@ class CoreApiHandler(BaseHTTPRequestHandler):
                 prof_smb_gen = _bump_smb_pipeline_epoch(suppress_auto_sec=10.0)
                 smb_mount_manager.clear_smb_share_cache()
                 smb_mount_manager.invalidate_smb_host_cache()
+                _clear_backend_http_pool()
+                _backend_url_cache.clear()
+                with _BACKEND_JWT_CACHE_LOCK:
+                    _BACKEND_JWT_CACHE.clear()
                 clear_smb_mount_failure_cooldown(srv.get("id"))
 
                 with _drives_cache_lock:

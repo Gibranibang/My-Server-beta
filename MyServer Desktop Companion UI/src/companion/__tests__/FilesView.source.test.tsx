@@ -724,4 +724,125 @@ describe("Phase 07 SMB stability, adaptive polling, preflight & --no-tun (SMBS-0
     expect(getDetailsSpy).toHaveBeenCalledTimes(2)
     expect(getSyncthingSpy.mock.calls.length).toBeGreaterThanOrEqual(7)
   })
+
+  it("re-syncs getFileManagerSource when activeServerId changes or myserver:refresh fires", async () => {
+    let emitMetrics: ((m: Record<string, unknown>) => void) | null = null
+    let currentServer: FileManagerSourceStatus = {
+      success: true,
+      source: "backend",
+      hasCredentials: false,
+      backendOnline: true,
+      smbMode: "backend",
+      needsAuth: true,
+      username: "user_srv1",
+    }
+
+    const api = createMockApi()
+    const baseLoad = api.loadSettings.bind(api)
+    api.loadSettings = vi.fn(async () => ({
+      ...(await baseLoad()),
+      firstRunSetup: false,
+      language: "id" as const,
+      fileManagerClickTarget: "explorer" as const,
+    }))
+    api.subscribeMetrics = vi.fn((cb) => {
+      emitMetrics = cb as unknown as (m: Record<string, unknown>) => void
+      cb({
+        isOnline: true,
+        isLoading: false,
+        activeServerId: "srv_1",
+        serverName: "Server 1",
+        serverUrl: "http://10.126.126.1:80",
+        cpu: 10,
+        ram: 20,
+        disk: 30,
+        downloadBps: 0,
+        uploadBps: 0,
+        smbSyncing: false,
+      } as never)
+      return () => {}
+    }) as unknown as CompanionApi["subscribeMetrics"]
+    api.subscribePower = vi.fn((cb) => {
+      cb("online")
+      return () => {}
+    }) as unknown as CompanionApi["subscribePower"]
+    api.getServerDetails = vi.fn(async () => ({
+      serverId: "srv_1",
+      serverName: "Server 1",
+      activeHost: "10.126.126.1",
+      activeRoute: "easytier",
+      routes: [{ id: "easytier", name: "EasyTier", url: "http://10.126.126.1:80", active: true }],
+      activeProfile: "Admin",
+      profiles: ["Admin"],
+      uptimeStr: "1d",
+    })) as unknown as CompanionApi["getServerDetails"]
+    api.listDrives = vi.fn(async () => [])
+    api.getFileManagerSource = vi.fn(async () => ({ ...currentServer }))
+
+    setCompanionApi(api)
+    render(
+      <NoticeProvider>
+        <CompanionStoreProvider>
+          <FilesView />
+        </CompanionStoreProvider>
+      </NoticeProvider>,
+    )
+
+    // Initially srv_1 requires auth -> login form shown
+    await screen.findByLabelText(/Username Akun Backend/i)
+    const callsBeforeSwitch = (api.getFileManagerSource as ReturnType<typeof vi.fn>).mock.calls.length
+    expect(callsBeforeSwitch).toBeGreaterThanOrEqual(1)
+
+    // Switch to srv_2 which already has saved backend credentials
+    currentServer = {
+      success: true,
+      source: "backend",
+      hasCredentials: true,
+      backendOnline: true,
+      smbMode: "backend",
+      needsAuth: false,
+      username: "alice",
+      role: "admin",
+    }
+    act(() => {
+      emitMetrics?.({
+        isOnline: true,
+        isLoading: false,
+        activeServerId: "srv_2",
+        serverName: "Server 2",
+        serverUrl: "http://10.126.126.1:80",
+        cpu: 15,
+        ram: 25,
+        disk: 35,
+        downloadBps: 0,
+        uploadBps: 0,
+        smbSyncing: false,
+      })
+    })
+
+    await waitFor(() => {
+      expect((api.getFileManagerSource as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(
+        callsBeforeSwitch,
+      )
+      expect(screen.queryByLabelText(/Username Akun Backend/i)).not.toBeInTheDocument()
+      expect(screen.getByText(/alice/)).toBeInTheDocument()
+    })
+
+    // Trigger myserver:refresh and confirm it re-fetches source state
+    const callsBeforeRefresh = (api.getFileManagerSource as ReturnType<typeof vi.fn>).mock.calls.length
+    currentServer = {
+      ...currentServer,
+      username: "alice_refreshed",
+    }
+    act(() => {
+      window.dispatchEvent(new Event("myserver:refresh"))
+    })
+
+    await waitFor(() => {
+      expect((api.getFileManagerSource as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(
+        callsBeforeRefresh,
+      )
+      expect(screen.getByText(/alice_refreshed/)).toBeInTheDocument()
+    })
+  })
 })

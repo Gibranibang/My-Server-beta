@@ -12,6 +12,16 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.9.3",
+        "channel": "Beta",
+        "date": "2026-11-26",
+        "highlights": [
+            "Perbaikan SMB Backend auto-connect saat startup/desktop pertama kali terbuka: melewati cooldown kegagalan saat retry startup, fallback otomatis ke host SMB aktif yang terjangkau, self-heal mode SMB Backend 1x, dan pemulihan tertunda setelah EasyTier aktif.",
+            "Perbaikan akun SMB Backend yang tampak ter-logout saat switch server: membersihkan pool HTTP keep-alive, cache URL/JWT Backend saat pergantian server/rute/profil, melewati probe live selama transisi switch_server, dan me-refresh status sumber SMB di FilesView saat activeServerId berubah.",
+            "Perbaikan fitur Ctrl+Alt+C / Ctrl+Alt+V (HTTP File Transfer): memperbarui progress per-file secara real-time (bytes_done/bytes_total/status) dan membersihkan HTTP Clipboard otomatis setelah transfer selesai."
+        ]
+    },
+    {
         "version": "4.9.2",
         "channel": "Beta",
         "date": "2026-11-25",

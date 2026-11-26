@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.9.3 - Beta] - 2026-11-26
+
+- Perbaikan SMB Backend Auto-Connect Saat Startup (`myserver_core_service.py`): Melewati cooldown kegagalan saat retry `startup_auto`, fallback otomatis ke host SMB aktif yang terjangkau, self-heal mode SMB Backend 1x, dan pemulihan tertunda setelah EasyTier aktif.
+- Preservasi Sesi Akun SMB Backend Saat Switch Server (`myserver_core_service.py`, `FilesView.tsx`): Membersihkan pool HTTP keep-alive & cache URL/JWT Backend pada pergantian server/rute/profil, melewati probe live saat transisi `switch_server`, serta sinkronisasi ulang `getFileManagerSource()` saat `activeServerId` berubah.
+- Perbaikan Progress Per-File & Auto-Clear HTTP Clipboard (`http_transfer_manager.py`): Memperbarui `bytes_done`, `bytes_total`, dan status per-item secara real-time untuk upload/download serta membersihkan HTTP Clipboard otomatis ketika transfer selesai.
+
 ## [v4.9.2 - Beta] - 2026-11-25
 
 

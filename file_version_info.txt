@@ -19,12 +19,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Project Algitha'),
             StringStruct('FileDescription', 'MyServer Core Service (Beta)'),
-            StringStruct('FileVersion', '4.9.5.0'),
+            StringStruct('FileVersion', '4.9.6.0'),
             StringStruct('InternalName', 'myserver-core'),
             StringStruct('LegalCopyright', 'Copyright (C) 2026 Project Algitha. All rights reserved.'),
             StringStruct('OriginalFilename', 'myserver-core.exe'),
             StringStruct('ProductName', 'MyServer Desktop'),
-            StringStruct('ProductVersion', '4.9.5'),
+            StringStruct('ProductVersion', '4.9.6'),
             StringStruct('Comments', 'MyServer Companion Background Core Service - Project Algitha')
           ]
         )

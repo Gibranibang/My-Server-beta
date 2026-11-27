@@ -418,7 +418,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.9.5"
+APP_VERSION_NUMBER = "4.9.6"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -29251,7 +29251,53 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
                     self._send_json({"success": False, "error": "No active route"}, status=400)
 
+            elif target == "backend":
 
+                srv = config_manager.get_active_server(cfg)
+
+                srv_id = srv.get("id") if srv else None
+
+                backend_url = _get_active_server_backend_url(cfg, target_server_id=srv_id)
+
+                if backend_url:
+
+                    clean_burl = backend_url.rstrip("/")
+
+                    h_ok, h_data, _ = _backend_http_request(
+
+                        f"{clean_burl}/health", method="GET", timeout=2.0, retries=0
+
+                    )
+
+                    if not (h_ok and isinstance(h_data, dict) and h_data.get("status") == "ok"):
+
+                        self._send_json(
+
+                            {"success": False, "error": "Backend tidak dapat dijangkau atau belum aktif."},
+
+                            status=503,
+
+                        )
+
+                        return
+
+                    srv_name = srv.get("name", "MyServer") if srv else "MyServer"
+
+                    fm_url = clean_burl + "/"
+
+                    spawn_app_window(fm_url, f"{srv_name} Backend Files")
+
+                    self._send_json({"success": True, "target": "backend", "url": fm_url})
+
+                else:
+
+                    self._send_json(
+
+                        {"success": False, "error": "Backend MyServer tidak ditemukan atau offline."},
+
+                        status=400,
+
+                    )
 
             else:
 

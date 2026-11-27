@@ -250,9 +250,9 @@ class TestReleasePackaging(unittest.TestCase):
     def test_installer_iss_bundles_zerotier_msi_and_keeps_version_4_6_1(self):
         import build_installer_package
 
-        self.assertEqual(build_installer_package.VERSION, "4.9.5")
+        self.assertEqual(build_installer_package.VERSION, "4.9.6")
         iss_text = _read_text(os.path.join(BETA_DIR, "installer.iss"))
-        self.assertIn('#define MyAppVersion "4.9.5"', iss_text)
+        self.assertIn('#define MyAppVersion "4.9.6"', iss_text)
         self.assertIn(
             r'Source: "dist\staging_payload\resources\deps\zerotier\ZeroTier One.msi"; DestDir: "{app}\resources\deps\zerotier"; Flags: ignoreversion',
             iss_text,

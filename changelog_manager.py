@@ -12,6 +12,15 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.9.6",
+        "channel": "Beta",
+        "date": "2026-11-27",
+        "highlights": [
+            "Perbaikan Klik Kartu File Manager -> Backend (`myserver_core_service.py`): Menambahkan cabang `elif target == 'backend'` pada `/api/open_file_manager` agar kartu File Manager di Home membuka Backend File Manager sesuai pilihan Options.",
+            "Backend v2.2.8 Connected Devices Deduplication & Mobile Gallery UI: Pencocokan & deduplikasi otomatis perangkat terhubung berdasarkan `(ip_address, user_id)` (`database.py`, `devices.py`, `dashboard_service.py`) agar entri versi lama tidak menumpuk, serta perbaikan auto-layout modal pemilih banyak folder Gallery dan dropdown `All folders` di mobile (`explorer.html`)."
+        ]
+    },
+    {
         "version": "4.9.5",
         "channel": "Beta",
         "date": "2026-11-27",

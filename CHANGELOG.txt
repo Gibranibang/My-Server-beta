@@ -1,4 +1,11 @@
 ===================================================
+[v4.9.6 - Beta] - 2026-11-27
+Catatan:
+1. Perbaikan Klik Kartu File Manager -> Backend File Manager (`myserver_core_service.py`): Memastikan opsi Backend File Manager membuka UI Backend, bukan Windows File Explorer.
+2. Deduplikasi Connected Devices & Perbaikan UI Mobile Gallery (Backend v2.2.8): Mencocokkan devices lama/ganda berdasarkan IP & owner, serta memperbaiki auto-layout chip pemilih folder Gallery dan panjang dropdown All folders di layar mobile.
+===================================================
+
+===================================================
 [v4.9.5 - Beta] - 2026-11-27
 Catatan:
 1. Gallery Tanggal Asli & Ekspansi Format Media (Bundled Backend v2.2.7): Ekstraksi EXIF DateTimeOriginal & video creation_time dengan cache SQLite media_metadata, Samba dos filetimes = yes, dukungan HEIC/HEIF, serta format foto/video/audio tambahan.

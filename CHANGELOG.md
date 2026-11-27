@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.9.6 - Beta] - 2026-11-27
+
+- Perbaikan Target Klik File Manager -> Backend File Manager (`myserver_core_service.py`): Memperbaiki `/api/open_file_manager` agar ketika Options diatur ke **Backend File Manager**, klik kartu File Manager membuka URL Backend alih-alih Windows File Explorer.
+- Connected Devices Deduplication & Mobile Gallery UI (Bundled Backend v2.2.8): Menyatukan & membersihkan entri Connected Devices duplikat/usang berdasarkan pasangan `(ip_address, user_id)` pada [database.py](app/database.py), [devices.py](app/routers/devices.py), dan [dashboard_service.py](app/services/dashboard_service.py), serta memperbaiki scrollable chip container pada modal pemilihan banyak folder Gallery dan auto-layout grid filter toolbar + dropdown `All folders` di mode mobile (`explorer.html`).
+
 ## [v4.9.5 - Beta] - 2026-11-27
 
 - Gallery Tanggal Asli & Ekspansi Format Media (Bundled Backend v2.2.7): Membaca EXIF `DateTimeOriginal` foto (termasuk HEIC/HEIF via `pillow-heif`) dan `creation_time` video (MP4 `mvhd`/ffprobe) dengan cache SQLite `media_metadata` + `dos filetimes = yes` Samba, serta memperluas format foto, video, dan audio.

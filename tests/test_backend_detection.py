@@ -104,7 +104,7 @@ class TestBackendDetection(unittest.TestCase):
         core._remote_backend_manifest_cache["version"] = ""
 
     def test_real_workspace_resources_bundled_and_git_tracked(self):
-        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "2.2.7")
+        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "2.2.8")
         zip_pkg, tar_pkg = core._get_bundled_backend_packages()
         self.assertIsNotNone(zip_pkg)
         self.assertIsNotNone(tar_pkg)
@@ -951,6 +951,42 @@ class TestBackendDetection(unittest.TestCase):
         self.assertIn("download_and_install_update", lib_src)
         self.assertIn("210000", lib_src)
         self.assertIn("420000", lib_src)
+
+    def test_open_file_manager_routes_backend_target_to_backend_url(self):
+        captured = []
+
+        class _FakeHandler:
+            path = "/api/open_file_manager"
+            headers = {"Content-Length": "2"}
+            rfile = io.BytesIO(b"{}")
+
+            def _is_core_request_authorized(self):
+                return True
+
+            def _send_json(self, payload, status=200):
+                captured.append((status, payload))
+
+        cfg = {
+            "active_server_id": "srv1",
+            "file_manager_click_target": "backend",
+            "servers": [{"id": "srv1", "name": "MyNAS", "connections": [{"id": "c1", "url": "http://192.0.2.10"}]}],
+        }
+        handler = _FakeHandler()
+        with (
+            mock.patch.object(core.config_manager, "load_or_create_config", return_value=cfg),
+            mock.patch.object(core, "_get_active_server_backend_url", return_value="http://192.0.2.10:8080"),
+            mock.patch.object(core, "_backend_http_request", return_value=(True, {"status": "ok"}, 200)),
+            mock.patch.object(core, "spawn_app_window", return_value=(True, "opened")) as spawn_mock,
+            mock.patch.object(core.smb_mount_manager, "open_drive_in_explorer", side_effect=AssertionError("Must not open Windows Explorer")),
+            mock.patch.object(core.smb_mount_manager, "open_unc_root_in_explorer", side_effect=AssertionError("Must not open Windows Explorer")),
+        ):
+            core.CoreApiHandler.do_POST(handler)
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][0], 200)
+        self.assertEqual(captured[0][1]["target"], "backend")
+        self.assertEqual(captured[0][1]["url"], "http://192.0.2.10:8080/")
+        spawn_mock.assert_called_once_with("http://192.0.2.10:8080/", "MyNAS Backend Files")
 
 
 if __name__ == "__main__":

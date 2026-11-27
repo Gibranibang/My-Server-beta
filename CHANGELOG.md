@@ -1,5 +1,10 @@
 # Changelog MyServer Desktop
 
+## [v4.9.4 - Beta] - 2026-11-27
+
+- Registrasi & Heartbeat Perangkat Desktop ke Backend (`myserver_core_service.py`): Desktop otomatis mendaftarkan hostname, IP LAN, dan MAC ke `/api/v1/devices/register` dan `/heartbeat` setiap 60 detik sehingga muncul real-time di modal Connected Devices Admin.
+- Bundled Backend v2.2.6: Mencatat klien `/api/v1/auth/verify` serta klien aktif `smbd` (`smbstatus`), dan memperbaiki tinggi baris widget Disks (`flex-shrink: 0`) agar tetap dapat di-scroll vertikal tanpa terhimpit.
+
 ## [v4.9.3 - Beta] - 2026-11-26
 
 - Perbaikan SMB Backend Auto-Connect Saat Startup (`myserver_core_service.py`): Melewati cooldown kegagalan saat retry `startup_auto`, fallback otomatis ke host SMB aktif yang terjangkau, self-heal mode SMB Backend 1x, dan pemulihan tertunda setelah EasyTier aktif.

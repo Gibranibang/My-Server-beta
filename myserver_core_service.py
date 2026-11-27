@@ -418,7 +418,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.9.3"
+APP_VERSION_NUMBER = "4.9.4"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -17276,6 +17276,127 @@ def _verify_backend_account(backend_url, username, password):
     else:
         err_detail = str(data or f"HTTP {status}")
     return (status or 502), {"error": _mask_secret(err_detail, password)}
+
+
+def _get_desktop_device_identity():
+    """Membentuk identitas unik Desktop (hostname, device_id, IP LAN, MAC) untuk registrasi Backend."""
+    import hashlib as _hashlib
+    import socket as _sock
+    import uuid as _uuid
+
+    hostname = "MyServer-Desktop"
+    try:
+        h = _sock.gethostname()
+        if h and h.strip():
+            hostname = h.strip()
+    except Exception:
+        pass
+
+    node_int = 0
+    mac_str = ""
+    try:
+        node_int = _uuid.getnode()
+        if node_int and ((node_int >> 40) & 1) == 0:
+            mac_str = ":".join(f"{(node_int >> (8 * i)) & 0xff:02X}" for i in range(5, -1, -1))
+    except Exception:
+        pass
+
+    lan_ip = ""
+    try:
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 1))
+            lan_ip = str(s.getsockname()[0] or "").strip()
+        finally:
+            s.close()
+    except Exception:
+        pass
+
+    id_seed = f"{hostname}|{mac_str or node_int}|{sys.platform}"
+    dev_hash = _hashlib.sha256(id_seed.encode("utf-8", "ignore")).hexdigest()[:12]
+    dev_type = "windows" if sys.platform == "win32" else ("macos" if sys.platform == "darwin" else "linux")
+    return {
+        "device_id": f"desktop-{dev_hash}",
+        "device_name": hostname,
+        "device_type": dev_type,
+        "app_version": APP_VERSION_NUMBER,
+        "ip_address": lan_ip,
+        "mac_address": mac_str,
+    }
+
+
+def _sync_desktop_device_presence_once(registered_keys):
+    """Mendaftarkan / mengirim heartbeat perangkat Desktop ke setiap server yang memiliki akun terautentikasi."""
+    if not config_manager:
+        return
+    try:
+        cfg = config_manager.load_or_create_config()
+    except Exception:
+        return
+    servers = list(cfg.get("servers") or [])
+    if not servers:
+        sel = _select_target_server(cfg)
+        if sel:
+            servers = [sel]
+    if not servers:
+        return
+
+    ident = _get_desktop_device_identity()
+    for srv in servers:
+        srv_id = srv.get("id")
+        if not srv_id:
+            continue
+        try:
+            smb_cfg = config_manager.get_server_smb_source_config(srv)
+            uname = str((smb_cfg or {}).get("username") or "").strip().lower()
+            has_auth = bool(
+                (smb_cfg or {}).get("access_token")
+                or ((smb_cfg or {}).get("hasCredentials") and uname and (smb_cfg or {}).get("password"))
+            )
+            if not has_auth:
+                continue
+            backend_url = _get_active_server_backend_url(cfg, target_server_id=srv_id)
+            if not backend_url:
+                continue
+            reg_key = (srv_id, uname)
+            if reg_key not in registered_keys:
+                code, _, _ = _backend_authenticated_request(
+                    backend_url,
+                    "/api/v1/devices/register",
+                    smb_cfg,
+                    srv_id,
+                    method="POST",
+                    json_body=ident,
+                )
+                if code == 200:
+                    registered_keys.add(reg_key)
+            else:
+                hb_payload = {
+                    "device_id": ident["device_id"],
+                    "ip_address": ident["ip_address"],
+                    "mac_address": ident["mac_address"],
+                }
+                code, _, _ = _backend_authenticated_request(
+                    backend_url,
+                    "/api/v1/devices/heartbeat",
+                    smb_cfg,
+                    srv_id,
+                    method="POST",
+                    json_body=hb_payload,
+                )
+                if code == 404:
+                    registered_keys.discard(reg_key)
+        except Exception:
+            pass
+
+
+def _desktop_device_presence_loop():
+    """Loop daemon latar belakang untuk menjaga status perangkat Desktop tetap live di Backend."""
+    registered_keys = set()
+    time.sleep(3.0)
+    while True:
+        _sync_desktop_device_presence_once(registered_keys)
+        time.sleep(60.0)
 
 
 def _persist_refreshed_backend_token(server_id, new_token, auth_data=None):
@@ -38729,6 +38850,7 @@ def start_server(port=DEFAULT_PORT, parent_pid=0):
 
     threading.Thread(target=ensure_autorun_registry_healthy, daemon=True).start()
     threading.Thread(target=cleanup_temp_update_artifacts, daemon=True).start()
+    threading.Thread(target=_desktop_device_presence_loop, daemon=True).start()
     if sys.platform == "win32" and parent_pid and parent_pid > 0:
         threading.Thread(target=explorer_tab_reader.warmup, daemon=True).start()
 

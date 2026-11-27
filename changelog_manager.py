@@ -12,6 +12,15 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.9.4",
+        "channel": "Beta",
+        "date": "2026-11-27",
+        "highlights": [
+            "Registrasi & Heartbeat Perangkat Desktop ke Backend (`myserver_core_service.py`): Aplikasi Desktop kini otomatis mendaftarkan hostname, IP LAN, MAC address, dan status online setiap 60 detik ke `/api/v1/devices/register` dan `/heartbeat` untuk seluruh server terautentikasi.",
+            "Sinkronisasi Backend v2.2.6: Mencatat otomatis klien login (`/api/v1/auth/verify`), klien SMB aktif (`smbstatus`), serta perbaikan tampilan widget Disks (`flex-shrink: 0`) agar 3 disk tetap tampil utuh dan sisanya dapat di-scroll vertikal tanpa terhimpit."
+        ]
+    },
+    {
         "version": "4.9.3",
         "channel": "Beta",
         "date": "2026-11-26",

@@ -1,4 +1,12 @@
 ===================================================
+[v4.9.5 - Beta] - 2026-11-27
+Catatan:
+1. Gallery Tanggal Asli & Ekspansi Format Media (Bundled Backend v2.2.7): Ekstraksi EXIF DateTimeOriginal & video creation_time dengan cache SQLite media_metadata, Samba dos filetimes = yes, dukungan HEIC/HEIF, serta format foto/video/audio tambahan.
+2. Pembersihan UX Options, Pintasan Dashboard & File Manager: Penyatuan tombol update, penghapusan duplikasi kontrol, opsi target Dashboard (ZimaOS/Backend) & Backend File Manager, perbaikan layout tombol Log, dan animasi accordion mulus.
+3. Anti-Spam Notifikasi Startup: Mencegah notifikasi Syncthing 100% berulang saat boot atau baru membuka MyServer Desktop.
+===================================================
+
+===================================================
 [v4.9.4 - Beta] - 2026-11-27
 Catatan:
 1. Registrasi & Heartbeat Perangkat Desktop ke Backend (`myserver_core_service.py`): Desktop otomatis mendaftarkan hostname, IP LAN, dan MAC ke `/api/v1/devices/register` dan `/heartbeat` setiap 60 detik.

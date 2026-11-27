@@ -305,7 +305,15 @@ export default function HomeView({ go }: ViewProps) {
                 "danger",
               )
             } else {
-              notify("Membuka Windows File Explorer...", "info")
+              const target = settings?.fileManagerClickTarget || "explorer"
+              notify(
+                target === "backend"
+                  ? t("opening_backend_files", "Membuka Backend File Manager...")
+                  : target === "zimaos"
+                    ? t("opening_zimaos_files", "Membuka ZimaOS Files...")
+                    : t("opening_windows_explorer", "Membuka Windows File Explorer..."),
+                "info",
+              )
             }
           }}
           safeT={safeT}

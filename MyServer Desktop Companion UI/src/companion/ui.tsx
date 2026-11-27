@@ -528,7 +528,7 @@ export function AccordionSection({
           {badge}
           <ChevronDown
             className={cx(
-              "size-4 text-ink-subtle transition-transform duration-200",
+              "size-4 text-ink-subtle transition-transform duration-250 ease-out",
               isExpanded && "rotate-180 text-brand",
             )}
             strokeWidth={2.2}
@@ -536,11 +536,22 @@ export function AccordionSection({
         </div>
       </button>
 
-      {isExpanded && (
-        <div className="border-t border-line/60 bg-surface/50 p-3">
-          {children}
+      {/* Smooth Animated Accordion Body using CSS Grid (consistent with VmManagerView) */}
+      <div
+        aria-hidden={!isExpanded}
+        className={cx(
+          "grid transition-all duration-250 ease-out",
+          isExpanded
+            ? "grid-rows-[1fr] opacity-100 border-t border-line/60"
+            : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="bg-surface/50 p-3">
+            {children}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }

@@ -32,7 +32,6 @@ import {
   Card,
   Chip,
   Mono,
-  TextAction,
   Toggle,
   cx,
 } from "../ui"
@@ -449,118 +448,20 @@ export default function SettingsView() {
             </p>
           </div>
 
-          {/* Theme Quick Selector */}
-          <div className="mt-3 flex w-full items-center justify-between rounded-control border border-line bg-surface-sunken px-3 py-1.5">
-            <div className="flex items-center gap-1.5 text-micro font-semibold text-ink">
-              <Sparkles className="size-3.5 text-brand" />
-              <span>{t("theme_label", "Tema Tampilan")}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => {
-                  void setSetting("theme", "dark")
-                  notify(isId ? "Tema Gelap diaktifkan" : "Dark theme activated", "success")
-                }}
-                className={cx(
-                  "rounded-full px-2.5 py-0.5 text-nano font-semibold transition cursor-pointer border",
-                  settings?.theme !== "light"
-                    ? "bg-brand text-brand-ink border-transparent shadow-xs"
-                    : "bg-surface text-ink-subtle border-line hover:text-ink",
-                )}
-              >
-                Dark
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  void setSetting("theme", "light")
-                  notify(isId ? "Tema Terang diaktifkan" : "Light theme activated", "success")
-                }}
-                className={cx(
-                  "rounded-full px-2.5 py-0.5 text-nano font-semibold transition cursor-pointer border",
-                  settings?.theme === "light"
-                    ? "bg-brand text-brand-ink border-transparent shadow-xs"
-                    : "bg-surface text-ink-subtle border-line hover:text-ink",
-                )}
-              >
-                Light
-              </button>
-            </div>
-          </div>
-
-          {/* Auto Check Update Preference (Native Checkbox) */}
-          <div className="mt-1.5 flex w-full items-center justify-between rounded-control border border-line bg-surface-sunken px-3 py-1.5">
-            <div className="flex items-center gap-1.5 text-micro font-semibold text-ink">
-              <RefreshCw className="size-3.5 text-brand" />
-              <span>{t("auto_check_update_label", "Check for Updates Automatically")}</span>
-            </div>
-            <button
-              type="button"
-              role="checkbox"
-              aria-checked={settings?.autoCheckUpdate ?? true}
-              onClick={() => {
-                const nextVal = !(settings?.autoCheckUpdate ?? true)
-                void setSetting("autoCheckUpdate", nextVal).then(() => {
-                  notify(
-                    nextVal
-                      ? (isId ? "Pemeriksaan pembaruan otomatis diaktifkan" : "Automatic update check enabled")
-                      : (isId ? "Pemeriksaan pembaruan otomatis dinonaktifkan" : "Automatic update check disabled"),
-                    "neutral",
-                  )
-                })
-              }}
-              className={cx(
-                "size-4 rounded border flex items-center justify-center transition cursor-pointer select-none",
-                (settings?.autoCheckUpdate ?? true)
-                  ? "bg-brand text-brand-ink border-transparent shadow-xs"
-                  : "bg-surface border-line hover:border-line-strong text-transparent",
-              )}
-              title={t("auto_check_update_desc", "Automatically check for updates on startup")}
+          {/* Unified Software Update Section (Single Auto-Check Toggle + Unified Check/Download Flow) */}
+          {updateInfo && !updateInfo.upToDate ? (
+            <div
+              data-testid="unified-update-available"
+              className="mt-3 w-full rounded-tile border border-brand/30 bg-brand/5 p-3 text-left"
             >
-              {(settings?.autoCheckUpdate ?? true) && <Check className="size-3 text-brand-ink" strokeWidth={3} />}
-            </button>
-          </div>
-
-          {/* Action Update Buttons - Tata Letak Bersih Bebas Tabrakan */}
-          <div className="mt-3 flex flex-col gap-2 w-full">
-            <Button
-              size="sm"
-              variant={updateInfo && !updateInfo.upToDate ? "primary" : "secondary"}
-              icon={RefreshCw}
-              block
-              state={checkingUpdate ? "busy" : "idle"}
-              busyLabel={t("checking_update")}
-              onClick={handleCheckUpdate}
-            >
-              {updateInfo && !updateInfo.upToDate
-                ? (isId ? `Pembaruan Ada (v${updateInfo.version})` : `Update Available (v${updateInfo.version})`)
-                : t("check_update")}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={Archive}
-              block
-              state={zipUpdateState}
-              busyLabel={t("installing_zip")}
-              onClick={handleZipUpdate}
-            >
-              {t("install_zip")}
-            </Button>
-          </div>
-
-          {/* Update Available Card Banner */}
-          {updateInfo && !updateInfo.upToDate && (
-            <div className="mt-3 w-full rounded-tile border border-brand/30 bg-brand/5 p-3 text-left">
               <div className="flex items-start justify-between gap-2">
-                <div className="flex flex-col">
+                <div className="flex flex-col min-w-0">
                   <div className="flex items-center gap-1.5">
                     <Sparkles className="size-4 text-brand shrink-0" />
-                    <span className="text-micro font-bold text-ink">
+                    <span className="text-micro font-bold text-ink truncate">
                       {isId ? `Pembaruan Tersedia: v${updateInfo.version}` : `Update Available: v${updateInfo.version}`}
                     </span>
-                    <span className="rounded-full bg-brand/10 px-1.5 py-0.5 text-[9px] font-bold text-brand">
+                    <span className="rounded-full bg-brand/15 px-1.5 py-0.5 text-[9px] font-bold text-brand shrink-0">
                       {isId ? "Baru" : "New"}
                     </span>
                   </div>
@@ -572,8 +473,7 @@ export default function SettingsView() {
                 </div>
               </div>
 
-              {/* Action Buttons: Clean & Perfectly Contained (Zero Overflow) */}
-              <div className="mt-3 flex flex-col gap-2 w-full">
+              <div className="mt-2.5 flex flex-col gap-1.5 w-full">
                 <Button
                   size="sm"
                   variant="primary"
@@ -584,28 +484,108 @@ export default function SettingsView() {
                   onClick={handleDownloadAndInstall}
                   className="h-8 rounded-control text-micro font-semibold shadow-xs justify-center"
                 >
-                  {isId ? "Unduh & Pasang Sekarang" : "Download & Install Now"}
+                  {isId ? `Unduh & Pasang v${updateInfo.version}` : `Download & Install v${updateInfo.version}`}
                 </Button>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={RefreshCw}
+                    block
+                    state={checkingUpdate ? "busy" : "idle"}
+                    busyLabel={t("checking_update")}
+                    onClick={handleCheckUpdate}
+                    className="h-7 rounded-control text-nano font-medium justify-center"
+                  >
+                    {isId ? "Periksa Ulang" : "Re-check"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={ExternalLink}
+                    block
+                    onClick={() => {
+                      const targetUrl = updateInfo.htmlUrl || updateInfo.downloadUrl || "https://github.com/Gibranibang/My-Server-beta/releases/latest"
+                      api.openExternalBrowser(targetUrl)
+                    }}
+                    className="h-7 rounded-control text-nano font-medium text-ink-subtle hover:text-ink justify-center"
+                  >
+                    {isId ? "Buka Link" : "Open Link"}
+                  </Button>
+                </div>
                 <Button
                   size="sm"
-                  variant="secondary"
-                  icon={ExternalLink}
+                  variant="soft"
+                  icon={Archive}
                   block
-                  onClick={() => {
-                    const targetUrl = updateInfo.htmlUrl || updateInfo.downloadUrl || "https://github.com/Gibranibang/My-Server-beta/releases/latest"
-                    api.openExternalBrowser(targetUrl)
-                  }}
-                  className="h-7 rounded-control text-micro font-medium text-ink-subtle hover:text-ink justify-center"
+                  state={zipUpdateState}
+                  busyLabel={t("installing_zip")}
+                  onClick={handleZipUpdate}
+                  className="h-7 rounded-control text-nano font-medium justify-center"
                 >
-                  {isId ? "Buka di Browser" : "Open in Browser"}
+                  {t("install_zip")}
                 </Button>
               </div>
             </div>
+          ) : (
+            <div className="mt-3 flex flex-col gap-2 w-full">
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={RefreshCw}
+                block
+                state={checkingUpdate ? "busy" : "idle"}
+                busyLabel={t("checking_update")}
+                onClick={handleCheckUpdate}
+              >
+                {t("check_update")}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={Archive}
+                block
+                state={zipUpdateState}
+                busyLabel={t("installing_zip")}
+                onClick={handleZipUpdate}
+              >
+                {t("install_zip")}
+              </Button>
+            </div>
           )}
+
+          {/* Single Unified Auto-Check Update Row */}
+          <div className="mt-2.5 flex w-full items-center justify-between gap-2 rounded-control border border-line bg-surface-sunken px-3 py-2 text-left">
+            <div className="flex min-w-0 items-center gap-2">
+              <RefreshCw className="size-3.5 shrink-0 text-brand" />
+              <div className="min-w-0 flex flex-col">
+                <span className="truncate text-micro font-semibold text-ink">
+                  {t("auto_check_update_label", "Check for Updates Automatically")}
+                </span>
+                <span className="truncate text-nano text-ink-subtle">
+                  {t((settings?.autoCheckUpdate ?? true) ? "auto_check_update_on" : "auto_check_update_off")}
+                </span>
+              </div>
+            </div>
+            <Toggle
+              label={t("auto_check_update_label", "Check for Updates Automatically")}
+              checked={settings?.autoCheckUpdate ?? true}
+              onChange={(nextVal) => {
+                void setSetting("autoCheckUpdate", nextVal).then(() => {
+                  notify(
+                    nextVal
+                      ? (isId ? "Pemeriksaan pembaruan otomatis diaktifkan" : "Automatic update check enabled")
+                      : (isId ? "Pemeriksaan pembaruan otomatis dinonaktifkan" : "Automatic update check disabled"),
+                    "neutral",
+                  )
+                })
+              }}
+            />
+          </div>
         </Card>
 
         {/* ========================================================= */}
-        {/* ACCORDION 1: Sistem & Startup (Poin 5)                    */}
+        {/* ACCORDION 1: Sistem & Startup                             */}
         {/* ========================================================= */}
         <AccordionSection
           title={t("sec_system_title")}
@@ -613,53 +593,75 @@ export default function SettingsView() {
           icon={Rocket}
           defaultOpen={true}
         >
-          <div className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
-            <SettingToggleRow
-              icon={Rocket}
-              label={t("autostart_label")}
-              caption={t(settings.autostart ? "autostart_on" : "autostart_off")}
-              settingKey="autostart"
-            />
-            <SettingToggleRow
-              icon={AppWindow}
-              label={t("openDashboard_label")}
-              caption={t(settings.openDashboard ? "openDashboard_on" : "openDashboard_off")}
-              settingKey="openDashboard"
-            />
-            <SettingToggleRow
-              icon={PanelTopOpen}
-              label={t("autoOpenMiniTray_label")}
-              caption={t(settings.autoOpenMiniTray ? "autoOpenMiniTray_on" : "autoOpenMiniTray_off")}
-              settingKey="autoOpenMiniTray"
-            />
-            <SettingToggleRow
-              icon={RefreshCw}
-              label={t("auto_check_update_label", "Check for Updates Automatically")}
-              caption={t((settings.autoCheckUpdate ?? true) ? "auto_check_update_on" : "auto_check_update_off")}
-              settingKey="autoCheckUpdate"
-            />
-          </div>
-        </AccordionSection>
+          <div className="flex flex-col gap-2.5">
+            <div className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
+              <SettingToggleRow
+                icon={Rocket}
+                label={t("autostart_label")}
+                caption={t(settings.autostart ? "autostart_on" : "autostart_off")}
+                settingKey="autostart"
+              />
+              <SettingToggleRow
+                icon={AppWindow}
+                label={t("openDashboard_label")}
+                caption={t(settings.openDashboard ? "openDashboard_on" : "openDashboard_off")}
+                settingKey="openDashboard"
+              />
+              <SettingToggleRow
+                icon={PanelTopOpen}
+                label={t("autoOpenMiniTray_label")}
+                caption={t(settings.autoOpenMiniTray ? "autoOpenMiniTray_on" : "autoOpenMiniTray_off")}
+                settingKey="autoOpenMiniTray"
+              />
+            </div>
 
-        {/* ========================================================= */}
-        {/* ACCORDION 2: Bahasa & Keamanan Vault (Poin 5)             */}
-        {/* ========================================================= */}
-        <AccordionSection
-          title={t("sec_lang_vault_title")}
-          subtitle={t("sec_lang_vault_desc")}
-          icon={Languages}
-          badge={
-            <Chip
-              tone={isDpapiActive ? "success" : "warning"}
-              size="sm"
-              icon={isDpapiActive ? ShieldCheck : Lock}
-            >
-              {isDpapiActive ? "DPAPI Vault" : "Vault Plain"}
-            </Chip>
-          }
-        >
-          <div className="flex flex-col gap-3">
-            {/* Setup Wizard re-entry (D-04, D-05, WIZ-01) */}
+            {/* Top-Left Home Dashboard Button Target */}
+            <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface p-2.5">
+              <span className="text-micro font-semibold text-ink">
+                {t("dashboard_click_title", "Top-Left Dashboard Shortcut on Home")}
+              </span>
+              <span className="text-nano text-ink-subtle">
+                {t("dashboard_click_subtitle", "Choose which web dashboard opens from the home shortcut icon")}
+              </span>
+              <div className="grid grid-cols-2 gap-1.5 pt-1">
+                <button
+                  type="button"
+                  data-testid="dashboard-target-zimaos"
+                  onClick={() => {
+                    void setSetting("dashboardClickTarget", "zimaos")
+                    notify(t("dashboard_target_set_zimaos", "Dashboard shortcut set to ZimaOS Dashboard"), "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2 py-1.5 text-nano font-medium transition cursor-pointer border min-w-0",
+                    (settings.dashboardClickTarget || "zimaos") === "zimaos"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <ExternalLink className="size-3 shrink-0" />
+                  <span className="truncate">{t("dashboard_target_zimaos", "ZimaOS Dashboard")}</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="dashboard-target-backend"
+                  onClick={() => {
+                    void setSetting("dashboardClickTarget", "backend")
+                    notify(t("dashboard_target_set_backend", "Dashboard shortcut set to Backend Dashboard"), "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-center gap-1.5 rounded-control px-2 py-1.5 text-nano font-medium transition cursor-pointer border min-w-0",
+                    settings.dashboardClickTarget === "backend"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <AppWindow className="size-3 shrink-0" />
+                  <span className="truncate">{t("dashboard_target_backend", "Backend Dashboard")}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Setup Wizard re-entry */}
             <div className="flex items-center justify-between gap-2 rounded-tile border border-line bg-surface p-2.5">
               <div className="flex min-w-0 flex-col">
                 <span className="text-micro font-semibold text-ink">
@@ -678,6 +680,27 @@ export default function SettingsView() {
                 {t("wiz_settings_launch_btn", "Setup Wizard")}
               </button>
             </div>
+          </div>
+        </AccordionSection>
+
+        {/* ========================================================= */}
+        {/* ACCORDION 2: Tampilan, Bahasa & Keamanan Vault            */}
+        {/* ========================================================= */}
+        <AccordionSection
+          title={t("sec_lang_vault_title")}
+          subtitle={t("sec_lang_vault_desc")}
+          icon={Languages}
+          badge={
+            <Chip
+              tone={isDpapiActive ? "success" : "warning"}
+              size="sm"
+              icon={isDpapiActive ? ShieldCheck : Lock}
+            >
+              {isDpapiActive ? "DPAPI Vault" : "Vault Plain"}
+            </Chip>
+          }
+        >
+          <div className="flex flex-col gap-3">
 
             {/* Language Selector */}
             <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface p-2.5">
@@ -803,46 +826,80 @@ export default function SettingsView() {
           icon={HardDrive}
         >
           <div className="flex flex-col gap-2.5">
-            {/* File Manager Target Selection */}
+            {/* File Manager Target Selection (3 Options: Explorer, ZimaOS, Backend File Manager) */}
             <div className="flex flex-col gap-1.5 rounded-tile border border-line bg-surface p-2.5">
               <span className="text-micro font-semibold text-ink">
                 {t("fm_click_title")}
               </span>
-              <span className="text-micro text-ink-subtle">
+              <span className="text-nano text-ink-subtle">
                 {t("fm_click_subtitle")}
               </span>
-              <div className="grid grid-cols-2 gap-2 pt-1">
+              <div className="flex flex-col gap-1.5 pt-1">
                 <button
                   type="button"
+                  data-testid="fm-target-explorer"
                   onClick={() => {
                     void setSetting("fileManagerClickTarget", "explorer")
                     notify(t("fm_target_set_explorer"), "success")
                   }}
                   className={cx(
-                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    "flex items-center justify-between gap-2 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
                     (settings.fileManagerClickTarget || "explorer") === "explorer"
                       ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
                       : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
                   )}
                 >
-                  <HardDrive className="size-3.5" />
-                  <span>{t("fm_target_explorer")}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <HardDrive className="size-3.5 shrink-0" />
+                    <span className="truncate">{t("fm_target_explorer")}</span>
+                  </span>
+                  {(settings.fileManagerClickTarget || "explorer") === "explorer" && (
+                    <Check className="size-3.5 shrink-0" strokeWidth={2.5} />
+                  )}
                 </button>
                 <button
                   type="button"
+                  data-testid="fm-target-zimaos"
                   onClick={() => {
                     void setSetting("fileManagerClickTarget", "zimaos")
                     notify(t("fm_target_set_zimaos"), "success")
                   }}
                   className={cx(
-                    "flex items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    "flex items-center justify-between gap-2 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
                     settings.fileManagerClickTarget === "zimaos"
                       ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
                       : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
                   )}
                 >
-                  <Folder className="size-3.5" />
-                  <span>{t("fm_target_zimaos")}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Folder className="size-3.5 shrink-0" />
+                    <span className="truncate">{t("fm_target_zimaos")}</span>
+                  </span>
+                  {settings.fileManagerClickTarget === "zimaos" && (
+                    <Check className="size-3.5 shrink-0" strokeWidth={2.5} />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  data-testid="fm-target-backend"
+                  onClick={() => {
+                    void setSetting("fileManagerClickTarget", "backend")
+                    notify(t("fm_target_set_backend", "File Manager click action set to Backend File Manager"), "success")
+                  }}
+                  className={cx(
+                    "flex items-center justify-between gap-2 rounded-control px-2.5 py-1.5 text-micro font-medium transition cursor-pointer border",
+                    settings.fileManagerClickTarget === "backend"
+                      ? "bg-brand text-brand-ink border-transparent font-semibold shadow-xs"
+                      : "bg-surface-sunken text-ink-subtle border-line hover:text-ink",
+                  )}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <FolderOpen className="size-3.5 shrink-0" />
+                    <span className="truncate">{t("fm_target_backend", "Backend File Manager")}</span>
+                  </span>
+                  {settings.fileManagerClickTarget === "backend" && (
+                    <Check className="size-3.5 shrink-0" strokeWidth={2.5} />
+                  )}
                 </button>
               </div>
             </div>
@@ -983,42 +1040,47 @@ export default function SettingsView() {
               </div>
             </div>
 
-            {/* Log Explorer & Notepad Links */}
-            <div className="flex flex-wrap items-center justify-between rounded-tile border border-line bg-surface p-2.5 text-micro">
-              <div className="flex items-center gap-3">
-                <TextAction
-                  icon={FileText}
-                  tone="neutral"
-                  onClick={() => {
-                    api.openLogFile()
-                    notify(t("opening_log_notepad"), "info")
-                  }}
-                >
-                  {t("open_log_file")}
-                </TextAction>
-                <span className="text-line-strong">|</span>
-                <TextAction
-                  icon={FolderOpen}
-                  tone="neutral"
-                  onClick={() => {
-                    api.openLogFolder()
-                    notify(t("opening_log_folder"), "info")
-                  }}
-                >
-                  {t("open_log_folder")}
-                </TextAction>
-              </div>
+            {/* Log Explorer & Notepad Actions (Auto-Layout Contained Grid, Zero Overflow) */}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={FileText}
+                block
+                onClick={() => {
+                  api.openLogFile()
+                  notify(t("opening_log_notepad"), "info")
+                }}
+                title={t("open_log_file_desc")}
+                className="min-w-0 truncate text-[11px] px-2"
+              >
+                <span className="truncate">{t("open_log_file")}</span>
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={FolderOpen}
+                block
+                onClick={() => {
+                  api.openLogFolder()
+                  notify(t("opening_log_folder"), "info")
+                }}
+                title={t("open_log_folder_desc")}
+                className="min-w-0 truncate text-[11px] px-2"
+              >
+                <span className="truncate">{t("open_log_folder")}</span>
+              </Button>
             </div>
 
             {/* Maintenance & Cache Cleanup */}
-            <div className="flex items-center justify-between rounded-tile border border-line bg-surface p-2.5">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between gap-2 rounded-tile border border-line bg-surface p-2.5">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
                 <Sparkles className="size-4 shrink-0 text-brand" />
-                <div className="flex flex-col">
-                  <span className="text-micro font-semibold text-ink">
+                <div className="flex min-w-0 flex-col">
+                  <span className="truncate text-micro font-semibold text-ink">
                     {t("clean_cache_btn")}
                   </span>
-                  <span className="text-nano text-ink-subtle">
+                  <span className="text-nano text-ink-subtle leading-snug">
                     {t("clean_cache_desc")}
                   </span>
                 </div>
@@ -1029,7 +1091,7 @@ export default function SettingsView() {
                 state={cacheBusy ? "busy" : "idle"}
                 busyLabel="Membersihkan..."
                 onClick={handleCleanCache}
-                className="h-7 text-micro px-2.5"
+                className="h-7 shrink-0 text-micro px-2.5"
               >
                 {t("clean_cache_btn")}
               </Button>

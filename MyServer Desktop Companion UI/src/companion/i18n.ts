@@ -276,11 +276,18 @@ export const I18N = {
     autoOpenMiniTray_on: "Mini tray opens immediately on screen",
     autoOpenMiniTray_off: "Silent in Windows system tray",
 
-    // File Manager Target Card
+    // Dashboard & File Manager Target Cards
+    dashboard_click_title: "Top-Left Dashboard Shortcut on Home",
+    dashboard_click_subtitle: "Choose which web dashboard opens from the home shortcut icon",
+    dashboard_target_zimaos: "ZimaOS Dashboard",
+    dashboard_target_backend: "Backend Dashboard",
+    dashboard_target_set_zimaos: "Dashboard shortcut set to ZimaOS Dashboard",
+    dashboard_target_set_backend: "Dashboard shortcut set to Backend Dashboard",
     fm_click_title: "File Manager Icon Click Action on Home",
     fm_click_subtitle: "Choose the target application when clicking the File Manager card on home",
-    fm_target_explorer: "File Explorer (Default)",
+    fm_target_explorer: "File Explorer",
     fm_target_zimaos: "ZimaOS Files",
+    fm_target_backend: "Backend File Manager",
 
     // Language Preference Card
     language_title: "Language Preference",
@@ -296,7 +303,7 @@ export const I18N = {
     already_latest: "Already up to date",
     install_zip: "Install Update from ZIP…",
     installing_zip: "Processing ZIP update…",
-    open_log_file: "Open Log File (Notepad)",
+    open_log_file: "Open Log File",
     open_log_folder: "Open Log Folder",
 
     // Footer & Status
@@ -312,6 +319,7 @@ export const I18N = {
     // Notifications & Toasts
     fm_target_set_explorer: "File Manager click action set to File Explorer (SMB)",
     fm_target_set_zimaos: "File Manager click action set to ZimaOS Files",
+    fm_target_set_backend: "File Manager click action set to Backend File Manager",
     lang_switched_en: "Language changed to English",
     lang_switched_id: "Bahasa diubah ke Bahasa Indonesia",
     update_available: "Update available · v",
@@ -1343,11 +1351,18 @@ export const I18N = {
     autoOpenMiniTray_on: "Mini tray langsung tampil di layar",
     autoOpenMiniTray_off: "Senyap di sistem tray Windows",
 
-    // File Manager Target Card
+    // Dashboard & File Manager Target Cards
+    dashboard_click_title: "Pintasan Dashboard Kiri Atas di Beranda",
+    dashboard_click_subtitle: "Pilih dashboard web yang dibuka saat ikon pintasan di beranda diklik",
+    dashboard_target_zimaos: "Dashboard ZimaOS",
+    dashboard_target_backend: "Dashboard Backend",
+    dashboard_target_set_zimaos: "Pintasan dashboard diatur ke Dashboard ZimaOS",
+    dashboard_target_set_backend: "Pintasan dashboard diatur ke Dashboard Backend",
     fm_click_title: "Aksi Klik Ikon File Manager di Beranda",
     fm_click_subtitle: "Pilih target aplikasi yang terbuka saat kartu File Manager di beranda diklik",
-    fm_target_explorer: "File Explorer (Default)",
+    fm_target_explorer: "File Explorer",
     fm_target_zimaos: "ZimaOS Files",
+    fm_target_backend: "Backend File Manager",
 
     // Language Preference Card
     language_title: "Pilihan Bahasa",
@@ -1363,7 +1378,7 @@ export const I18N = {
     already_latest: "Sudah versi terbaru",
     install_zip: "Pasang Pembaruan dari ZIP…",
     installing_zip: "Memproses pembaruan ZIP…",
-    open_log_file: "Buka Berkas Log (Notepad)",
+    open_log_file: "Buka File Log",
     open_log_folder: "Buka Folder Log",
 
     // Footer & Status
@@ -1378,7 +1393,8 @@ export const I18N = {
 
     // Notifications & Toasts
     fm_target_set_explorer: "Target klik File Manager diatur ke File Explorer (SMB)",
-    fm_target_set_zimaos: "Target klik File Manager diatur ke ZimaOS File Manager",
+    fm_target_set_zimaos: "Target klik File Manager diatur ke ZimaOS Files",
+    fm_target_set_backend: "Target klik File Manager diatur ke Backend File Manager",
     lang_switched_en: "Language changed to English",
     lang_switched_id: "Bahasa diubah ke Bahasa Indonesia",
     update_available: "Pembaruan tersedia · v",

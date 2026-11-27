@@ -418,7 +418,7 @@ try:
 except ImportError:
     instabox_manager = None
 
-APP_VERSION_NUMBER = "4.9.4"
+APP_VERSION_NUMBER = "4.9.5"
 
 CORE_VERSION = f"{APP_VERSION_NUMBER}-beta"
 
@@ -2422,6 +2422,7 @@ def _build_load_settings_payload() -> dict:
         "showTraffic": bool(cfg.get("show_traffic", True)),
         "autoOpenMiniTray": bool(cfg.get("auto_open_mini_tray", True)),
         "fileManagerClickTarget": str(cfg.get("file_manager_click_target", "explorer")),
+        "dashboardClickTarget": str(cfg.get("dashboard_click_target", "zimaos")),
         "language": str(cfg.get("language", "en")),
         "theme": str(cfg.get("theme", "dark")) if str(cfg.get("theme", "")).lower() in ("dark", "light") else "dark",
         "dpapiActive": bool(config_manager.is_dpapi_supported()),
@@ -27447,9 +27448,17 @@ class CoreApiHandler(BaseHTTPRequestHandler):
             target_url = (body.get("url") or body.get("arg") or "").strip()
             win_title = (body.get("title") or "").strip()
             if not target_url or target_url == "server" or "127.0.0.1" in target_url:
-                target_url, _ = get_active_resolved_route(cfg)
-                if not win_title and srv:
-                    win_title = f"{srv.get('name', 'MyServer')} Dashboard"
+                dash_target = str(cfg.get("dashboard_click_target", "zimaos")).lower().strip()
+                if dash_target == "backend":
+                    backend_u = _get_active_server_backend_url(cfg, target_server_id=(srv.get("id") if srv else None))
+                    if backend_u:
+                        target_url = backend_u.rstrip("/") + "/"
+                        if not win_title and srv:
+                            win_title = f"{srv.get('name', 'MyServer')} Backend Dashboard"
+                if not target_url or target_url == "server" or "127.0.0.1" in target_url:
+                    target_url, _ = get_active_resolved_route(cfg)
+                    if not win_title and srv:
+                        win_title = f"{srv.get('name', 'MyServer')} Dashboard"
             elif not win_title:
                 win_title = "MyServer Web App"
             if target_url:
@@ -33594,18 +33603,13 @@ class CoreApiHandler(BaseHTTPRequestHandler):
 
 
                 if "fileManagerClickTarget" in settings:
-
-
-
                     val = str(settings["fileManagerClickTarget"]).lower().strip()
-
-
-
-                    if val in ("explorer", "zimaos"):
-
-
-
+                    if val in ("explorer", "zimaos", "backend"):
                         cfg["file_manager_click_target"] = val
+                if "dashboardClickTarget" in settings:
+                    d_val = str(settings["dashboardClickTarget"]).lower().strip()
+                    if d_val in ("zimaos", "backend"):
+                        cfg["dashboard_click_target"] = d_val
 
 
 

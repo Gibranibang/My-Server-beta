@@ -1,5 +1,11 @@
 # Changelog MyServer Desktop
 
+## [v4.9.5 - Beta] - 2026-11-27
+
+- Gallery Tanggal Asli & Ekspansi Format Media (Bundled Backend v2.2.7): Membaca EXIF `DateTimeOriginal` foto (termasuk HEIC/HEIF via `pillow-heif`) dan `creation_time` video (MP4 `mvhd`/ffprobe) dengan cache SQLite `media_metadata` + `dos filetimes = yes` Samba, serta memperluas format foto, video, dan audio.
+- Pembersihan UX Menu Options & Pintasan Baru (`SettingsView.tsx`, `Companion.tsx`, `myserver_core_service.py`): Menghapus duplikasi checkbox auto-update & theme, menyatukan tombol Check/Download update, menambahkan pemilih target Dashboard kiri atas (`ZimaOS` / `Backend`), opsi ke-3 `Backend File Manager`, memperbaiki overflow tombol Log, serta menambahkan animasi accordion mulus.
+- Perbaikan Spam Notifikasi Startup (`store.tsx`): Mencegah notifikasi Syncthing 100% dan transisi koneksi saat baru membuka aplikasi atau menyalakan laptop berulang kali hingga penuh.
+
 ## [v4.9.4 - Beta] - 2026-11-27
 
 - Registrasi & Heartbeat Perangkat Desktop ke Backend (`myserver_core_service.py`): Desktop otomatis mendaftarkan hostname, IP LAN, dan MAC ke `/api/v1/devices/register` dan `/heartbeat` setiap 60 detik sehingga muncul real-time di modal Connected Devices Admin.

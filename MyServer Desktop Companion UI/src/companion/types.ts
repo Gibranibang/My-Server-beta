@@ -189,7 +189,8 @@ export interface Settings {
   appEntryOpen?: "window" | "browser"
   showTraffic?: boolean
   autoOpenMiniTray?: boolean
-  fileManagerClickTarget?: "explorer" | "zimaos"
+  fileManagerClickTarget?: "explorer" | "zimaos" | "backend"
+  dashboardClickTarget?: "zimaos" | "backend"
   language?: "en" | "id"
   dpapiActive?: boolean
   theme?: "dark" | "light"

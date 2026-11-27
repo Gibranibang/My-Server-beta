@@ -370,14 +370,26 @@ export function CompanionFrame({
 
   let header
   if (view === "home") {
+    const isBackendDashboard = settings?.dashboardClickTarget === "backend"
     header = (
       <FlyoutHeader
         leading={
           <IconButton
             icon={ExternalLink}
-            label={t("open_in_browser", "Open console in browser")}
-            onClick={() => {
-              void api.openUrl(SERVER_URL || `http://${SERVER_IP}`)
+            label={
+              isBackendDashboard
+                ? t("dashboard_target_backend_tooltip", isId ? "Buka Dashboard Backend" : "Open Backend Dashboard")
+                : t("open_in_browser", "Open console in browser")
+            }
+            onClick={async () => {
+              if (isBackendDashboard && typeof api.openBackendFileManager === "function") {
+                const res = await api.openBackendFileManager()
+                if (res && res.success === false) {
+                  notify(res.error || (isId ? "Backend tidak dapat dijangkau." : "Backend unreachable."), "danger")
+                }
+              } else {
+                void api.openUrl(SERVER_URL || `http://${SERVER_IP}`)
+              }
             }}
           />
         }

@@ -327,12 +327,15 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     })
     let isInitialBoot = true
     let prevPowerState: string | null = null
+    const bootMountTs = Date.now()
     const offPower = api.subscribePower((p) => {
       setPower(p)
       if (p === "offline" || p === "online") {
         setMonitoringLoading(false)
       }
-      if (!isInitialBoot && prevPowerState !== null && p !== prevPowerState) {
+      // Jangan kirim spam notifikasi disconnect/reconnect selama 15 detik awal boot/startup aplikasi
+      const pastStartupGrace = (Date.now() - bootMountTs) >= 15_000
+      if (pastStartupGrace && !isInitialBoot && prevPowerState !== null && p !== prevPowerState) {
         if (p === "connecting" && prevPowerState === "offline") {
           window.dispatchEvent(new CustomEvent("myserver:notify", {
             detail: { text: "Menghubungkan ke server...", tone: "warning" }
@@ -354,9 +357,27 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
     })
 
     // Monitoring notifikasi berkala: Syncthing milestones (25%, 50%, 90%, 100%) & perubahan rute
+    // Persisten di localStorage agar tidak spam ulang 100% setiap kali aplikasi dibuka atau laptop baru menyala.
     const SERVER_DETAILS_POLL_MIN_MS = 12_000
-    const lastMilestones = new Map<string, Set<number>>()
-    let isInitialSyncthingCheck = true
+    const SYNCTHING_STORE_KEY = "myserver_syncthing_milestones_v2"
+    type StoredMilestoneState = { triggered: number[]; lastComp: number; lastNotifiedAt?: Record<string, number> }
+    const loadStoredMilestones = (): Record<string, StoredMilestoneState> => {
+      try {
+        const raw = localStorage.getItem(SYNCTHING_STORE_KEY)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          if (parsed && typeof parsed === "object") return parsed
+        }
+      } catch {}
+      return {}
+    }
+    const saveStoredMilestones = (state: Record<string, StoredMilestoneState>) => {
+      try {
+        localStorage.setItem(SYNCTHING_STORE_KEY, JSON.stringify(state))
+      } catch {}
+    }
+    const milestoneStore = loadStoredMilestones()
+    const initializedTasksInSession = new Set<string>()
     let prevActiveRouteId: string | null = null
     let lastServerDetailsPollTs = Date.now()
 
@@ -364,43 +385,64 @@ export function CompanionStoreProvider({ children }: { children: ReactNode }) {
       try {
         if (api.getSyncthingTasks) {
           const tasks = await api.getSyncthingTasks()
-          if (Array.isArray(tasks)) {
-            // Pada inisialisasi awal saat start: catat milestone yang sudah ada tanpa kirim notifikasi retroaktif
-            if (isInitialSyncthingCheck) {
-              for (const task of tasks) {
-                const comp = Math.round(task.completion || 0)
-                const triggered = new Set<number>()
+          if (Array.isArray(tasks) && tasks.length > 0) {
+            let storeDirty = false
+            const nowTs = Date.now()
+            for (const task of tasks) {
+              const comp = Math.round(Number(task.completion || 0))
+              const saved = milestoneStore[task.id] || { triggered: [], lastComp: comp, lastNotifiedAt: {} }
+              const triggered = new Set<number>(Array.isArray(saved.triggered) ? saved.triggered : [])
+              const lastNotifiedAt: Record<string, number> = { ...(saved.lastNotifiedAt || {}) }
+
+              // Observasi pertama kali task di sesi ini (startup / cold boot): seed diam-diam tanpa notifikasi!
+              if (!initializedTasksInSession.has(task.id)) {
+                initializedTasksInSession.add(task.id)
                 for (const m of [25, 50, 90, 100]) {
                   if (comp >= m) triggered.add(m)
                 }
-                lastMilestones.set(task.id, triggered)
+                milestoneStore[task.id] = { triggered: Array.from(triggered), lastComp: comp, lastNotifiedAt }
+                storeDirty = true
+                continue
               }
-              isInitialSyncthingCheck = false
-              return
-            }
 
-            for (const task of tasks) {
               if (task.paused) continue
-              const comp = Math.round(task.completion || 0)
-              let triggered = lastMilestones.get(task.id)
-              if (!triggered) {
-                triggered = new Set<number>()
-                lastMilestones.set(task.id, triggered)
-              }
-              if (comp < 20) {
+
+              // Reset hanya jika task benar-benar kembali melakukan sinkronisasi baru (< 20% dan bukan nol transien saat reconnect)
+              const isActivelySyncingNewBatch = comp > 0 && comp < 20 && saved.lastComp >= 20
+              if (isActivelySyncingNewBatch) {
                 triggered.clear()
+                storeDirty = true
               }
+
+              // Kumpulkan milestone baru yang terlewati, kirim maksimal 1 milestone tertinggi per polling
+              let highestNewMilestone: number | null = null
               for (const m of [25, 50, 90, 100]) {
                 if (comp >= m && !triggered.has(m)) {
                   triggered.add(m)
-                  const text = m === 100
+                  highestNewMilestone = m
+                  storeDirty = true
+                }
+              }
+              if (highestNewMilestone !== null) {
+                const prevNotifTs = Number(lastNotifiedAt[String(highestNewMilestone)] || 0)
+                if ((nowTs - prevNotifTs) >= 600_000) {
+                  lastNotifiedAt[String(highestNewMilestone)] = nowTs
+                  const text = highestNewMilestone === 100
                     ? `Syncthing '${task.label || task.id}': 100% Selesai`
-                    : `Syncthing '${task.label || task.id}': ${m}%`
+                    : `Syncthing '${task.label || task.id}': ${highestNewMilestone}%`
                   window.dispatchEvent(new CustomEvent("myserver:notify", {
-                    detail: { text, tone: m === 100 ? "success" : "info" }
+                    detail: { text, tone: highestNewMilestone === 100 ? "success" : "info" }
                   }))
                 }
               }
+
+              if (saved.lastComp !== comp) {
+                storeDirty = true
+              }
+              milestoneStore[task.id] = { triggered: Array.from(triggered), lastComp: comp, lastNotifiedAt }
+            }
+            if (storeDirty) {
+              saveStoredMilestones(milestoneStore)
             }
           }
         }
@@ -811,9 +853,11 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
   })
   const timer = useRef<number | undefined>(undefined)
   const nextNoticeIdRef = useRef(0)
+  const recentNoticeTsRef = useRef<Map<string, number>>(new Map())
 
   const clearNoticeHistory = useCallback(() => {
     setNoticeHistory([])
+    recentNoticeTsRef.current.clear()
     try {
       localStorage.removeItem("myserver_notice_history")
       localStorage.setItem(
@@ -824,19 +868,28 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const notify = useCallback((text: string, tone: Tone = "success") => {
+    const nowTs = Date.now()
+    const dedupKey = `${tone}::${text}`
+    const lastTs = recentNoticeTsRef.current.get(dedupKey)
+    const isDuplicateBurst = lastTs !== undefined && (nowTs - lastTs) < 60_000
+    recentNoticeTsRef.current.set(dedupKey, nowTs)
+
     window.clearTimeout(timer.current)
-    nextNoticeIdRef.current = Math.max(nextNoticeIdRef.current + 1, Date.now() * 1000)
+    nextNoticeIdRef.current = Math.max(nextNoticeIdRef.current + 1, nowTs * 1000)
     const id = nextNoticeIdRef.current
     const d = new Date()
     const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`
     setNotice({ id, text, tone })
-    setNoticeHistory((prev) => {
-      const next = [{ id, text, tone, timeStr }, ...prev.slice(0, 49)]
-      try {
-        localStorage.setItem("myserver_notice_history", JSON.stringify(next))
-      } catch {}
-      return next
-    })
+    if (!isDuplicateBurst) {
+      setNoticeHistory((prev) => {
+        const filtered = prev.filter((item) => !(item.text === text && item.tone === tone))
+        const next = [{ id, text, tone, timeStr }, ...filtered.slice(0, 49)]
+        try {
+          localStorage.setItem("myserver_notice_history", JSON.stringify(next))
+        } catch {}
+        return next
+      })
+    }
     timer.current = window.setTimeout(() => setNotice(null), 3200)
   }, [])
 

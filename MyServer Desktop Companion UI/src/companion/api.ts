@@ -586,6 +586,8 @@ export const DEFAULT_SETTINGS: Settings = {
 
   fileManagerClickTarget: "explorer",
 
+  dashboardClickTarget: "zimaos",
+
   language: "id",
 
   theme: "dark",

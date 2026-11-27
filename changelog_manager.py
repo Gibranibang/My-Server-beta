@@ -12,6 +12,16 @@ from datetime import datetime
 
 CHANGELOG_HISTORY = [
     {
+        "version": "4.9.5",
+        "channel": "Beta",
+        "date": "2026-11-27",
+        "highlights": [
+            "Backend v2.2.7 Gallery Media Date & Format Expansion: Ekstraksi tanggal asli foto (EXIF DateTimeOriginal) & video (MP4 mvhd/ffprobe) dengan cache SQLite `media_metadata`, flag Samba `dos filetimes = yes`, dukungan dekoder HEIC/HEIF (`pillow-heif`), serta perluasan format foto/video/audio & fallback lightbox thumbnail.",
+            "Options UX, Dashboard & File Manager Shortcuts (`SettingsView.tsx`, `Companion.tsx`, `myserver_core_service.py`): Pembersihan duplikasi kontrol Auto-Check Update dan Theme, penyatuan alur Check & Download Update, opsi target ikon Dashboard (`ZimaOS` vs `Backend`), opsi target ke-3 File Manager (`Backend File Manager`), perbaikan overflow tombol Log, serta animasi accordion CSS Grid yang konsisten dengan VM Manager.",
+            "Perbaikan Notifikasi Berulang Saat Startup (`store.tsx`): Cache milestone Syncthing persisten + seeding diam-diam pada observasi awal sesi dan masa tenggang koneksi boot 15 detik agar tidak memicu spam notifikasi 100% berulang kali."
+        ]
+    },
+    {
         "version": "4.9.4",
         "channel": "Beta",
         "date": "2026-11-27",

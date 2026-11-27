@@ -104,7 +104,7 @@ class TestBackendDetection(unittest.TestCase):
         core._remote_backend_manifest_cache["version"] = ""
 
     def test_real_workspace_resources_bundled_and_git_tracked(self):
-        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "1.6.1")
+        self.assertEqual(core._get_bundled_backend_version(allow_remote=False), "2.0.0")
         zip_pkg, tar_pkg = core._get_bundled_backend_packages()
         self.assertIsNotNone(zip_pkg)
         self.assertIsNotNone(tar_pkg)
@@ -120,8 +120,13 @@ class TestBackendDetection(unittest.TestCase):
             tar_entries = sorted(m.name for m in tf.getmembers() if m.isfile())
             tar_sh_mode = tf.getmember("install_zimaos.sh").mode & 0o777
 
-        self.assertEqual(len(zip_entries), 30)
+        self.assertEqual(len(zip_entries), 35)
         self.assertIn("app/routers/share.py", zip_entries)
+        self.assertIn("app/services/dashboard_service.py", zip_entries)
+        self.assertIn("app/static/icons/icon-192.png", zip_entries)
+        self.assertIn("app/static/icons/icon-512.png", zip_entries)
+        self.assertIn("app/static/icons/icon-maskable-512.png", zip_entries)
+        self.assertIn("app/static/icons/logo-dark-mark.svg", zip_entries)
         self.assertIn("app/static/pdfjs/pdf.min.mjs", zip_entries)
         self.assertIn("app/static/pdfjs/pdf.worker.min.mjs", zip_entries)
         self.assertIn("app/static/vendor/uqr.mjs", zip_entries)

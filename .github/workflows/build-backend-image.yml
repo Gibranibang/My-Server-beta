@@ -6,12 +6,13 @@ on:
       - main
     paths:
       - "resources/MyServer-Backend-ZimaOS.zip"
+      - "resources/MyServer-Backend-ZimaOS.tar.gz"
       - "resources/backend_manifest.json"
       - ".github/workflows/build-backend-image.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -56,3 +57,15 @@ jobs:
             ghcr.io/gibranibang/myserver-backend:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Sync backend assets to latest GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(gh release view --json tagName -q .tagName)
+          echo "Syncing Backend v${{ steps.meta.outputs.version }} assets to release $LATEST_TAG"
+          gh release upload "$LATEST_TAG" \
+            resources/backend_manifest.json \
+            resources/MyServer-Backend-ZimaOS.zip \
+            resources/MyServer-Backend-ZimaOS.tar.gz \
+            --clobber
